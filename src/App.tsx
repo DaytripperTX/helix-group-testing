@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 const plannedFields = [
   'Supplier Code / Name',
   'Street name',
@@ -26,9 +28,99 @@ const testingFocus = [
   'Batch Conformity Testing',
 ];
 
+const navItems = [
+  { id: 'home', label: 'Home', path: '/' },
+  { id: 'order-form', label: 'Order Form', path: '/order-form' },
+  { id: 'testing', label: 'Testing', path: '/testing' },
+  { id: 'coas', label: 'COAs', path: '/coas' },
+  { id: 'faqs', label: 'FAQs', path: '/faqs' },
+] as const;
+
+type PageId = (typeof navItems)[number]['id'];
+
+function getPageFromPath(): PageId {
+  const currentPath = window.location.pathname.replace(/\/$/, '') || '/';
+  const match = navItems.find((item) => item.path === currentPath);
+  return match?.id ?? 'home';
+}
+
 function App() {
+  const [activePage, setActivePage] = useState<PageId>(getPageFromPath);
+
+  useEffect(() => {
+    const handleNavigation = () => setActivePage(getPageFromPath());
+
+    window.addEventListener('popstate', handleNavigation);
+    return () => window.removeEventListener('popstate', handleNavigation);
+  }, []);
+
+  const navigateTo = (path: string) => {
+    window.history.pushState({}, '', path);
+    setActivePage(getPageFromPath());
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   return (
-    <main>
+    <>
+      <SiteHeader activePage={activePage} onNavigate={navigateTo} />
+      <main>
+        {activePage === 'home' && <HomePage />}
+        {activePage === 'order-form' && <OrderFormPage />}
+        {activePage === 'testing' && <TestingPage />}
+        {activePage === 'coas' && <CoasPage />}
+        {activePage === 'faqs' && <FaqsPage />}
+      </main>
+    </>
+  );
+}
+
+function SiteHeader({
+  activePage,
+  onNavigate,
+}: {
+  activePage: PageId;
+  onNavigate: (path: string) => void;
+}) {
+  return (
+    <header className="brand-band">
+      <div className="brand-band__content">
+        <a
+          className="brand-band__mark"
+          href="/"
+          onClick={(event) => {
+            event.preventDefault();
+            onNavigate('/');
+          }}
+          aria-label="Helix Group Testing home"
+        >
+          <img src="/helix_logo.svg" alt="" aria-hidden="true" />
+          <span>The Helix</span>
+          <strong>Group Testing</strong>
+        </a>
+
+        <nav className="site-nav" aria-label="Primary navigation">
+          {navItems.map((item) => (
+            <a
+              className={item.id === activePage ? 'site-nav__link is-active' : 'site-nav__link'}
+              href={item.path}
+              key={item.id}
+              onClick={(event) => {
+                event.preventDefault();
+                onNavigate(item.path);
+              }}
+            >
+              {item.label}
+            </a>
+          ))}
+        </nav>
+      </div>
+    </header>
+  );
+}
+
+function HomePage() {
+  return (
+    <>
       <section className="hero" aria-labelledby="hero-title">
         <div className="hero__content">
           <div className="hero__copy">
@@ -59,14 +151,6 @@ function App() {
               ))}
             </ul>
           </aside>
-        </div>
-      </section>
-
-      <section className="brand-band" aria-label="Helix Group Testing">
-        <div className="brand-band__content">
-          <img src="/helix_logo.svg" alt="" aria-hidden="true" />
-          <span>The Helix</span>
-          <strong>Group Testing</strong>
         </div>
       </section>
 
@@ -107,35 +191,30 @@ function App() {
         </div>
       </section>
 
-      <section className="section section--testing" aria-labelledby="testing-title">
-        <div className="section__content split">
-          <div>
-            <p className="eyebrow">Testing Interest</p>
-            <h2 id="testing-title">Third-party lab testing focus</h2>
-            <p>
-              The group&apos;s stated testing workflow centers on comparing
-              vendor documentation with independent lab results from sample and
-              volunteer-supplied vials.
-            </p>
-          </div>
-          <ul className="check-list check-list--columns">
-            {testingFocus.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
-      </section>
+      <DisclaimerSection />
+    </>
+  );
+}
 
-      <section className="section" aria-labelledby="planned-form-title">
+function OrderFormPage() {
+  return (
+    <>
+      <PageHero
+        eyebrow="Planned Page"
+        title="Order-interest form"
+        text="A future page for collecting structured order-interest details and sending them into the group workflow automatically."
+      />
+
+      <section className="section" aria-labelledby="order-form-title">
         <div className="section__content">
           <div className="section__header">
-            <p className="eyebrow">TODO</p>
-            <h2 id="planned-form-title">Planned order-interest form</h2>
+            <p className="eyebrow">Stub</p>
+            <h2 id="order-form-title">Form fields to build later</h2>
             <p>
-              The order-interest form is intentionally not implemented yet.
-              When added, it should replace or supplement the current
-              Google Sheet/Form process without asking users to copy and paste
-              entries manually.
+              The form is not implemented yet. This page reserves the future
+              workflow, including vendor-direct coordination and repeated
+              disclaimers that Helix Group Testing does not sell products,
+              handle money, or fulfill orders.
             </p>
           </div>
 
@@ -148,35 +227,162 @@ function App() {
           </div>
 
           <p className="note">
-            Testing cost is excluded from the planned form for now.
+            Possible future feature: email a waiver for review and signature
+            after form submission. Testing cost is excluded from the planned
+            order form for now.
           </p>
         </div>
       </section>
 
-      <section className="section section--disclaimer" aria-labelledby="disclaimer-title">
-        <div className="section__content disclaimer">
+      <DisclaimerSection />
+    </>
+  );
+}
+
+function TestingPage() {
+  return (
+    <>
+      <PageHero
+        eyebrow="Testing"
+        title="Testing levels and round stats"
+        text="A future hub for explaining testing levels and showing current and historical round statistics."
+      />
+
+      <section className="section section--testing" aria-labelledby="testing-title">
+        <div className="section__content split">
           <div>
-            <p className="eyebrow">Disclaimer</p>
-            <h2 id="disclaimer-title">Clear boundaries</h2>
+            <p className="eyebrow">Stub</p>
+            <h2 id="testing-title">Testing level overview</h2>
+            <p>
+              This page will explain bronze, gold, and platinum testing levels,
+              then summarize stats for active and past rounds.
+            </p>
           </div>
-          <ul>
-            <li>Helix Group Testing does not sell products.</li>
-            <li>Helix Group Testing does not handle money.</li>
-            <li>Helix Group Testing does not fulfill orders.</li>
-            <li>
-              The site is only for formatting communication and organizing
-              third-party lab testing interest.
-            </li>
-            <li>
-              Products discussed by the group are research chemicals not
-              approved for human use, and nothing on this site is medical
-              advice.
-            </li>
-            <li>Each participant is responsible for their own decisions.</li>
+          <ul className="check-list check-list--columns">
+            {testingFocus.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
           </ul>
         </div>
       </section>
-    </main>
+    </>
+  );
+}
+
+function CoasPage() {
+  return (
+    <>
+      <PageHero
+        eyebrow="COAs"
+        title="Certificate library"
+        text="A future searchable library for COAs and testing documents by compound, round, and batch."
+      />
+
+      <section className="section" aria-labelledby="coa-title">
+        <div className="section__content">
+          <div className="section__header">
+            <p className="eyebrow">Stub</p>
+            <h2 id="coa-title">COA filters planned</h2>
+            <p>
+              Future filters should include compound, round, and batch. This
+              page is a placeholder until document storage and publishing rules
+              are defined.
+            </p>
+          </div>
+
+          <div className="field-grid">
+            <div className="field-card">Compound filter</div>
+            <div className="field-card">Round filter</div>
+            <div className="field-card">Batch filter</div>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function FaqsPage() {
+  return (
+    <>
+      <PageHero
+        eyebrow="FAQs"
+        title="Common questions"
+        text="A future FAQ page for participation, vendor-direct payment, delivery, testing coordination, and site workflow."
+      />
+
+      <section className="section" aria-labelledby="faq-title">
+        <div className="section__content">
+          <div className="section__header">
+            <p className="eyebrow">Stub</p>
+            <h2 id="faq-title">FAQs to fill in later</h2>
+            <p>
+              Planned topics include who users pay, where delivery happens, how
+              testing coordination works, and what Helix Group Testing does not
+              do.
+            </p>
+          </div>
+
+          <div className="info-grid">
+            <article className="info-card">
+              <p>Who do I pay? Vendor-direct payment details will go here.</p>
+            </article>
+            <article className="info-card">
+              <p>Where does delivery happen? Vendor-direct delivery details will go here.</p>
+            </article>
+            <article className="info-card">
+              <p>How does testing work? Testing coordination details will go here.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function PageHero({
+  eyebrow,
+  title,
+  text,
+}: {
+  eyebrow: string;
+  title: string;
+  text: string;
+}) {
+  return (
+    <section className="page-hero" aria-labelledby={`${title}-title`}>
+      <div className="section__content page-hero__content">
+        <p className="eyebrow">{eyebrow}</p>
+        <h1 id={`${title}-title`}>{title}</h1>
+        <p>{text}</p>
+      </div>
+    </section>
+  );
+}
+
+function DisclaimerSection() {
+  return (
+    <section className="section section--disclaimer" aria-labelledby="disclaimer-title">
+      <div className="section__content disclaimer">
+        <div>
+          <p className="eyebrow">Disclaimer</p>
+          <h2 id="disclaimer-title">Clear boundaries</h2>
+        </div>
+        <ul>
+          <li>Helix Group Testing does not sell products.</li>
+          <li>Helix Group Testing does not handle money.</li>
+          <li>Helix Group Testing does not fulfill orders.</li>
+          <li>
+            The site is only for formatting communication and organizing
+            third-party lab testing interest.
+          </li>
+          <li>
+            Products discussed by the group are research chemicals not approved
+            for human use, and nothing on this site is medical advice.
+          </li>
+          <li>Each participant is responsible for their own decisions.</li>
+        </ul>
+      </div>
+    </section>
   );
 }
 
