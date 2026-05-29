@@ -36,6 +36,64 @@ const navItems = [
   { id: 'faqs', label: 'FAQs', path: '/faqs' },
 ] as const;
 
+const faqItems = [
+  {
+    question: 'Who do participants pay?',
+    answer:
+      'Participants pay the vendor directly. Helix Group Testing does not collect vendor payments, process payments, or hold funds for product orders.',
+  },
+  {
+    question: 'Where are orders delivered?',
+    answer:
+      'Delivery is handled directly by the vendor to each participant. Helix Group Testing does not receive, store, ship, or fulfill products.',
+  },
+  {
+    question: 'Are there additional fees?',
+    answer:
+      'There may be shared third-party testing costs when a round includes coordinated lab testing. Those testing costs are divided across participating members for that round.',
+  },
+  {
+    question: 'Who collects testing fees?',
+    answer:
+      'A testing coordinator will provide instructions when testing fees apply. Vendor payments remain separate from any testing coordination.',
+  },
+  {
+    question: 'How does the testing workflow work?',
+    answer:
+      'The planned workflow is to compare vendor documentation with independent third-party lab results. The vendor may send sample vials, and selected participant or volunteer vials may also be submitted for testing. Results can then be compared against the vendor COA and round expectations.',
+  },
+  {
+    question: 'What does platinum testing include?',
+    answer:
+      'Platinum testing is the most comprehensive tier. It may include purity and quantitation, identity confirmation, endotoxin screening, sterility screening, heavy metals, fentanyl screening, batch conformity, and related checks. Exact testing scope should be confirmed for each round.',
+  },
+  {
+    question: 'What does gold testing include?',
+    answer:
+      'Gold testing is a mid-level tier intended to cover purity, composition, and identity confirmation. Exact testing scope should be confirmed for each round.',
+  },
+  {
+    question: 'What does bronze testing include?',
+    answer:
+      'Bronze testing is the entry-level tier. It currently refers to a basic COA from Finrrick as the testing provider. Exact testing scope should be confirmed for each round.',
+  },
+  {
+    question: 'How are testing levels determined?',
+    answer:
+      'Testing tier is determined per peptide, based on how many members ordered that specific peptide. Bronze testing generally applies when fewer than 3 members order the peptide. Gold testing generally applies when 3 or more but fewer than 5 members order it. Platinum testing generally applies when 5 or more members order it.',
+  },
+  {
+    question: 'What are estimated testing costs?',
+    answer:
+      'Estimated per-member testing costs are currently expected to be about $140 to $160 for a round. Actual costs may vary by testing scope, participation, and coordinator instructions.',
+  },
+  {
+    question: 'Does Helix Group Testing provide medical advice?',
+    answer:
+      'No. Products discussed by the group are research chemicals not approved for human use. Nothing on this site is medical advice, and each participant is responsible for their own decisions.',
+  },
+];
+
 type PageId = (typeof navItems)[number]['id'];
 
 function getPageFromPath(): PageId {
@@ -307,31 +365,27 @@ function FaqsPage() {
       <PageHero
         eyebrow="FAQs"
         title="Common questions"
-        text="A future FAQ page for participation, vendor-direct payment, delivery, testing coordination, and site workflow."
+        text="Answers to common questions about vendor-direct payment, delivery, testing coordination, and site boundaries."
       />
 
       <section className="section" aria-labelledby="faq-title">
         <div className="section__content">
           <div className="section__header">
-            <p className="eyebrow">Stub</p>
-            <h2 id="faq-title">FAQs to fill in later</h2>
+            <p className="eyebrow">Reference</p>
+            <h2 id="faq-title">Participation FAQ</h2>
             <p>
-              Planned topics include who users pay, where delivery happens, how
-              testing coordination works, and what Helix Group Testing does not
-              do.
+              These answers summarize the current participation and testing
+              workflow. Details may be refined as the site evolves.
             </p>
           </div>
 
-          <div className="info-grid">
-            <article className="info-card">
-              <p>Who do I pay? Vendor-direct payment details will go here.</p>
-            </article>
-            <article className="info-card">
-              <p>Where does delivery happen? Vendor-direct delivery details will go here.</p>
-            </article>
-            <article className="info-card">
-              <p>How does testing work? Testing coordination details will go here.</p>
-            </article>
+          <div className="faq-list">
+            {faqItems.map((item) => (
+              <details className="faq-item" key={item.question}>
+                <summary>{item.question}</summary>
+                <p>{item.answer}</p>
+              </details>
+            ))}
           </div>
         </div>
       </section>

@@ -384,6 +384,64 @@ h2 {
   color: #657184;
 }
 
+.faq-list {
+  display: grid;
+  gap: 12px;
+}
+
+.faq-item {
+  border: 1px solid #d9e4eb;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(5, 8, 22, 0.06);
+}
+
+.faq-item summary {
+  position: relative;
+  cursor: pointer;
+  list-style: none;
+  padding: 20px 56px 20px 22px;
+  color: #07101f;
+  font-size: 1.05rem;
+  font-weight: 820;
+}
+
+.faq-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-item summary::after {
+  position: absolute;
+  top: 50%;
+  right: 22px;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #13f4ff;
+  border-radius: 50%;
+  background:
+    linear-gradient(#13f4ff, #13f4ff) center / 10px 2px no-repeat,
+    linear-gradient(#13f4ff, #13f4ff) center / 2px 10px no-repeat;
+  content: "";
+  transform: translateY(-50%);
+}
+
+.faq-item[open] summary {
+  color: #006f78;
+}
+
+.faq-item[open] summary::after {
+  background: linear-gradient(#13f4ff, #13f4ff) center / 10px 2px no-repeat;
+}
+
+.faq-item p {
+  margin: 0;
+  border-top: 1px solid #e7eef3;
+  padding: 0 22px 22px;
+  color: #4b5568;
+  font-size: 1.02rem;
+  line-height: 1.72;
+}
+
 .disclaimer ul {
   display: grid;
   gap: 12px;
