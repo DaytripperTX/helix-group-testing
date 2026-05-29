@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#132043"/>
+      <stop offset="55%" stop-color="#070B18"/>
+      <stop offset="100%" stop-color="#02040A"/>
+    </radialGradient>
+    <linearGradient id="helix" x1="270" y1="170" x2="930" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00F5FF"/>
+      <stop offset="45%" stop-color="#33B7FF"/>
+      <stop offset="72%" stop-color="#A35CFF"/>
+      <stop offset="100%" stop-color="#FF55E6"/>
+    </linearGradient>
+    <linearGradient id="helix2" x1="930" y1="170" x2="270" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#B875FF"/>
+      <stop offset="38%" stop-color="#00F5FF"/>
+      <stop offset="100%" stop-color="#2EEBFF"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="9" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="textGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="1200" rx="90" fill="url(#bg)"/>
+  <circle cx="600" cy="430" r="300" fill="none" stroke="url(#helix)" stroke-width="18" stroke-linecap="round" opacity="0.95" filter="url(#glow)"/>
+  <circle cx="600" cy="430" r="332" fill="none" stroke="#00EFFF" stroke-width="2" opacity="0.25"/>
+  <path d="M435 140 C815 230 815 630 435 720" fill="none" stroke="url(#helix)" stroke-width="42" stroke-linecap="round" filter="url(#glow)"/>
+  <path d="M765 140 C385 230 385 630 765 720" fill="none" stroke="url(#helix2)" stroke-width="42" stroke-linecap="round" filter="url(#glow)"/>
+  <g stroke-linecap="round" stroke-width="22" opacity="0.92" filter="url(#glow)">
+    <line x1="500" y1="222" x2="700" y2="222" stroke="#41EFFF"/>
+    <line x1="455" y1="318" x2="745" y2="318" stroke="#79C7FF"/>
+    <line x1="455" y1="420" x2="745" y2="420" stroke="#B074FF"/>
+    <line x1="455" y1="522" x2="745" y2="522" stroke="#54E6FF"/>
+    <line x1="500" y1="626" x2="700" y2="626" stroke="#B66BFF"/>
+  </g>
+  <text x="600" y="905" text-anchor="middle" font-family="Montserrat, Arial, sans-serif" font-size="118" font-weight="900" fill="#EAFBFF" letter-spacing="4" filter="url(#textGlow)">THE HELIX</text>
+  <line x1="235" y1="953" x2="370" y2="953" stroke="#7BDAFF" stroke-width="5" opacity="0.8"/>
+  <line x1="830" y1="953" x2="965" y2="953" stroke="#B875FF" stroke-width="5" opacity="0.8"/>
+  <text x="600" y="976" text-anchor="middle" font-family="Montserrat, Arial, sans-serif" font-size="45" font-weight="800" fill="#D49BFF" letter-spacing="8">GROUP TESTING</text>
+</svg>
