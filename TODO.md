@@ -6,6 +6,23 @@
 - Keep the landing page working before adding workflow features.
 - Keep the project deployable to Netlify.
 
+## Planned site structure
+
+- Home:
+  - Landing page with basic information and a concise project summary.
+  - Clear disclaimers and scope boundaries.
+- Order form:
+  - Future page where users enter order-interest data for vendor coordination.
+  - May use a familiar product/cart-style layout with images, while keeping the workflow informational and non-commercial.
+  - Include multiple clear disclaimers that Helix Group Testing does not sell products, handle money, or fulfill orders.
+  - Possible future feature: after a user submits the form, automatically email them a waiver to review and sign.
+- Testing:
+  - Explain testing levels and what each level includes.
+  - Show testing statistics for current and past rounds.
+  - Include a COA subpage with filtering by compound, round, and batch.
+- FAQs:
+  - Add common questions and answers about participation, vendor-direct payment, delivery, testing coordination, disclaimers, and site workflow.
+
 ## Planned order-interest form
 
 - Add an order-interest form after the landing page is stable.
