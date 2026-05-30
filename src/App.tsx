@@ -530,7 +530,7 @@ function TestingPage() {
 
             <dl className="round-summary__stats">
               <div>
-                <dt>Participants</dt>
+                <dt>Members</dt>
                 <dd>{currentTestingRound.participants}</dd>
               </div>
               <div>

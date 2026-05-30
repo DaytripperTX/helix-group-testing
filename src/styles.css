@@ -340,7 +340,7 @@ h2 {
 
 .round-summary__stats {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(82px, 1fr));
   gap: 10px;
   margin: 0;
 }
@@ -355,6 +355,7 @@ h2 {
   font-size: 0.72rem;
   font-weight: 850;
   letter-spacing: 0.08em;
+  overflow-wrap: anywhere;
   text-transform: uppercase;
 }
 
