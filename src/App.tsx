@@ -18,6 +18,34 @@ const coordinationPoints = [
   'The site is intended to organize communication, not to sell, collect funds, or fulfill products.',
 ];
 
+const missionBenefits = [
+  {
+    icon: 'percent',
+    title: 'Group negotiated discounts',
+    text: 'Members pool interest to unlock bulk pricing from vendors. The goal is clearer coordination around rates that may not be available to individual buyers.',
+  },
+  {
+    icon: 'flask',
+    title: 'Independent group testing',
+    text: 'The group does not rely only on vendor COAs. Planned testing may include HPLC purity, mass-spec identity, endotoxin, and sterility screening.',
+  },
+  {
+    icon: 'group',
+    title: 'Group lab discounts',
+    text: 'Cost-shared testing can reduce per-member testing fees. Current planning estimates are about $140 to $160 per member for fuller gold or platinum coverage.',
+  },
+  {
+    icon: 'shield',
+    title: 'Vendor accountability',
+    text: 'When testing identifies a failed batch, the group can coordinate documentation and vendor follow-up for replacement or refund discussions.',
+  },
+  {
+    icon: 'reship',
+    title: 'Seizure and reshipment resolution',
+    text: 'Customs seizures are a real risk. Group coordination can help members document issues and work with the supplier on possible reshipment paths.',
+  },
+] as const;
+
 const testingFocus = [
   'Purity & Quantitation (HPLC)',
   'Identity Confirmation',
@@ -158,18 +186,31 @@ function HomePage() {
         </div>
       </section>
 
-      <section className="section section--intro" aria-labelledby="about-title">
-        <div className="section__content split">
-          <div>
-            <p className="eyebrow">Purpose</p>
-            <h2 id="about-title">Built for clearer coordination</h2>
+      <section className="section section--mission" aria-labelledby="mission-title">
+        <div className="section__content">
+          <div className="section__header">
+            <p className="eyebrow">Mission</p>
+            <h2 id="mission-title">Five reasons this co-op exists</h2>
+            <p>
+              Helix Group Testing helps organize research peptide interest,
+              third-party lab testing, and vendor accountability while keeping
+              product decisions, payments, and delivery outside this site.
+            </p>
           </div>
-          <p>
-            Helix Group Testing is a private coordination project for research
-            peptide group-interest tracking and pooled third-party lab testing.
-            It is organized on a no-profit basis and keeps product decisions,
-            vendor payments, and delivery outside this site.
-          </p>
+
+          <div className="mission-grid">
+            {missionBenefits.map((benefit) => (
+              <article className="mission-card" key={benefit.title}>
+                <div className="mission-card__icon" aria-hidden="true">
+                  <MissionIcon type={benefit.icon} />
+                </div>
+                <div>
+                  <h3>{benefit.title}</h3>
+                  <p>{benefit.text}</p>
+                </div>
+              </article>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -197,6 +238,55 @@ function HomePage() {
 
       <DisclaimerSection />
     </>
+  );
+}
+
+function MissionIcon({ type }: { type: (typeof missionBenefits)[number]['icon'] }) {
+  if (type === 'percent') {
+    return (
+      <svg viewBox="0 0 64 64" role="img">
+        <circle cx="18" cy="18" r="8" />
+        <circle cx="46" cy="46" r="8" />
+        <path d="M48 12 16 52" />
+      </svg>
+    );
+  }
+
+  if (type === 'flask') {
+    return (
+      <svg className="mission-icon mission-icon--filled" viewBox="0 0 64 64" role="img">
+        <path d="M22 7h20a4 4 0 0 1 0 8h-3v14l14 21c3 5 0 10-6 10H17c-6 0-9-5-6-10l14-21V15h-3a4 4 0 0 1 0-8Zm11 22V15h-2v14L19 48h26L33 29Z" />
+        <path d="M18 47h28l3 6H15l3-6Z" />
+      </svg>
+    );
+  }
+
+  if (type === 'group') {
+    return (
+      <svg viewBox="0 0 64 64" role="img">
+        <circle cx="32" cy="22" r="9" />
+        <circle cx="16" cy="28" r="7" />
+        <circle cx="48" cy="28" r="7" />
+        <path d="M18 52c2-10 8-16 14-16s12 6 14 16" />
+        <path d="M4 50c1-8 6-13 12-13" />
+        <path d="M60 50c-1-8-6-13-12-13" />
+      </svg>
+    );
+  }
+
+  if (type === 'shield') {
+    return (
+      <svg className="mission-icon mission-icon--shield" viewBox="0 0 64 64" role="img">
+        <path d="M32 5 53 14v15c0 15-8 26-21 31C19 55 11 44 11 29V14L32 5Zm0 9-13 6v10c0 10 5 18 13 22V14Z" />
+        <path d="M32 14v38c8-4 13-12 13-22V20L32 14Z" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg className="mission-icon mission-icon--arrow" viewBox="0 0 64 64" role="img">
+      <path d="M33 11c-12 0-22 10-22 22s10 22 22 22c8 0 15-4 19-10l-7-4c-3 4-7 6-12 6-8 0-14-6-14-14s6-14 14-14c4 0 8 2 11 5h-8v8h22V10h-8v8c-4-4-10-7-17-7Z" />
+    </svg>
   );
 }
 

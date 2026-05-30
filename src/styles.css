@@ -278,6 +278,10 @@ h2 {
   background: #ffffff;
 }
 
+.section--mission {
+  background: #ffffff;
+}
+
 .section--disclaimer {
   background: #02040a;
   color: #ffffff;
@@ -316,6 +320,101 @@ h2 {
 .section__header {
   max-width: 760px;
   margin-bottom: 30px;
+}
+
+.mission-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.mission-card {
+  display: grid;
+  min-height: 168px;
+  grid-column: span 2;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  border: 1px solid #d9e4eb;
+  border-left: 6px solid #13f4ff;
+  border-radius: 8px;
+  padding: 22px;
+  background: #f4f8fc;
+  box-shadow: 0 14px 30px rgba(5, 8, 22, 0.08);
+}
+
+.mission-card:nth-child(1),
+.mission-card:nth-child(4) {
+  border-left-color: #e8b943;
+}
+
+.mission-card:nth-child(3) {
+  border-left-color: #b875ff;
+}
+
+.mission-card:nth-child(4) {
+  grid-column: 2 / span 2;
+}
+
+.mission-card:nth-child(5) {
+  grid-column: 4 / span 2;
+}
+
+.mission-card__icon {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  color: #13f4ff;
+}
+
+.mission-card__icon svg {
+  width: 48px;
+  height: 48px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 6;
+}
+
+.mission-card__icon circle {
+  fill: none;
+  stroke: currentColor;
+}
+
+.mission-card__icon .mission-icon--filled,
+.mission-card__icon .mission-icon--shield,
+.mission-card__icon .mission-icon--arrow {
+  fill: currentColor;
+  stroke: none;
+}
+
+.mission-card__icon .mission-icon--shield path:last-child {
+  opacity: 0.38;
+}
+
+.mission-card:nth-child(1) .mission-card__icon,
+.mission-card:nth-child(4) .mission-card__icon {
+  color: #e8b943;
+}
+
+.mission-card:nth-child(3) .mission-card__icon {
+  color: #b875ff;
+}
+
+.mission-card h3 {
+  margin: 4px 0 34px;
+  color: #07101f;
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+
+.mission-card p {
+  margin: 0;
+  color: #344154;
+  font-size: 0.96rem;
+  line-height: 1.45;
 }
 
 .field-grid {
@@ -531,6 +630,30 @@ h2 {
 
   .info-grid {
     grid-template-columns: 1fr;
+  }
+
+  .mission-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mission-card,
+  .mission-card:nth-child(4),
+  .mission-card:nth-child(5) {
+    min-height: auto;
+    grid-column: auto;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 14px;
+    padding: 18px;
+  }
+
+  .mission-card__icon {
+    width: 42px;
+    height: 42px;
+    font-size: 1.25rem;
+  }
+
+  .mission-card h3 {
+    margin-bottom: 14px;
   }
 
   .check-list--columns {
