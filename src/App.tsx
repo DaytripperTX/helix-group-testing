@@ -56,6 +56,185 @@ const testingFocus = [
   'Batch Conformity Testing',
 ];
 
+const currentTestingRound = {
+  name: 'Round 1',
+  status: 'Collecting signups',
+  participants: 42,
+  selectedPeptides: 18,
+  qualifiedPeptides: 18,
+  targetWindow: 'June testing queue',
+};
+
+const testingTiers = [
+  {
+    id: 'platinum',
+    name: 'Platinum',
+    label: '7x Testing',
+    description: 'The most comprehensive QC panel with identity, purity, safety screening, and conformity checks.',
+    qualifiedCount: 7,
+    turnaround: '3-5 business days',
+    turnaroundNote: 'Rush service available for time-sensitive projects',
+    peptides: [
+      'BPC-157',
+      'TB-500',
+      'Retatrutide',
+      'Tirzepatide',
+      'Semaglutide',
+      'Cagrilintide',
+      'NAD+',
+    ],
+    panel: [
+      {
+        icon: 'flask',
+        title: 'Purity & Quantitation (HPLC)',
+        method: 'USP <621> / Reversed-Phase HPLC',
+        text: 'Reversed-phase HPLC analysis for peptide purity assessment and active content determination. Results report both purity percentage and quantitative content per vial.',
+      },
+      {
+        icon: 'atom',
+        title: 'Identity Confirmation',
+        method: 'LC-MS Molecular Weight Confirmation',
+        text: 'LC-MS based molecular weight confirmation to verify peptide identity. Results confirm the expected molecular ion matches the target compound.',
+      },
+      {
+        icon: 'microscope',
+        title: 'Endotoxin (USP <85>)',
+        method: 'USP <85> Kinetic Chromogenic LAL',
+        text: 'Kinetic chromogenic LAL method for bacterial endotoxin quantitation. Results are reported in EU/mg with full method documentation on the Certificate of Analysis.',
+      },
+      {
+        icon: 'vial',
+        title: 'Heavy Metals (ICP-MS)',
+        method: 'ICP-MS / ICH Q3D Elemental Impurities',
+        text: 'Multi-element screening for residual metals commonly introduced during solid-phase peptide synthesis, including copper, zinc, iron, and lead.',
+      },
+      {
+        icon: 'tubes',
+        title: 'Rapid Sterility Screen',
+        method: 'DNA Microarray Rapid Detection',
+        text: 'DNA-based microarray platform for rapid detection of a broad panel of microbial contaminants. Results are available in days, not the traditional 14-day incubation period.',
+      },
+      {
+        icon: 'shield',
+        title: 'Fentanyl Testing',
+        method: 'LC-MS/MS Targeted Screening',
+        text: 'LC-MS/MS based targeted screening for fentanyl and its analogs to help ensure product safety and compliance. Sensitive detection at low parts-per-billion levels with full method documentation.',
+      },
+      {
+        icon: 'badge',
+        title: 'Batch Conformity Testing',
+        method: 'Comparative Analytical Assessment',
+        text: 'Comprehensive comparison of critical quality attributes between production batches to ensure consistency and conformity to specification.',
+      },
+    ],
+    includes: [
+      'Purity & Quantitation (HPLC)',
+      'Identity Confirmation',
+      'Endotoxin (USP <85>)',
+      'Heavy Metals (ICP-MS)',
+      'Rapid Sterility Screen (DNA Microarray)',
+      'Fentanyl Testing',
+      'Batch Conformity Testing',
+    ],
+    additional: [
+      {
+        title: 'Fentanyl Testing',
+        text: 'LC-MS/MS targeted screening for fentanyl and analogs to support safety documentation.',
+      },
+      {
+        title: 'Batch Conformity Testing',
+        text: 'Comparative analytical assessment to check consistency across production batches.',
+      },
+    ],
+  },
+  {
+    id: 'gold',
+    name: 'Gold',
+    label: '5x Testing',
+    description: 'Expanded QC for selected peptides that need purity, identity, endotoxin, sterility, and metals coverage.',
+    qualifiedCount: 6,
+    turnaround: '5-7 business days',
+    turnaroundNote: 'Balanced panel for broad round coverage',
+    peptides: ['GHK-Cu', 'KPV', 'Selank', 'Epitalon', 'DSIP', 'PT-141'],
+    panel: [
+      {
+        icon: 'flask',
+        title: 'Purity & Quantitation (HPLC)',
+        method: 'USP <621> / Reversed-Phase HPLC',
+        text: 'Purity and content analysis for documenting the primary quality profile of each selected peptide.',
+      },
+      {
+        icon: 'atom',
+        title: 'Identity Confirmation',
+        method: 'LC-MS Molecular Weight Confirmation',
+        text: 'Molecular weight confirmation to verify that the submitted sample matches the expected compound.',
+      },
+      {
+        icon: 'microscope',
+        title: 'Endotoxin (USP <85>)',
+        method: 'Kinetic Chromogenic LAL',
+        text: 'Endotoxin screening with results reported in EU/mg and referenced in the round documentation.',
+      },
+      {
+        icon: 'vial',
+        title: 'Heavy Metals (ICP-MS)',
+        method: 'Elemental Impurities',
+        text: 'Screening for residual metals that can appear during synthesis, handling, or packaging.',
+      },
+      {
+        icon: 'tubes',
+        title: 'Rapid Sterility Screen',
+        method: 'DNA Microarray Rapid Detection',
+        text: 'Rapid microbial contaminant screening for a faster view into sterility risk indicators.',
+      },
+    ],
+    includes: [
+      'Purity & Quantitation (HPLC)',
+      'Identity Confirmation',
+      'Endotoxin (USP <85>)',
+      'Heavy Metals (ICP-MS)',
+      'Rapid Sterility Screen',
+    ],
+    additional: [
+      {
+        title: 'Optional Fentanyl Testing',
+        text: 'Can be added when the group wants targeted screening for an individual compound.',
+      },
+    ],
+  },
+  {
+    id: 'bronze',
+    name: 'Bronze',
+    label: '2x Testing',
+    description: 'Core confirmation for lower-risk round selections with purity and identity documentation.',
+    qualifiedCount: 5,
+    turnaround: '7-10 business days',
+    turnaroundNote: 'Core documentation for routine selections',
+    peptides: ['MOTS-c', 'P21', 'AOD-9604', 'Pinealon', 'Tesamorelin'],
+    panel: [
+      {
+        icon: 'flask',
+        title: 'Purity & Quantitation (HPLC)',
+        method: 'Reversed-Phase HPLC',
+        text: 'Baseline purity and quantity reporting for each peptide selected for the bronze tier.',
+      },
+      {
+        icon: 'atom',
+        title: 'Identity Confirmation',
+        method: 'LC-MS Molecular Weight Confirmation',
+        text: 'Identity confirmation to help document that the submitted sample matches the expected target.',
+      },
+    ],
+    includes: ['Purity & Quantitation (HPLC)', 'Identity Confirmation'],
+    additional: [
+      {
+        title: 'Escalation Path',
+        text: 'A bronze peptide can move up if round interest or risk review calls for broader screening.',
+      },
+    ],
+  },
+] as const;
+
 const navItems = [
   { id: 'home', label: 'Home', path: '/' },
   { id: 'order-form', label: 'Order Form', path: '/order-form' },
@@ -69,6 +248,8 @@ type FaqItem = {
   question: string;
   answer: string;
 };
+type TestingTier = (typeof testingTiers)[number];
+type TestingIconType = TestingTier['panel'][number]['icon'];
 
 function getPageFromPath(): PageId {
   const currentPath = window.location.pathname.replace(/\/$/, '') || '/';
@@ -334,32 +515,214 @@ function OrderFormPage() {
 }
 
 function TestingPage() {
-  return (
-    <>
-      <PageHero
-        eyebrow="Testing"
-        title="Testing levels and round stats"
-        text="A future hub for explaining testing levels and showing current and historical round statistics."
-      />
+  const [selectedTierId, setSelectedTierId] = useState<TestingTier['id']>('platinum');
+  const selectedTier =
+    testingTiers.find((tier) => tier.id === selectedTierId) ?? testingTiers[0];
 
-      <section className="section section--testing" aria-labelledby="testing-title">
-        <div className="section__content split">
+  return (
+    <section className="testing-dashboard" aria-labelledby="testing-title">
+      <div className="section__content testing-dashboard__content">
+        <div className="testing-overview">
+          <aside className="round-summary" aria-label="Current round stats">
+            <p className="eyebrow">Current round</p>
+            <h1 id="testing-title">{currentTestingRound.name}</h1>
+            <p>{currentTestingRound.status}</p>
+
+            <dl className="round-summary__stats">
+              <div>
+                <dt>Participants</dt>
+                <dd>{currentTestingRound.participants}</dd>
+              </div>
+              <div>
+                <dt>Selected peptides</dt>
+                <dd>{currentTestingRound.selectedPeptides}</dd>
+              </div>
+              <div>
+                <dt>Qualified</dt>
+                <dd>{currentTestingRound.qualifiedPeptides}</dd>
+              </div>
+              <div>
+                <dt>Target window</dt>
+                <dd>{currentTestingRound.targetWindow}</dd>
+              </div>
+            </dl>
+          </aside>
+
+          <div className="tier-selector" aria-label="Testing tiers">
+            {testingTiers.map((tier) => (
+              <button
+                className={`tier-button tier-button--${tier.id} ${
+                  selectedTier.id === tier.id ? 'is-selected' : ''
+                }`}
+                type="button"
+                key={tier.id}
+                aria-pressed={selectedTier.id === tier.id}
+                aria-controls="testing-tier-details"
+                onClick={() => setSelectedTierId(tier.id)}
+              >
+                <span>{tier.name}</span>
+                <strong>{tier.label}</strong>
+                <em>{tier.description}</em>
+                <small>{tier.qualifiedCount} qualified peptides</small>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <TestingTierDetails tier={selectedTier} />
+      </div>
+    </section>
+  );
+}
+
+function TestingTierDetails({ tier }: { tier: TestingTier }) {
+  return (
+    <article
+      className={`tier-detail tier-detail--${tier.id}`}
+      id="testing-tier-details"
+      aria-labelledby="tier-detail-title"
+    >
+      <div className="tier-detail__main">
+        <header className="tier-detail__header">
+          <div className="tier-detail__brand" aria-hidden="true">
+            <img src="/helix_logo.svg" alt="" />
+          </div>
           <div>
-            <p className="eyebrow">Stub</p>
-            <h2 id="testing-title">Testing level overview</h2>
+            <p className="eyebrow">{tier.name} testing</p>
+            <h2 id="tier-detail-title">{tier.name.toUpperCase()} TESTING</h2>
             <p>
-              This page will explain bronze, gold, and platinum testing levels,
-              then summarize stats for active and past rounds.
+              <strong>{tier.label}</strong> - {tier.description}
             </p>
           </div>
-          <ul className="check-list check-list--columns">
-            {testingFocus.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
+        </header>
+
+        <div className="qc-grid">
+          {tier.panel.map((item) => (
+            <section className="qc-tile" key={item.title}>
+              <div className="qc-tile__icon" aria-hidden="true">
+                <TestingIcon type={item.icon} />
+              </div>
+              <div>
+                <h3>{item.title}</h3>
+                <strong>{item.method}</strong>
+                <p>{item.text}</p>
+              </div>
+            </section>
+          ))}
         </div>
+      </div>
+
+      <aside className="tier-detail__side">
+        <h3>Full QC Panel Includes</h3>
+        <ul className="panel-list">
+          {tier.includes.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+
+        <div className="turnaround">
+          <strong>{tier.turnaround}</strong>
+          <span>{tier.turnaroundNote}</span>
+        </div>
+
+        <div className="additional-tests">
+          <h4>Additional Tests</h4>
+          {tier.additional.map((item) => (
+            <div key={item.title}>
+              <strong>{item.title}</strong>
+              <p>{item.text}</p>
+            </div>
+          ))}
+        </div>
+      </aside>
+
+      <section className="qualified-list" aria-label={`${tier.name} qualified peptides`}>
+        <div>
+          <p className="eyebrow">Qualified this round</p>
+          <h3>{tier.qualifiedCount} peptides assigned to {tier.name}</h3>
+        </div>
+        <ul>
+          {tier.peptides.map((peptide) => (
+            <li key={peptide}>{peptide}</li>
+          ))}
+        </ul>
       </section>
-    </>
+    </article>
+  );
+}
+
+function TestingIcon({ type }: { type: TestingIconType }) {
+  if (type === 'atom') {
+    return (
+      <svg viewBox="0 0 64 64" role="img">
+        <circle cx="32" cy="32" r="5" />
+        <ellipse cx="32" cy="32" rx="25" ry="10" />
+        <ellipse cx="32" cy="32" rx="25" ry="10" transform="rotate(60 32 32)" />
+        <ellipse cx="32" cy="32" rx="25" ry="10" transform="rotate(120 32 32)" />
+      </svg>
+    );
+  }
+
+  if (type === 'microscope') {
+    return (
+      <svg viewBox="0 0 64 64" role="img">
+        <path d="M25 9h12v18H25z" />
+        <path d="M31 27v10c0 6-5 11-11 11h-5" />
+        <path d="M37 16h9v16h-9" />
+        <path d="M18 56h31" />
+        <path d="M43 48c0 4-3 8-8 8" />
+      </svg>
+    );
+  }
+
+  if (type === 'vial') {
+    return (
+      <svg viewBox="0 0 64 64" role="img">
+        <path d="M24 8h16" />
+        <path d="M28 8v12L18 46c-2 6 1 10 7 10h14c6 0 9-4 7-10L36 20V8" />
+        <path d="M22 42h20" />
+      </svg>
+    );
+  }
+
+  if (type === 'tubes') {
+    return (
+      <svg viewBox="0 0 64 64" role="img">
+        <path d="M14 9h12" />
+        <path d="M18 9v37a6 6 0 0 0 12 0V9" />
+        <path d="M38 9h12" />
+        <path d="M42 9v37a6 6 0 0 0 12 0V9" />
+        <path d="M18 36h12" />
+        <path d="M42 31h12" />
+      </svg>
+    );
+  }
+
+  if (type === 'shield') {
+    return (
+      <svg viewBox="0 0 64 64" role="img">
+        <path d="M32 7 52 16v14c0 14-8 23-20 28-12-5-20-14-20-28V16L32 7Z" />
+        <path d="m23 32 6 6 13-15" />
+      </svg>
+    );
+  }
+
+  if (type === 'badge') {
+    return (
+      <svg viewBox="0 0 64 64" role="img">
+        <path d="M32 6 50 16v19c0 10-7 18-18 23-11-5-18-13-18-23V16L32 6Z" />
+        <path d="M23 34h18" />
+        <path d="M23 25h18" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 64 64" role="img">
+      <path d="M24 7h16" />
+      <path d="M28 7v18L15 49c-2 4 1 8 6 8h22c5 0 8-4 6-8L36 25V7" />
+      <path d="M22 42h20" />
+    </svg>
   );
 }
 
