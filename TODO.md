@@ -20,6 +20,7 @@
   - Explain testing levels and what each level includes.
   - Show testing statistics for current and past rounds.
   - Include a COA subpage with filtering by compound, round, and batch.
+  - Add a vial label generator that includes QR codes linking to the COAs.
 - FAQs:
   - Add common questions and answers about participation, vendor-direct payment, delivery, testing coordination, disclaimers, and site workflow.
 
