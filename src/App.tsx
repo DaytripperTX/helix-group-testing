@@ -591,7 +591,7 @@ function TestingTierDetails({ tier }: { tier: TestingTier }) {
             <p className="eyebrow">{tier.name} testing</p>
             <h2 id="tier-detail-title">{tier.name.toUpperCase()} TESTING</h2>
             <p>
-              <strong>{tier.label}</strong> - {tier.description}
+              <strong className="testing-label">{tier.label}</strong> - {tier.description}
             </p>
           </div>
         </header>

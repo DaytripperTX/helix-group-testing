@@ -396,7 +396,7 @@ h2 {
 .tier-button::before {
   position: absolute;
   inset: 0;
-  opacity: 0.14;
+  opacity: 1;
   content: "";
 }
 
@@ -430,13 +430,19 @@ h2 {
 }
 
 .tier-button strong {
+  width: fit-content;
+  border: 1px solid rgba(255, 255, 255, 0.54);
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: rgba(255, 255, 255, 0.68);
+  box-shadow: 0 8px 20px rgba(5, 8, 22, 0.08);
   font-size: 0.82rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .tier-button em {
-  color: #344154;
+  color: rgba(7, 16, 31, 0.78);
   font-size: 0.92rem;
   font-style: normal;
   line-height: 1.45;
@@ -446,20 +452,21 @@ h2 {
   width: fit-content;
   border-radius: 999px;
   padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.68);
   color: #07101f;
   font-size: 0.78rem;
   font-weight: 850;
 }
 
 .tier-button--platinum {
-  border-color: rgba(19, 244, 255, 0.46);
+  border-color: rgba(19, 244, 255, 0.7);
+  background: #d9fbff;
 }
 
 .tier-button--platinum::before {
   background:
-    linear-gradient(135deg, rgba(19, 244, 255, 0.8), transparent 44%),
-    linear-gradient(315deg, rgba(184, 117, 255, 0.72), transparent 46%);
+    linear-gradient(135deg, rgba(19, 244, 255, 0.5), rgba(255, 255, 255, 0.2) 48%),
+    linear-gradient(315deg, rgba(184, 117, 255, 0.42), transparent 52%);
 }
 
 .tier-button--platinum strong,
@@ -472,13 +479,14 @@ h2 {
 }
 
 .tier-button--gold {
-  border-color: rgba(232, 185, 67, 0.58);
+  border-color: rgba(232, 185, 67, 0.82);
+  background: #fff1b8;
 }
 
 .tier-button--gold::before {
   background:
-    linear-gradient(135deg, rgba(232, 185, 67, 0.8), transparent 46%),
-    linear-gradient(315deg, rgba(255, 244, 194, 0.7), transparent 44%);
+    linear-gradient(135deg, rgba(232, 185, 67, 0.52), rgba(255, 255, 255, 0.2) 48%),
+    linear-gradient(315deg, rgba(255, 246, 199, 0.72), transparent 52%);
 }
 
 .tier-button--gold strong,
@@ -491,13 +499,14 @@ h2 {
 }
 
 .tier-button--bronze {
-  border-color: rgba(188, 116, 55, 0.54);
+  border-color: rgba(188, 116, 55, 0.78);
+  background: #f4c195;
 }
 
 .tier-button--bronze::before {
   background:
-    linear-gradient(135deg, rgba(188, 116, 55, 0.78), transparent 45%),
-    linear-gradient(315deg, rgba(241, 181, 120, 0.68), transparent 44%);
+    linear-gradient(135deg, rgba(188, 116, 55, 0.5), rgba(255, 255, 255, 0.18) 48%),
+    linear-gradient(315deg, rgba(255, 231, 210, 0.62), transparent 52%);
 }
 
 .tier-button--bronze strong,
@@ -566,6 +575,26 @@ h2 {
   line-height: 1.5;
 }
 
+.testing-label {
+  display: inline-block;
+  border: 1px solid rgba(19, 244, 255, 0.38);
+  border-radius: 999px;
+  padding: 3px 9px 4px;
+  background: rgba(19, 244, 255, 0.1);
+  box-shadow: 0 8px 18px rgba(5, 8, 22, 0.08);
+  line-height: 1.1;
+}
+
+.tier-detail--gold .testing-label {
+  border-color: rgba(232, 185, 67, 0.5);
+  background: rgba(232, 185, 67, 0.15);
+}
+
+.tier-detail--bronze .testing-label {
+  border-color: rgba(188, 116, 55, 0.48);
+  background: rgba(188, 116, 55, 0.14);
+}
+
 .qc-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -577,10 +606,14 @@ h2 {
   min-height: 176px;
   grid-template-columns: 42px minmax(0, 1fr);
   gap: 12px;
-  border: 1px solid #dfe8ee;
+  border: 1px solid #c6d8e4;
   border-radius: 8px;
   padding: 14px;
-  background: #ffffff;
+  background:
+    linear-gradient(180deg, #ffffff, #f7fbff);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 14px 30px rgba(5, 8, 22, 0.08);
 }
 
 .qc-tile__icon {
