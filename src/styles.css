@@ -291,6 +291,541 @@ h2 {
   background: #eef8fb;
 }
 
+.order-page {
+  min-height: calc(100vh - 86px);
+  padding: 24px 0 34px;
+  background: #edf3f7;
+}
+
+.order-page__layout {
+  display: grid;
+  width: min(1580px, calc(100% - 32px));
+  grid-template-columns: 230px minmax(0, 1fr) 300px;
+  gap: 18px;
+  align-items: start;
+  margin: 0 auto;
+}
+
+.order-filters,
+.peptide-shop,
+.order-summary {
+  border: 1px solid #cfdbe4;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 30px rgba(5, 8, 22, 0.07);
+}
+
+.order-filters,
+.order-summary {
+  position: sticky;
+  top: 110px;
+  display: grid;
+  gap: 22px;
+  padding: 22px;
+}
+
+.order-filters h1 {
+  margin: 0;
+  color: #07101f;
+  font-size: 2.1rem;
+  line-height: 1;
+}
+
+.filter-search {
+  display: grid;
+  gap: 8px;
+}
+
+.filter-search span,
+.filter-group legend {
+  color: #142133;
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.filter-search input {
+  width: 100%;
+  border: 1px solid #c9d8e2;
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: #f8fbfd;
+  color: #07101f;
+  font: inherit;
+  font-size: 0.94rem;
+}
+
+.filter-search input:focus {
+  border-color: #00aeb8;
+  outline: 3px solid rgba(19, 244, 255, 0.2);
+}
+
+.filter-group {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.filter-group legend {
+  margin-bottom: 2px;
+}
+
+.filter-check {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e0e8ee;
+  border-left-width: 5px;
+  border-radius: 8px;
+  padding: 10px;
+  color: #142133;
+  font-size: 0.96rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.filter-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #00aeb8;
+}
+
+.filter-check--platinum {
+  border-left-color: #13f4ff;
+}
+
+.filter-check--gold {
+  border-left-color: #e8b943;
+}
+
+.filter-check--bronze {
+  border-left-color: #bc7437;
+}
+
+.mass-filter-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mass-filter {
+  width: 100%;
+  border: 1px solid #d9e4eb;
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #ffffff;
+  color: #344154;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 800;
+  text-align: left;
+}
+
+.mass-filter:hover,
+.mass-filter:focus-visible,
+.mass-filter.is-selected {
+  border-color: #00aeb8;
+  background: #eafbff;
+  color: #006f78;
+  outline: none;
+}
+
+.peptide-shop {
+  min-width: 0;
+  padding: 22px;
+}
+
+.peptide-shop__header {
+  display: flex;
+  gap: 16px;
+  align-items: end;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.peptide-shop__header h2 {
+  margin: 0;
+  color: #07101f;
+  font-size: 2rem;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.peptide-shop__header span {
+  flex: 0 0 auto;
+  border: 1px solid #d9e4eb;
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: #f7fafc;
+  color: #4b5568;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.peptide-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.peptide-card {
+  position: relative;
+  display: grid;
+  min-height: 374px;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+  border: 2px solid #cfdbe4;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 24px rgba(5, 8, 22, 0.07);
+  transition:
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.peptide-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 34px rgba(5, 8, 22, 0.11);
+}
+
+.peptide-card--platinum {
+  border-color: #13f4ff;
+}
+
+.peptide-card--gold {
+  border-color: #e8b943;
+}
+
+.peptide-card--bronze {
+  border-color: #bc7437;
+}
+
+.vial-preview {
+  position: relative;
+  display: grid;
+  min-height: 166px;
+  place-items: center;
+  padding: 22px 12px 10px;
+  background:
+    linear-gradient(180deg, #f7fafc 0%, #edf3f7 100%);
+}
+
+.vial-preview img {
+  width: min(118px, 58%);
+  height: 136px;
+  object-fit: contain;
+  opacity: 0.18;
+}
+
+.vial-preview__label {
+  position: absolute;
+  top: 78px;
+  left: 50%;
+  display: grid;
+  width: 76px;
+  min-height: 52px;
+  place-items: center;
+  border: 1px solid #142133;
+  border-radius: 6px;
+  padding: 7px 5px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #050816;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
+.vial-preview__label strong,
+.vial-preview__label span {
+  display: block;
+  width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  font-weight: 950;
+  line-height: 1.05;
+}
+
+.peptide-card__body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.peptide-card__body h3 {
+  min-height: 44px;
+  margin: 0;
+  color: #07101f;
+  font-size: 1rem;
+  line-height: 1.28;
+}
+
+.peptide-card__body dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.peptide-card__body dl div {
+  display: grid;
+  grid-template-columns: minmax(82px, 0.8fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.peptide-card__body dt {
+  color: #657184;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.peptide-card__body dd {
+  margin: 0;
+  color: #142133;
+  font-size: 0.86rem;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.price-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  align-items: baseline;
+  justify-content: flex-end;
+}
+
+.price-pair s,
+.order-summary__total s {
+  color: #9b5526;
+  font-weight: 850;
+  text-decoration-thickness: 2px;
+}
+
+.price-pair strong {
+  color: #007b84;
+  font-size: 0.95rem;
+  font-weight: 950;
+}
+
+.peptide-card__footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid #e4edf3;
+  padding: 10px 14px;
+  background: #f8fbfd;
+}
+
+.peptide-card__footer div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.peptide-card__footer span,
+.peptide-card__footer strong {
+  color: #344154;
+  font-size: 0.76rem;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.peptide-card__footer strong {
+  color: #006f78;
+  text-transform: uppercase;
+}
+
+.quantity-control {
+  display: grid;
+  grid-template-columns: 30px 44px 30px;
+  height: 32px;
+  overflow: hidden;
+  border: 1px solid #c9d8e2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.quantity-control button,
+.quantity-control input {
+  min-width: 0;
+  border: 0;
+  background: #ffffff;
+  color: #07101f;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.quantity-control button {
+  cursor: pointer;
+}
+
+.quantity-control button:hover,
+.quantity-control button:focus-visible {
+  background: #eafbff;
+  color: #006f78;
+  outline: none;
+}
+
+.quantity-control button:disabled {
+  background: #f2f6f9;
+  color: #a7b4c1;
+  cursor: not-allowed;
+}
+
+.quantity-control input {
+  border-inline: 1px solid #d9e4eb;
+  appearance: textfield;
+}
+
+.quantity-control input::-webkit-outer-spin-button,
+.quantity-control input::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.quantity-control input:focus {
+  background: #f8fbfd;
+  outline: 2px solid rgba(19, 244, 255, 0.22);
+  outline-offset: -2px;
+}
+
+.order-summary h2 {
+  margin: 0;
+  color: #07101f;
+  font-size: 2.6rem;
+  line-height: 1;
+}
+
+.order-summary__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.order-summary__meta span {
+  border: 1px solid #d9e4eb;
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: #f8fbfd;
+  color: #344154;
+  font-size: 0.8rem;
+  font-weight: 850;
+}
+
+.order-summary__items {
+  display: grid;
+  max-height: 420px;
+  gap: 10px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.order-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  border: 1px solid #e0e8ee;
+  border-radius: 8px;
+  padding: 11px;
+  background: #fbfdfe;
+}
+
+.order-line strong,
+.order-line span {
+  display: block;
+}
+
+.order-line strong {
+  margin-bottom: 4px;
+  color: #07101f;
+  font-size: 0.9rem;
+  line-height: 1.25;
+}
+
+.order-line span {
+  color: #657184;
+  font-size: 0.78rem;
+  font-weight: 760;
+  line-height: 1.3;
+}
+
+.order-line em {
+  color: #07101f;
+  font-size: 0.92rem;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.order-summary__total {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid #dfe8ee;
+  padding-top: 16px;
+}
+
+.order-summary__total span {
+  color: #657184;
+  font-size: 0.84rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.order-summary__total s {
+  font-size: 1.05rem;
+}
+
+.order-summary__total strong {
+  color: #007b84;
+  font-size: 1.35rem;
+}
+
+.order-summary__total--discounted {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.order-submit {
+  border: 0;
+  border-radius: 8px;
+  padding: 13px 16px;
+  background: #07101f;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+}
+
+.order-submit:hover,
+.order-submit:focus-visible {
+  background: #006f78;
+  outline: none;
+}
+
+.order-submit:disabled {
+  background: #cbd7e4;
+  color: #657184;
+  cursor: not-allowed;
+}
+
+.order-note,
+.empty-state {
+  margin: 0;
+  color: #657184;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
 .testing-dashboard {
   min-height: calc(100vh - 86px);
   padding: 42px 0 68px;
@@ -1071,7 +1606,35 @@ h2 {
   padding-left: 22px;
 }
 
+@media (max-width: 1280px) {
+  .order-page__layout {
+    grid-template-columns: 220px minmax(0, 1fr) 270px;
+  }
+
+  .peptide-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 980px) {
+  .order-page__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .order-filters,
+  .order-summary {
+    position: static;
+  }
+
+  .order-filters {
+    grid-template-columns: minmax(180px, 0.8fr) minmax(200px, 1fr) minmax(180px, 0.8fr);
+    align-items: start;
+  }
+
+  .peptide-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .testing-overview,
   .tier-detail {
     grid-template-columns: 1fr;
@@ -1222,6 +1785,46 @@ h2 {
 
   .info-card {
     min-height: auto;
+  }
+
+  .order-page {
+    padding: 18px 0 28px;
+  }
+
+  .order-page__layout {
+    width: min(100% - 24px, 1120px);
+    gap: 12px;
+  }
+
+  .order-filters,
+  .peptide-shop,
+  .order-summary {
+    padding: 16px;
+  }
+
+  .order-filters,
+  .peptide-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .peptide-shop__header {
+    align-items: start;
+  }
+
+  .peptide-shop__header h2 {
+    font-size: 1.5rem;
+  }
+
+  .peptide-card {
+    min-height: auto;
+  }
+
+  .peptide-card__body h3 {
+    min-height: auto;
+  }
+
+  .order-summary h2 {
+    font-size: 2.1rem;
   }
 
   .testing-dashboard {

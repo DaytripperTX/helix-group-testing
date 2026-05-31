@@ -14,13 +14,14 @@
 - Order form:
   - Future page where users enter order-interest data for vendor coordination.
   - May use a familiar product/cart-style layout with images, while keeping the workflow informational and non-commercial.
+  - clicking on a peptide will expand a description of the peptide
   - Include multiple clear disclaimers that Helix Group Testing does not sell products, handle money, or fulfill orders.
   - Possible future feature: after a user submits the form, automatically email them a waiver to review and sign.
 - Testing:
   - Explain testing levels and what each level includes.
   - Show testing statistics for current and past rounds.
   - Include a COA subpage with filtering by compound, round, and batch.
-  - Add a vial label generator that includes QR codes linking to the COAs.
+  - Add a vial label generator that includes QR codes linking to the COAs
 - FAQs:
   - Add common questions and answers about participation, vendor-direct payment, delivery, testing coordination, disclaimers, and site workflow.
 
