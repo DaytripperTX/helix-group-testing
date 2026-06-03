@@ -247,6 +247,10 @@ type OrderPeptide = {
   massMg: number;
   price: number;
   tier: TestingTierId;
+  headcount: number;
+  totalOrdered: number;
+  upgradeGoal: number;
+  upgradePledged: number;
 };
 
 const bulkDiscountRate = 0.15;
@@ -269,6 +273,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 30,
     price: 285,
     tier: 'platinum',
+    headcount: 18,
+    totalOrdered: 44,
+    upgradeGoal: 0,
+    upgradePledged: 0,
   },
   {
     id: 'bpc-10',
@@ -278,6 +286,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 10,
     price: 42,
     tier: 'platinum',
+    headcount: 26,
+    totalOrdered: 82,
+    upgradeGoal: 0,
+    upgradePledged: 0,
   },
   {
     id: 'klow-80',
@@ -287,6 +299,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 80,
     price: 118,
     tier: 'gold',
+    headcount: 9,
+    totalOrdered: 18,
+    upgradeGoal: 425,
+    upgradePledged: 120,
   },
   {
     id: 'mots-40',
@@ -296,6 +312,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 40,
     price: 96,
     tier: 'bronze',
+    headcount: 12,
+    totalOrdered: 24,
+    upgradeGoal: 650,
+    upgradePledged: 210,
   },
   {
     id: 'ss31-10',
@@ -305,6 +325,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 10,
     price: 78,
     tier: 'gold',
+    headcount: 11,
+    totalOrdered: 19,
+    upgradeGoal: 425,
+    upgradePledged: 75,
   },
   {
     id: 'tirz-15',
@@ -314,6 +338,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 15,
     price: 115,
     tier: 'platinum',
+    headcount: 22,
+    totalOrdered: 51,
+    upgradeGoal: 0,
+    upgradePledged: 0,
   },
   {
     id: 'cjcipa-10',
@@ -323,6 +351,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 10,
     price: 58,
     tier: 'gold',
+    headcount: 15,
+    totalOrdered: 31,
+    upgradeGoal: 425,
+    upgradePledged: 260,
   },
   {
     id: 'tesa-20',
@@ -332,6 +364,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 20,
     price: 128,
     tier: 'bronze',
+    headcount: 8,
+    totalOrdered: 14,
+    upgradeGoal: 650,
+    upgradePledged: 90,
   },
   {
     id: 'semax-5',
@@ -341,6 +377,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 5,
     price: 34,
     tier: 'gold',
+    headcount: 7,
+    totalOrdered: 16,
+    upgradeGoal: 425,
+    upgradePledged: 40,
   },
   {
     id: 'selank-5',
@@ -350,6 +390,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 5,
     price: 32,
     tier: 'gold',
+    headcount: 10,
+    totalOrdered: 21,
+    upgradeGoal: 425,
+    upgradePledged: 155,
   },
   {
     id: 'nad-500',
@@ -359,6 +403,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 500,
     price: 72,
     tier: 'platinum',
+    headcount: 16,
+    totalOrdered: 38,
+    upgradeGoal: 0,
+    upgradePledged: 0,
   },
   {
     id: 'kpv-10',
@@ -368,6 +416,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 10,
     price: 46,
     tier: 'gold',
+    headcount: 13,
+    totalOrdered: 27,
+    upgradeGoal: 425,
+    upgradePledged: 185,
   },
   {
     id: 'tb500-10',
@@ -377,6 +429,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 10,
     price: 54,
     tier: 'platinum',
+    headcount: 19,
+    totalOrdered: 46,
+    upgradeGoal: 0,
+    upgradePledged: 0,
   },
   {
     id: 'ghkcu-50',
@@ -386,6 +442,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 50,
     price: 62,
     tier: 'gold',
+    headcount: 14,
+    totalOrdered: 29,
+    upgradeGoal: 425,
+    upgradePledged: 315,
   },
   {
     id: 'aod-10',
@@ -395,6 +455,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 10,
     price: 45,
     tier: 'bronze',
+    headcount: 6,
+    totalOrdered: 11,
+    upgradeGoal: 650,
+    upgradePledged: 60,
   },
   {
     id: 'pt141-10',
@@ -404,6 +468,10 @@ const orderPeptides: OrderPeptide[] = [
     massMg: 10,
     price: 38,
     tier: 'gold',
+    headcount: 9,
+    totalOrdered: 20,
+    upgradeGoal: 425,
+    upgradePledged: 130,
   },
 ];
 
@@ -864,9 +932,47 @@ function PeptideCard({
 }) {
   const tier = testingTierLookup[peptide.tier];
   const discountedPrice = getDiscountedPrice(peptide.price);
+  const [isInfoPinned, setIsInfoPinned] = useState(false);
 
   return (
     <article className={`peptide-card peptide-card--${peptide.tier}`}>
+      <div className={isInfoPinned ? 'peptide-info is-pinned' : 'peptide-info'}>
+        <button
+          className="peptide-info__trigger"
+          type="button"
+          aria-label={`${peptide.fullName} details`}
+          aria-expanded={isInfoPinned}
+          onClick={() => setIsInfoPinned((currentValue) => !currentValue)}
+        >
+          i
+        </button>
+        <div className="peptide-info__panel">
+          <dl>
+            <div>
+              <dt>Heads</dt>
+              <dd>{peptide.headcount}</dd>
+            </div>
+            <div>
+              <dt>Ordered</dt>
+              <dd>{peptide.totalOrdered}</dd>
+            </div>
+          </dl>
+          <div className="upgrade-pledge">
+            {peptide.upgradeGoal > 0 ? (
+              <>
+                <button type="button">Fund Upgrade</button>
+                <span>
+                  {formatWholeCurrency(peptide.upgradePledged)} /{' '}
+                  {formatWholeCurrency(peptide.upgradeGoal)}
+                </span>
+              </>
+            ) : (
+              <span>Top tier</span>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="vial-preview" aria-hidden="true">
         <div className="vial-preview__art">
           <img src="/vial.svg" alt="" />
@@ -944,6 +1050,14 @@ function formatCurrency(amount: number) {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+function formatWholeCurrency(amount: number) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
   }).format(amount);
 }
 

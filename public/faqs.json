@@ -36,6 +36,10 @@
     "answer": "Testing tier is determined per peptide, based on how many members ordered that specific peptide. Bronze testing generally applies when fewer than 3 members order the peptide. Gold testing generally applies when 3 or more but fewer than 5 members order it. Platinum testing generally applies when 5 or more members order it."
   },
   {
+    "question": "What are testing upgrade donations?",
+    "answer": "Testing upgrade donations are optional pledges members can make to help move a specific peptide into a higher testing tier when normal order volume does not qualify it. Upgrade funds are used only for added third-party testing costs for that peptide, not vendor product payments. A coordinator will confirm the goal amount, pledged amount, and payment instructions before any donation is collected."
+  },
+  {
     "question": "What are estimated testing costs?",
     "answer": "Estimated per-member testing costs are currently expected to be about $140 to $160 for a round. Actual costs may vary by testing scope, participation, and coordinator instructions."
   },
