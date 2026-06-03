@@ -807,8 +807,10 @@ function OrderFormPage() {
                 <div className="order-line" key={peptide.id}>
                   <div>
                     <strong>{peptide.fullName}</strong>
-                    <span>
-                      {peptide.supplierCode} / {peptide.massMg} mg / Qty {peptide.quantity}
+                    <span className="order-line__meta">
+                      <span>{peptide.supplierCode}</span>
+                      <span>{peptide.massMg} mg</span>
+                      <span>Qty {peptide.quantity}</span>
                     </span>
                   </div>
                   <em>{formatCurrency(getDiscountedPrice(peptide.price) * peptide.quantity)}</em>
@@ -866,10 +868,12 @@ function PeptideCard({
   return (
     <article className={`peptide-card peptide-card--${peptide.tier}`}>
       <div className="vial-preview" aria-hidden="true">
-        <img src="/vial.svg" alt="" />
-        <div className="vial-preview__label">
-          <strong>{peptide.shorthand}</strong>
-          <span>{peptide.massMg} MG</span>
+        <div className="vial-preview__art">
+          <img src="/vial.svg" alt="" />
+          <div className="vial-preview__label">
+            <strong>{peptide.shorthand}</strong>
+            <span>{peptide.massMg} MG</span>
+          </div>
         </div>
       </div>
 

@@ -299,8 +299,8 @@ h2 {
 
 .order-page__layout {
   display: grid;
-  width: min(1580px, calc(100% - 32px));
-  grid-template-columns: 230px minmax(0, 1fr) 300px;
+  width: min(1800px, calc(100% - 16px));
+  grid-template-columns: 220px minmax(0, 1fr) 360px;
   gap: 18px;
   align-items: start;
   margin: 0 auto;
@@ -473,6 +473,7 @@ h2 {
 }
 
 .peptide-card {
+  container-type: inline-size;
   position: relative;
   display: grid;
   min-height: 374px;
@@ -505,7 +506,6 @@ h2 {
 }
 
 .vial-preview {
-  position: relative;
   display: grid;
   min-height: 166px;
   place-items: center;
@@ -514,38 +514,80 @@ h2 {
     linear-gradient(180deg, #f7fafc 0%, #edf3f7 100%);
 }
 
-.vial-preview img {
-  width: min(118px, 58%);
+.vial-preview__art {
+  --vial-scale: 1.18;
+  --vial-label-top: 58%;
+  --vial-label-width: 58px;
+  --vial-label-height: 52px;
+  position: relative;
+  display: grid;
+  width: 118px;
   height: 136px;
+  place-items: center;
+  overflow: visible;
+}
+
+.vial-preview__art::before {
+  position: absolute;
+  inset: 0;
+  background: #657184;
+  content: "";
+  mask: url("/vial.svg") center / contain no-repeat;
+  transform: scale(var(--vial-scale));
+  transform-origin: center;
+}
+
+.peptide-card--platinum .vial-preview__art::before {
+  background: #00aeb8;
+}
+
+.peptide-card--gold .vial-preview__art::before {
+  background: #d49a00;
+}
+
+.peptide-card--bronze .vial-preview__art::before {
+  background: #bc7437;
+}
+
+.vial-preview__art img {
+  width: 100%;
+  height: 100%;
   object-fit: contain;
-  opacity: 0.18;
+  opacity: 0;
+  transform: scale(var(--vial-scale));
+  transform-origin: center;
 }
 
 .vial-preview__label {
   position: absolute;
-  top: 78px;
+  top: var(--vial-label-top);
   left: 50%;
   display: grid;
-  width: 76px;
-  min-height: 52px;
+  width: var(--vial-label-width);
+  max-width: var(--vial-label-width);
+  min-height: var(--vial-label-height);
   place-items: center;
-  border: 1px solid #142133;
+  border: 0;
   border-radius: 6px;
-  padding: 7px 5px;
-  background: rgba(255, 255, 255, 0.92);
+  overflow: hidden;
+  padding: 6px 3px;
+  background: rgba(255, 255, 255, 0.5);
   color: #050816;
   text-align: center;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
 }
 
 .vial-preview__label strong,
 .vial-preview__label span {
   display: block;
   width: 100%;
-  overflow-wrap: anywhere;
-  font-size: 0.78rem;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: clamp(0.58rem, 0.72rem, 0.78rem);
   font-weight: 950;
   line-height: 1.05;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .peptide-card__body {
@@ -570,7 +612,7 @@ h2 {
 
 .peptide-card__body dl div {
   display: grid;
-  grid-template-columns: minmax(82px, 0.8fr) minmax(0, 1fr);
+  grid-template-columns: minmax(68px, 0.58fr) minmax(0, 1.42fr);
   gap: 8px;
   align-items: baseline;
 }
@@ -594,10 +636,12 @@ h2 {
 
 .price-pair {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px 8px;
+  flex-wrap: nowrap;
+  gap: 6px;
   align-items: baseline;
   justify-content: flex-end;
+  max-width: 100%;
+  white-space: nowrap;
 }
 
 .price-pair s,
@@ -607,10 +651,43 @@ h2 {
   text-decoration-thickness: 2px;
 }
 
+.price-pair s {
+  font-size: 0.82rem;
+}
+
 .price-pair strong {
   color: #007b84;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   font-weight: 950;
+}
+
+@container (max-width: 220px) {
+  .price-pair {
+    gap: 4px;
+  }
+
+  .price-pair s {
+    font-size: 0.74rem;
+  }
+
+  .price-pair strong {
+    font-size: 0.82rem;
+  }
+}
+
+@container (max-width: 190px) {
+  .peptide-card__body dl div {
+    grid-template-columns: minmax(54px, 0.48fr) minmax(0, 1.52fr);
+    gap: 5px;
+  }
+
+  .price-pair s {
+    font-size: 0.68rem;
+  }
+
+  .price-pair strong {
+    font-size: 0.76rem;
+  }
 }
 
 .peptide-card__footer {
@@ -740,7 +817,7 @@ h2 {
 }
 
 .order-line strong,
-.order-line span {
+.order-line__meta {
   display: block;
 }
 
@@ -751,11 +828,24 @@ h2 {
   line-height: 1.25;
 }
 
-.order-line span {
+.order-line__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
   color: #657184;
   font-size: 0.78rem;
   font-weight: 760;
   line-height: 1.3;
+}
+
+.order-line__meta span {
+  white-space: nowrap;
+}
+
+.order-line__meta span + span::before {
+  margin-right: 8px;
+  color: #9aa7b5;
+  content: "|";
 }
 
 .order-line em {
@@ -1608,7 +1698,7 @@ h2 {
 
 @media (max-width: 1280px) {
   .order-page__layout {
-    grid-template-columns: 220px minmax(0, 1fr) 270px;
+    grid-template-columns: 210px minmax(0, 1fr) 340px;
   }
 
   .peptide-grid {
@@ -1792,7 +1882,7 @@ h2 {
   }
 
   .order-page__layout {
-    width: min(100% - 24px, 1120px);
+    width: min(100% - 12px, 1120px);
     gap: 12px;
   }
 

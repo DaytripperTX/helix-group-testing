@@ -17,6 +17,7 @@
   - clicking on a peptide will expand a description of the peptide
   - Include multiple clear disclaimers that Helix Group Testing does not sell products, handle money, or fulfill orders.
   - Possible future feature: after a user submits the form, automatically email them a waiver to review and sign.
+  - Add disclaimers / info section for testing upgrade donations.
 - Testing:
   - Explain testing levels and what each level includes.
   - Show testing statistics for current and past rounds.
