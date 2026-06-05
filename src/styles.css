@@ -25,6 +25,28 @@ main {
   min-height: 100vh;
 }
 
+select {
+  width: 100%;
+  border: 1px solid #c9d8e2;
+  border-radius: 8px;
+  padding: 10px 34px 10px 11px;
+  background:
+    linear-gradient(45deg, transparent 50%, #07101f 50%) right 15px center / 6px 6px no-repeat,
+    linear-gradient(135deg, #07101f 50%, transparent 50%) right 10px center / 6px 6px no-repeat,
+    #f8fbfd;
+  color: #07101f;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.94rem;
+  appearance: none;
+}
+
+select:hover,
+select:focus-visible {
+  border-color: #00aeb8;
+  outline: 3px solid rgba(19, 244, 255, 0.2);
+}
+
 .brand-band {
   position: sticky;
   top: 0;
@@ -1297,8 +1319,7 @@ h2 {
   text-transform: uppercase;
 }
 
-.label-field input,
-.label-field select {
+.label-field input {
   width: 100%;
   border: 1px solid #c9d8e2;
   border-radius: 8px;
@@ -1315,10 +1336,75 @@ h2 {
   font-size: 0.86rem;
 }
 
-.label-field input:focus,
-.label-field select:focus {
+.label-field input:focus {
   border-color: #00aeb8;
   outline: 3px solid rgba(19, 244, 255, 0.2);
+}
+
+.dropdown-select {
+  position: relative;
+}
+
+.dropdown-select__trigger {
+  width: 100%;
+  border: 1px solid #c9d8e2;
+  border-radius: 8px;
+  padding: 10px 34px 10px 11px;
+  background:
+    linear-gradient(45deg, transparent 50%, #07101f 50%) right 15px center / 6px 6px no-repeat,
+    linear-gradient(135deg, #07101f 50%, transparent 50%) right 10px center / 6px 6px no-repeat,
+    #f8fbfd;
+  color: #07101f;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.94rem;
+  text-align: left;
+}
+
+.dropdown-select__trigger:hover,
+.dropdown-select__trigger:focus-visible {
+  border-color: #00aeb8;
+  outline: 3px solid rgba(19, 244, 255, 0.2);
+}
+
+.dropdown-select__list {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 15;
+  display: grid;
+  width: 100%;
+  max-height: 270px;
+  overflow: auto;
+  border: 1px solid #9fb4c4;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 38px rgba(5, 8, 22, 0.18);
+}
+
+.dropdown-select__option {
+  border: 0;
+  padding: 9px 12px;
+  background: #ffffff;
+  color: #07101f;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.94rem;
+  text-align: left;
+}
+
+.dropdown-select__option:hover,
+.dropdown-select__option:focus-visible,
+.dropdown-select__option.is-selected {
+  background: #2f67c8;
+  color: #ffffff;
+  outline: none;
+}
+
+.dropdown-select__option--more {
+  border-top: 1px solid #d9e4eb;
+  color: #006f78;
+  font-weight: 900;
 }
 
 .label-template-list {

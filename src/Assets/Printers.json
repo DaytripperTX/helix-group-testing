@@ -32,11 +32,6 @@
         "transparent": true
       },
       {
-        "id": "silver",
-        "name": "Silver",
-        "hex": "#c8d0d5"
-      },
-      {
         "id": "brushed-silver",
         "name": "Brushed Silver",
         "hex": "#b6bdc2",
@@ -51,6 +46,21 @@
         "id": "gold",
         "name": "Gold",
         "hex": "#d2a845"
+      },
+      {
+        "id": "brown",
+        "name": "Brown",
+        "hex": "#8a5b3e"
+      },
+      {
+        "id": "green",
+        "name": "Green",
+        "hex": "#6fa36a"
+      },
+      {
+        "id": "blue",
+        "name": "Blue",
+        "hex": "#6aa6d8"
       },
       {
         "id": "hologram",
@@ -74,11 +84,6 @@
         "name": "Round White",
         "hex": "#ffffff",
         "shape": "round"
-      },
-      {
-        "id": "lab-white",
-        "name": "Lab White",
-        "hex": "#ffffff"
       },
       {
         "id": "colorful-round",
@@ -133,6 +138,7 @@
         "widthMm": 40,
         "heightMm": 20,
         "shape": "rectangle",
+        "common": true,
         "colorIds": [
           "hologram",
           "matte-silver",
@@ -149,10 +155,64 @@
         "widthMm": 50,
         "heightMm": 30,
         "shape": "rectangle",
+        "common": true,
         "colorIds": [
           "white",
           "hologram",
-          "silver"
+          "matte-black",
+          "brushed-silver",
+          "matte-silver",
+          "clear",
+          "brown"
+        ]
+      },
+      {
+        "id": "28x14-round",
+        "name": "28 x 14 mm Round",
+        "widthMm": 28,
+        "heightMm": 14,
+        "shape": "round",
+        "common": true,
+        "colorIds": [
+          "clear"
+        ]
+      },
+      {
+        "id": "40x30",
+        "name": "40 x 30 mm",
+        "widthMm": 40,
+        "heightMm": 30,
+        "shape": "rectangle",
+        "colorIds": [
+          "clear",
+          "white"
+        ]
+      },
+      {
+        "id": "40x60",
+        "name": "40 x 60 mm",
+        "widthMm": 40,
+        "heightMm": 60,
+        "shape": "rectangle",
+        "colorIds": [
+          "clear",
+          "white",
+          "matte-silver"
+        ]
+      },
+      {
+        "id": "50x70",
+        "name": "50 x 70 mm",
+        "widthMm": 50,
+        "heightMm": 70,
+        "shape": "rectangle",
+        "colorIds": [
+          "brushed-silver",
+          "white",
+          "matte-silver",
+          "brown",
+          "green",
+          "blue"
         ]
       },
       {
@@ -162,6 +222,7 @@
         "heightMm": 80,
         "shape": "rectangle",
         "colorIds": [
+          "hologram",
           "clear"
         ]
       },
@@ -194,16 +255,6 @@
         "shape": "round",
         "colorIds": [
           "colorful-round"
-        ]
-      },
-      {
-        "id": "30x20-lab",
-        "name": "30 x 20 mm Lab",
-        "widthMm": 30,
-        "heightMm": 20,
-        "shape": "rectangle",
-        "colorIds": [
-          "lab-white"
         ]
       },
       {

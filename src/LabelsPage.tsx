@@ -33,6 +33,11 @@ type UploadedLabelForm = {
   generic: boolean;
 };
 
+type DropdownOption = {
+  value: string;
+  label: string;
+};
+
 type PrinterColor = {
   id: string;
   name: string;
@@ -49,6 +54,7 @@ type LabelMedia = {
   widthMm: number;
   heightMm: number;
   shape: string;
+  common?: boolean;
   colorIds: string[];
 };
 
@@ -172,6 +178,7 @@ function LabelsPage() {
   const [selectedLabelColorId, setSelectedLabelColorId] = useState(
     defaultPrinter.labelMediaSupported[0].colorIds[0],
   );
+  const [isLabelMediaExpanded, setIsLabelMediaExpanded] = useState(false);
   const [uploadForm, setUploadForm] = useState<UploadedLabelForm>({
     name: '',
     author: '',
@@ -193,6 +200,11 @@ function LabelsPage() {
     ) ??
     supportedLabelColors[0] ??
     selectedPrinter.labelColorsSupported[0];
+  const commonLabelMedia = selectedPrinter.labelMediaSupported.filter((media) => media.common);
+  const visibleLabelMedia =
+    isLabelMediaExpanded || commonLabelMedia.length === 0
+      ? selectedPrinter.labelMediaSupported
+      : commonLabelMedia;
   const availablePrintColors = selectedPrinter.printTextColorsSupported.filter((color) =>
     availablePrintColorIds.includes(color.id),
   );
@@ -233,6 +245,7 @@ function LabelsPage() {
     setSelectedPrinterId(nextPrinter.id);
     setSelectedLabelMediaId(nextPrinter.labelMediaSupported[0].id);
     setSelectedLabelColorId(nextPrinter.labelMediaSupported[0].colorIds[0]);
+    setIsLabelMediaExpanded(false);
     setAvailablePrintColorIds(nextPrinter.printTextColorsSupported.map((color) => color.id));
     setSelectedPrintColorId(nextPrinter.printTextColorsSupported[0].id);
   };
@@ -337,17 +350,17 @@ function LabelsPage() {
 
             <label className="label-field">
               <span>Peptide filter</span>
-              <select
+              <DropdownSelect
                 value={selectedPeptideType}
-                onChange={(event) => setSelectedPeptideType(event.target.value)}
-              >
-                <option value="all">All labels</option>
-                {labelPeptideTypes.map((peptideType) => (
-                  <option value={peptideType} key={peptideType}>
-                    {peptideType}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: 'all', label: 'All labels' },
+                  ...labelPeptideTypes.map((peptideType) => ({
+                    value: peptideType,
+                    label: peptideType,
+                  })),
+                ]}
+                onChange={setSelectedPeptideType}
+              />
             </label>
 
             <div className="label-template-list">
@@ -425,58 +438,60 @@ function LabelsPage() {
               <div className="printer-settings__grid">
                 <label className="label-field">
                   <span>Printer model</span>
-                  <select
+                  <DropdownSelect
                     value={selectedPrinterId}
-                    onChange={(event) => updateSelectedPrinter(event.target.value)}
-                  >
-                    {printerCatalog.map((printer) => (
-                      <option value={printer.id} key={printer.id}>
-                        {printer.brand} {printer.printer.model}
-                      </option>
-                    ))}
-                  </select>
+                    options={printerCatalog.map((printer) => ({
+                      value: printer.id,
+                      label: `${printer.brand} ${printer.printer.model}`,
+                    }))}
+                    onChange={updateSelectedPrinter}
+                  />
                 </label>
 
-                <label className="label-field">
+                <div className="label-field">
                   <span>Label size</span>
-                  <select
+                  <DropdownSelect
                     value={selectedLabelMedia.id}
-                    onChange={(event) => updateSelectedLabelMedia(event.target.value)}
-                  >
-                    {selectedPrinter.labelMediaSupported.map((media) => (
-                      <option value={media.id} key={media.id}>
-                        {media.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    options={visibleLabelMedia.map((media) => ({
+                      value: media.id,
+                      label: media.name,
+                    }))}
+                    extraAction={
+                      !isLabelMediaExpanded &&
+                      commonLabelMedia.length > 0 &&
+                      commonLabelMedia.length < selectedPrinter.labelMediaSupported.length
+                        ? {
+                            label: 'Show more...',
+                            onClick: () => setIsLabelMediaExpanded(true),
+                          }
+                        : undefined
+                    }
+                    onChange={updateSelectedLabelMedia}
+                  />
+                </div>
 
                 <label className="label-field">
                   <span>Label color</span>
-                  <select
+                  <DropdownSelect
                     value={selectedLabelColor.id}
-                    onChange={(event) => setSelectedLabelColorId(event.target.value)}
-                  >
-                    {supportedLabelColors.map((color) => (
-                      <option value={color.id} key={color.id}>
-                        {color.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={supportedLabelColors.map((color) => ({
+                      value: color.id,
+                      label: color.name,
+                    }))}
+                    onChange={setSelectedLabelColorId}
+                  />
                 </label>
 
                 <label className="label-field">
                   <span>Active print color</span>
-                  <select
+                  <DropdownSelect
                     value={selectedPrintColor.id}
-                    onChange={(event) => setSelectedPrintColorId(event.target.value)}
-                  >
-                    {availablePrintColors.map((color) => (
-                      <option value={color.id} key={color.id}>
-                        {color.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={availablePrintColors.map((color) => ({
+                      value: color.id,
+                      label: color.name,
+                    }))}
+                    onChange={setSelectedPrintColorId}
+                  />
                 </label>
 
                 <div className="printer-summary" aria-label="Selected label media summary">
@@ -618,23 +633,21 @@ function LabelsPage() {
               {!uploadForm.generic && (
                 <label className="label-field">
                   <span>Peptide type</span>
-                  <select
+                  <DropdownSelect
                     value={uploadForm.peptideType}
-                    onChange={(event) =>
+                    options={labelPeptideTypes
+                      .filter((peptideType) => peptideType !== 'Generic')
+                      .map((peptideType) => ({
+                        value: peptideType,
+                        label: peptideType,
+                      }))}
+                    onChange={(value) =>
                       setUploadForm((currentForm) => ({
                         ...currentForm,
-                        peptideType: event.target.value,
+                        peptideType: value,
                       }))
                     }
-                  >
-                    {labelPeptideTypes
-                      .filter((peptideType) => peptideType !== 'Generic')
-                      .map((peptideType) => (
-                        <option value={peptideType} key={peptideType}>
-                          {peptideType}
-                        </option>
-                      ))}
-                  </select>
+                  />
                 </label>
               )}
 
@@ -689,6 +702,82 @@ function LabelTemplateCard({
         </button>
       </div>
     </article>
+  );
+}
+
+function DropdownSelect({
+  value,
+  options,
+  extraAction,
+  onChange,
+}: {
+  value: string;
+  options: DropdownOption[];
+  extraAction?: {
+    label: string;
+    onClick: () => void;
+  };
+  onChange: (value: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const selectedOption = options.find((option) => option.value === value) ?? options[0];
+
+  return (
+    <div
+      className="dropdown-select"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setIsOpen(false);
+        }
+      }}
+    >
+      <button
+        className="dropdown-select__trigger"
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((currentValue) => !currentValue)}
+      >
+        {selectedOption?.label ?? ''}
+      </button>
+
+      {isOpen && (
+        <div className="dropdown-select__list" role="listbox" tabIndex={-1}>
+          {options.map((option) => (
+            <button
+              className={
+                option.value === value
+                  ? 'dropdown-select__option is-selected'
+                  : 'dropdown-select__option'
+              }
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              key={option.value}
+              onClick={() => {
+                onChange(option.value);
+                setIsOpen(false);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+
+          {extraAction && (
+            <button
+              className="dropdown-select__option dropdown-select__option--more"
+              type="button"
+              onClick={() => {
+                extraAction.onClick();
+                setIsOpen(true);
+              }}
+            >
+              {extraAction.label}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
