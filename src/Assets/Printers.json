@@ -1,0 +1,231 @@
+[
+  {
+    "id": "niimbot-m2",
+    "printer": {
+      "name": "NIIMBOT M2",
+      "model": "M2"
+    },
+    "brand": "NIIMBOT",
+    "technology": "Thermal transfer",
+    "resolutionDpi": 300,
+    "supportedLabelSizeMm": {
+      "min": {
+        "width": 20,
+        "height": 20
+      },
+      "max": {
+        "width": 50,
+        "height": 80
+      },
+      "officialWidthRangeInches": "0.8-2"
+    },
+    "labelColorsSupported": [
+      {
+        "id": "white",
+        "name": "White",
+        "hex": "#ffffff"
+      },
+      {
+        "id": "clear",
+        "name": "Clear",
+        "hex": "#f7fbff",
+        "transparent": true
+      },
+      {
+        "id": "silver",
+        "name": "Silver",
+        "hex": "#c8d0d5"
+      },
+      {
+        "id": "brushed-silver",
+        "name": "Brushed Silver",
+        "hex": "#b6bdc2",
+        "finish": "brushed"
+      },
+      {
+        "id": "matte-silver",
+        "name": "Matte Silver",
+        "hex": "#aeb6bc"
+      },
+      {
+        "id": "gold",
+        "name": "Gold",
+        "hex": "#d2a845"
+      },
+      {
+        "id": "hologram",
+        "name": "Hologram",
+        "hex": "#d9f2ff",
+        "finish": "holographic"
+      },
+      {
+        "id": "matte-black",
+        "name": "Matte Black",
+        "hex": "#050816"
+      },
+      {
+        "id": "round-black",
+        "name": "Round Black",
+        "hex": "#050816",
+        "shape": "round"
+      },
+      {
+        "id": "round-white",
+        "name": "Round White",
+        "hex": "#ffffff",
+        "shape": "round"
+      },
+      {
+        "id": "lab-white",
+        "name": "Lab White",
+        "hex": "#ffffff"
+      },
+      {
+        "id": "colorful-round",
+        "name": "Colorful Round",
+        "hex": "#e9f7ff",
+        "shape": "round",
+        "finish": "assorted"
+      }
+    ],
+    "printTextColorsSupported": [
+      {
+        "id": "black",
+        "name": "Black",
+        "hex": "#07101f"
+      },
+      {
+        "id": "red",
+        "name": "Red",
+        "hex": "#c72f2f"
+      },
+      {
+        "id": "black-red",
+        "name": "Black + Red",
+        "hex": "#07101f",
+        "secondaryHex": "#c72f2f"
+      },
+      {
+        "id": "white",
+        "name": "White",
+        "hex": "#ffffff"
+      },
+      {
+        "id": "gold",
+        "name": "Gold",
+        "hex": "#c9952e"
+      },
+      {
+        "id": "green",
+        "name": "Green",
+        "hex": "#21885a"
+      },
+      {
+        "id": "blue",
+        "name": "Blue",
+        "hex": "#2168c9"
+      }
+    ],
+    "labelMediaSupported": [
+      {
+        "id": "40x20",
+        "name": "40 x 20 mm",
+        "widthMm": 40,
+        "heightMm": 20,
+        "shape": "rectangle",
+        "colorIds": [
+          "hologram",
+          "matte-silver",
+          "matte-black",
+          "white",
+          "gold",
+          "brushed-silver",
+          "clear"
+        ]
+      },
+      {
+        "id": "50x30",
+        "name": "50 x 30 mm",
+        "widthMm": 50,
+        "heightMm": 30,
+        "shape": "rectangle",
+        "colorIds": [
+          "white",
+          "hologram",
+          "silver"
+        ]
+      },
+      {
+        "id": "50x80",
+        "name": "50 x 80 mm",
+        "widthMm": 50,
+        "heightMm": 80,
+        "shape": "rectangle",
+        "colorIds": [
+          "clear"
+        ]
+      },
+      {
+        "id": "40x40",
+        "name": "40 x 40 mm",
+        "widthMm": 40,
+        "heightMm": 40,
+        "shape": "rectangle",
+        "colorIds": [
+          "matte-black"
+        ]
+      },
+      {
+        "id": "50x50-round",
+        "name": "50 x 50 mm Round",
+        "widthMm": 50,
+        "heightMm": 50,
+        "shape": "round",
+        "colorIds": [
+          "round-black",
+          "round-white"
+        ]
+      },
+      {
+        "id": "31x31-round",
+        "name": "31 x 31 mm Colorful Round",
+        "widthMm": 31,
+        "heightMm": 31,
+        "shape": "round",
+        "colorIds": [
+          "colorful-round"
+        ]
+      },
+      {
+        "id": "30x20-lab",
+        "name": "30 x 20 mm Lab",
+        "widthMm": 30,
+        "heightMm": 20,
+        "shape": "rectangle",
+        "colorIds": [
+          "lab-white"
+        ]
+      },
+      {
+        "id": "25x78-cable",
+        "name": "25 x 78 mm Cable",
+        "widthMm": 25,
+        "heightMm": 78,
+        "shape": "rectangle",
+        "colorIds": [
+          "white"
+        ]
+      }
+    ],
+    "notes": [
+      "NIIMBOT lists the M2 as a thermal-transfer label printer with 300dpi output and 0.8-2 inch label width support.",
+      "Starter data is based on publicly listed NIIMBOT M2 ribbon and label bundle options; verify exact roll availability before production use."
+    ],
+    "sources": [
+      "https://niimbots.com/no/products/m2-2-inch-thermal-transfer-label-maker",
+      "https://niimbots.com/products/niimbot-compatible-m2-labeling-ribbon-replacement-refill-tapes",
+      "https://niimbots.com/collections/frontpage/products/niimbot-m2-medical-label-printer",
+      "https://niimbot.eu/en/product/niimbot-labels-stickers-for-m2-printer-colorful-round-31x31mm-220x/"
+    ]
+  }
+]

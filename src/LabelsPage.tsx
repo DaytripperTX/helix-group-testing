@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from 'react';
+import printerCatalogData from './Assets/Printers.json';
 import PageHero from './Helpers/PageHero';
 
 type LabelFormData = {
@@ -30,6 +31,50 @@ type UploadedLabelForm = {
   author: string;
   peptideType: string;
   generic: boolean;
+};
+
+type PrinterColor = {
+  id: string;
+  name: string;
+  hex: string;
+  secondaryHex?: string;
+  transparent?: boolean;
+  finish?: string;
+  shape?: string;
+};
+
+type LabelMedia = {
+  id: string;
+  name: string;
+  widthMm: number;
+  heightMm: number;
+  shape: string;
+  colorIds: string[];
+};
+
+type PrinterConfig = {
+  id: string;
+  printer: {
+    name: string;
+    model: string;
+  };
+  brand: string;
+  technology: string;
+  resolutionDpi: number;
+  supportedLabelSizeMm: {
+    min: {
+      width: number;
+      height: number;
+    };
+    max: {
+      width: number;
+      height: number;
+    };
+    officialWidthRangeInches?: string;
+  };
+  labelColorsSupported: PrinterColor[];
+  printTextColorsSupported: PrinterColor[];
+  labelMediaSupported: LabelMedia[];
 };
 
 const labelPeptideTypes = [
@@ -105,12 +150,28 @@ const labelTemplates: LabelTemplate[] = [
   },
 ];
 
+const printerCatalog = printerCatalogData as PrinterConfig[];
+
 function LabelsPage() {
+  const defaultPrinter = printerCatalog[0];
   const [selectedTemplateId, setSelectedTemplateId] = useState(labelTemplates[0].id);
   const [selectedPeptideType, setSelectedPeptideType] = useState<'all' | string>('all');
   const [labelFormData, setLabelFormData] = useState<LabelFormData>(labelFormDefaults);
   const [uploadedTemplates, setUploadedTemplates] = useState<LabelTemplate[]>([]);
   const [localVotes, setLocalVotes] = useState<Record<string, boolean>>({});
+  const [selectedPrinterId, setSelectedPrinterId] = useState(defaultPrinter.id);
+  const [availablePrintColorIds, setAvailablePrintColorIds] = useState<string[]>(
+    defaultPrinter.printTextColorsSupported.map((color) => color.id),
+  );
+  const [selectedPrintColorId, setSelectedPrintColorId] = useState(
+    defaultPrinter.printTextColorsSupported[0].id,
+  );
+  const [selectedLabelMediaId, setSelectedLabelMediaId] = useState(
+    defaultPrinter.labelMediaSupported[0].id,
+  );
+  const [selectedLabelColorId, setSelectedLabelColorId] = useState(
+    defaultPrinter.labelMediaSupported[0].colorIds[0],
+  );
   const [uploadForm, setUploadForm] = useState<UploadedLabelForm>({
     name: '',
     author: '',
@@ -118,6 +179,27 @@ function LabelsPage() {
     generic: true,
   });
 
+  const selectedPrinter =
+    printerCatalog.find((printer) => printer.id === selectedPrinterId) ?? defaultPrinter;
+  const selectedLabelMedia =
+    selectedPrinter.labelMediaSupported.find((media) => media.id === selectedLabelMediaId) ??
+    selectedPrinter.labelMediaSupported[0];
+  const supportedLabelColors = selectedPrinter.labelColorsSupported.filter((color) =>
+    selectedLabelMedia.colorIds.includes(color.id),
+  );
+  const selectedLabelColor =
+    selectedPrinter.labelColorsSupported.find(
+      (color) => color.id === selectedLabelColorId && selectedLabelMedia.colorIds.includes(color.id),
+    ) ??
+    supportedLabelColors[0] ??
+    selectedPrinter.labelColorsSupported[0];
+  const availablePrintColors = selectedPrinter.printTextColorsSupported.filter((color) =>
+    availablePrintColorIds.includes(color.id),
+  );
+  const selectedPrintColor =
+    availablePrintColors.find((color) => color.id === selectedPrintColorId) ??
+    availablePrintColors[0] ??
+    selectedPrinter.printTextColorsSupported[0];
   const allTemplates = [...labelTemplates, ...uploadedTemplates];
   const selectedTemplate =
     allTemplates.find((template) => template.id === selectedTemplateId) ?? allTemplates[0];
@@ -143,6 +225,48 @@ function LabelsPage() {
       ...currentData,
       [field]: value,
     }));
+  };
+
+  const updateSelectedPrinter = (printerId: string) => {
+    const nextPrinter = printerCatalog.find((printer) => printer.id === printerId) ?? defaultPrinter;
+
+    setSelectedPrinterId(nextPrinter.id);
+    setSelectedLabelMediaId(nextPrinter.labelMediaSupported[0].id);
+    setSelectedLabelColorId(nextPrinter.labelMediaSupported[0].colorIds[0]);
+    setAvailablePrintColorIds(nextPrinter.printTextColorsSupported.map((color) => color.id));
+    setSelectedPrintColorId(nextPrinter.printTextColorsSupported[0].id);
+  };
+
+  const updateSelectedLabelMedia = (mediaId: string) => {
+    const nextMedia =
+      selectedPrinter.labelMediaSupported.find((media) => media.id === mediaId) ??
+      selectedPrinter.labelMediaSupported[0];
+
+    setSelectedLabelMediaId(nextMedia.id);
+
+    if (!nextMedia.colorIds.includes(selectedLabelColorId)) {
+      setSelectedLabelColorId(nextMedia.colorIds[0]);
+    }
+  };
+
+  const toggleAvailablePrintColor = (colorId: string) => {
+    setAvailablePrintColorIds((currentColorIds) => {
+      if (currentColorIds.includes(colorId)) {
+        const nextColorIds = currentColorIds.filter((currentColorId) => currentColorId !== colorId);
+
+        if (nextColorIds.length === 0) {
+          return currentColorIds;
+        }
+
+        if (selectedPrintColorId === colorId) {
+          setSelectedPrintColorId(nextColorIds[0]);
+        }
+
+        return nextColorIds;
+      }
+
+      return [...currentColorIds, colorId];
+    });
   };
 
   const uploadTemplate = (event: FormEvent<HTMLFormElement>) => {
@@ -285,6 +409,118 @@ function LabelsPage() {
                 ))}
               </div>
             </div>
+
+            <section className="printer-settings" aria-labelledby="printer-settings-title">
+              <div className="printer-settings__header">
+                <div>
+                  <p className="eyebrow">Printer</p>
+                  <h3 id="printer-settings-title">Printer setup</h3>
+                </div>
+                <span>
+                  {selectedPrinter.supportedLabelSizeMm.min.width}-
+                  {selectedPrinter.supportedLabelSizeMm.max.width} mm width
+                </span>
+              </div>
+
+              <div className="printer-settings__grid">
+                <label className="label-field">
+                  <span>Printer model</span>
+                  <select
+                    value={selectedPrinterId}
+                    onChange={(event) => updateSelectedPrinter(event.target.value)}
+                  >
+                    {printerCatalog.map((printer) => (
+                      <option value={printer.id} key={printer.id}>
+                        {printer.brand} {printer.printer.model}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="label-field">
+                  <span>Label size</span>
+                  <select
+                    value={selectedLabelMedia.id}
+                    onChange={(event) => updateSelectedLabelMedia(event.target.value)}
+                  >
+                    {selectedPrinter.labelMediaSupported.map((media) => (
+                      <option value={media.id} key={media.id}>
+                        {media.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="label-field">
+                  <span>Label color</span>
+                  <select
+                    value={selectedLabelColor.id}
+                    onChange={(event) => setSelectedLabelColorId(event.target.value)}
+                  >
+                    {supportedLabelColors.map((color) => (
+                      <option value={color.id} key={color.id}>
+                        {color.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="label-field">
+                  <span>Active print color</span>
+                  <select
+                    value={selectedPrintColor.id}
+                    onChange={(event) => setSelectedPrintColorId(event.target.value)}
+                  >
+                    {availablePrintColors.map((color) => (
+                      <option value={color.id} key={color.id}>
+                        {color.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="printer-summary" aria-label="Selected label media summary">
+                  <span
+                    className="printer-summary__swatch"
+                    style={{ background: selectedLabelColor.hex }}
+                    aria-hidden="true"
+                  />
+                  <div>
+                    <strong>
+                      {selectedLabelMedia.widthMm} x {selectedLabelMedia.heightMm} mm
+                    </strong>
+                    <span>
+                      {selectedLabelColor.name} {selectedLabelMedia.shape}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <fieldset className="printer-color-picker">
+                <legend>Available print colors</legend>
+                <div>
+                  {selectedPrinter.printTextColorsSupported.map((color) => (
+                    <label className="printer-color-option" key={color.id}>
+                      <input
+                        type="checkbox"
+                        checked={availablePrintColorIds.includes(color.id)}
+                        onChange={() => toggleAvailablePrintColor(color.id)}
+                      />
+                      <span
+                        className="printer-color-option__swatch"
+                        style={{
+                          background: color.secondaryHex
+                            ? `linear-gradient(135deg, ${color.hex} 0 50%, ${color.secondaryHex} 50% 100%)`
+                            : color.hex,
+                        }}
+                        aria-hidden="true"
+                      />
+                      <span>{color.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            </section>
           </section>
 
           <aside className="label-panel label-controls" aria-label="Label generator fields">
