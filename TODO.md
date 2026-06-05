@@ -23,6 +23,14 @@
   - Show testing statistics for current and past rounds.
   - Include a COA subpage with filtering by compound, round, and batch.
   - Add a vial label generator that includes QR codes linking to the COAs
+- Label library / generator:
+  - Add a community vial label template library with filtering by peptide type and support for generic multi-peptide labels.
+  - Allow community members to upload SVG label templates and vote on labels to feature.
+  - Start with a few built-in editable SVG templates that users can fill out and download.
+  - Support common editable fields: peptide name, mass (mg), batch #, vendor, purity, vial size, expiration date, and optional COA link.
+  - Remove blank fields from the generated label output.
+  - Add COA QR codes when a COA link is provided, with the QR code no smaller than 10mm x 10mm.
+  - Add printer model selection so the generator can determine and limit the available color palette and label media options. For example, Niimbot M2 supports a small palette of several print colors, plus several different colored label stocks.
 - FAQs:
   - Add common questions and answers about participation, vendor-direct payment, delivery, testing coordination, disclaimers, and site workflow.
 
