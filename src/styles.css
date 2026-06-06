@@ -1538,8 +1538,7 @@ h2 {
   display: block;
   width: 100%;
   height: auto;
-  border-radius: 8px;
-  box-shadow: 0 26px 70px rgba(5, 8, 22, 0.18);
+  filter: drop-shadow(0 26px 44px rgba(5, 8, 22, 0.18));
 }
 
 .featured-labels {

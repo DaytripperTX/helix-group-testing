@@ -54,6 +54,7 @@ type LabelMedia = {
   widthMm: number;
   heightMm: number;
   shape: string;
+  cornerRadiusMm: number;
   common?: boolean;
   colorIds: string[];
 };
@@ -790,57 +791,74 @@ function renderLabelSvg(template: LabelTemplate, data: LabelFormData) {
   const peptideName = data.peptideName.trim();
   const mass = data.massMg.trim();
   const coaLink = data.coaLink.trim();
+  const labelWidth = 40;
+  const labelHeight = 20;
+  const cornerRadius = 2;
+  const labelClipId = `label-clip-${template.id}`;
+  const labelClipPath = `<defs><clipPath id="${labelClipId}"><rect width="${labelWidth}" height="${labelHeight}" rx="${cornerRadius}" ry="${cornerRadius}" /></clipPath></defs>`;
+  const qrSize = 7;
+  const qrX = 31.1;
+  const qrY = 11.2;
   const qrImage = coaLink
     ? `<image href="${escapeSvgAttribute(
         `https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=1&data=${encodeURIComponent(
           coaLink,
         )}`,
-      )}" x="57" y="18" width="10" height="10" preserveAspectRatio="none" /><rect x="57" y="18" width="10" height="10" fill="none" stroke="#07101f" stroke-width=".25" /><text x="62" y="30.5" text-anchor="middle" font-size="1.55" font-family="Inter, Arial, sans-serif" font-weight="800" fill="#344154">COA</text>`
+      )}" x="${qrX}" y="${qrY}" width="${qrSize}" height="${qrSize}" preserveAspectRatio="none" /><rect x="${qrX}" y="${qrY}" width="${qrSize}" height="${qrSize}" fill="none" stroke="#07101f" stroke-width=".18" /><text x="${qrX + qrSize / 2}" y="${labelHeight - 1}" text-anchor="middle" font-size=".9" font-family="Inter, Arial, sans-serif" font-weight="800" fill="#344154">COA</text>`
     : '';
-  const rowLimit = coaLink ? 42 : 55;
+  const rowLimit = coaLink ? 25 : 42;
   const rowsSvg = labelRows
     .map(
       (row, index) =>
-        `<text x="5" y="${14 + index * 2.8}" font-size="1.95" font-family="Inter, Arial, sans-serif" fill="#344154"><tspan font-weight="800">${escapeSvgText(
+        `<text x="3" y="${8.7 + index * 1.75}" font-size="1.25" font-family="Inter, Arial, sans-serif" fill="#344154"><tspan font-weight="800">${escapeSvgText(
           row.label,
-        )}</tspan><tspan dx="1.1" fill="#07101f">${escapeSvgText(
+        )}</tspan><tspan dx=".75" fill="#07101f">${escapeSvgText(
           truncateLabelText(row.value, rowLimit),
         )}</tspan></text>`,
     )
     .join('');
 
   if (template.style === 'dark') {
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="70mm" height="32mm" viewBox="0 0 70 32" role="img" aria-label="Generated vial label">
-  <rect width="70" height="32" rx="2" fill="#f7fafc" />
-  <rect width="70" height="10.8" rx="2" fill="#07101f" />
-  <rect y="9" width="70" height="1.8" fill="#13f4ff" />
-  ${peptideName ? `<text x="5" y="6.8" font-size="4.6" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#ffffff">${escapeSvgText(truncateLabelText(peptideName, 22))}</text>` : ''}
-  ${mass ? `<text x="64" y="6.6" text-anchor="end" font-size="3.2" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#13f4ff">${escapeSvgText(truncateLabelText(`${mass} mg`, 10))}</text>` : ''}
-  ${rowsSvg}
-  ${qrImage}
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${labelWidth}mm" height="${labelHeight}mm" viewBox="0 0 ${labelWidth} ${labelHeight}" role="img" aria-label="Generated vial label">
+  ${labelClipPath}
+  <rect width="${labelWidth}" height="${labelHeight}" rx="${cornerRadius}" ry="${cornerRadius}" fill="#f7fafc" />
+  <g clip-path="url(#${labelClipId})">
+    <rect width="${labelWidth}" height="6.5" fill="#07101f" />
+    <rect y="5.6" width="${labelWidth}" height="1" fill="#13f4ff" />
+    ${peptideName ? `<text x="3" y="4.6" font-size="3.2" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#ffffff">${escapeSvgText(truncateLabelText(peptideName, 13))}</text>` : ''}
+    ${mass ? `<text x="36.5" y="4.5" text-anchor="end" font-size="2.25" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#13f4ff">${escapeSvgText(truncateLabelText(`${mass} mg`, 8))}</text>` : ''}
+    ${rowsSvg}
+    ${qrImage}
+  </g>
 </svg>`;
   }
 
   if (template.style === 'safety') {
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="70mm" height="32mm" viewBox="0 0 70 32" role="img" aria-label="Generated vial label">
-  <rect width="70" height="32" rx="2" fill="#fffefd" />
-  <rect width="7.4" height="32" fill="#e8b943" />
-  <rect x="9.8" y="3.4" width="36" height="5.8" rx="1.2" fill="#07101f" />
-  ${peptideName ? `<text x="12" y="7.6" font-size="3.3" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#ffffff">${escapeSvgText(truncateLabelText(peptideName, 20))}</text>` : ''}
-  ${mass ? `<text x="50" y="7.6" font-size="3.1" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#9b5526">${escapeSvgText(truncateLabelText(`${mass} mg`, 11))}</text>` : ''}
-  ${rowsSvg}
-  ${qrImage}
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${labelWidth}mm" height="${labelHeight}mm" viewBox="0 0 ${labelWidth} ${labelHeight}" role="img" aria-label="Generated vial label">
+  ${labelClipPath}
+  <rect width="${labelWidth}" height="${labelHeight}" rx="${cornerRadius}" ry="${cornerRadius}" fill="#fffefd" />
+  <g clip-path="url(#${labelClipId})">
+    <rect width="4.3" height="${labelHeight}" fill="#e8b943" />
+    <rect x="6" y="2.1" width="20.5" height="3.9" rx=".75" ry=".75" fill="#07101f" />
+    ${peptideName ? `<text x="7.2" y="4.8" font-size="2.25" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#ffffff">${escapeSvgText(truncateLabelText(peptideName, 12))}</text>` : ''}
+    ${mass ? `<text x="35.6" y="4.9" text-anchor="middle" font-size="2.1" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#9b5526">${escapeSvgText(truncateLabelText(`${mass} mg`, 8))}</text>` : ''}
+    ${rowsSvg}
+    ${qrImage}
+  </g>
 </svg>`;
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="70mm" height="32mm" viewBox="0 0 70 32" role="img" aria-label="Generated vial label">
-  <rect width="70" height="32" rx="2" fill="#ffffff" />
-  <rect x="0" y="0" width="70" height="5.6" fill="#13f4ff" />
-  <rect x="0" y="5.6" width="70" height=".8" fill="#07101f" />
-  ${peptideName ? `<text x="5" y="10.5" font-size="4" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#07101f">${escapeSvgText(truncateLabelText(peptideName, 24))}</text>` : ''}
-  ${mass ? `<rect x="49" y="7.4" width="17" height="5" rx="1.4" fill="#eafbff" stroke="#00aeb8" stroke-width=".35" /><text x="57.5" y="10.9" text-anchor="middle" font-size="2.7" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#006f78">${escapeSvgText(truncateLabelText(`${mass} mg`, 9))}</text>` : ''}
-  ${rowsSvg}
-  ${qrImage}
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${labelWidth}mm" height="${labelHeight}mm" viewBox="0 0 ${labelWidth} ${labelHeight}" role="img" aria-label="Generated vial label">
+  ${labelClipPath}
+  <rect width="${labelWidth}" height="${labelHeight}" rx="${cornerRadius}" ry="${cornerRadius}" fill="#ffffff" />
+  <g clip-path="url(#${labelClipId})">
+    <rect x="0" y="0" width="${labelWidth}" height="3.8" fill="#13f4ff" />
+    <rect x="0" y="3.7" width="${labelWidth}" height=".55" fill="#07101f" />
+    ${peptideName ? `<text x="3" y="6.9" font-size="2.65" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#07101f">${escapeSvgText(truncateLabelText(peptideName, 14))}</text>` : ''}
+    ${mass ? `<rect x="29.4" y="5" width="8.8" height="3.1" rx=".85" ry=".85" fill="#eafbff" stroke="#00aeb8" stroke-width=".25" /><text x="33.8" y="7.15" text-anchor="middle" font-size="1.55" font-family="Inter, Arial, sans-serif" font-weight="900" fill="#006f78">${escapeSvgText(truncateLabelText(`${mass} mg`, 7))}</text>` : ''}
+    ${rowsSvg}
+    ${qrImage}
+  </g>
 </svg>`;
 }
 

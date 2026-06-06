@@ -138,6 +138,7 @@
         "widthMm": 40,
         "heightMm": 20,
         "shape": "rectangle",
+        "cornerRadiusMm": 2,
         "common": true,
         "colorIds": [
           "hologram",
@@ -155,6 +156,7 @@
         "widthMm": 50,
         "heightMm": 30,
         "shape": "rectangle",
+        "cornerRadiusMm": 2,
         "common": true,
         "colorIds": [
           "white",
@@ -172,6 +174,7 @@
         "widthMm": 28,
         "heightMm": 14,
         "shape": "round",
+        "cornerRadiusMm": 7,
         "common": true,
         "colorIds": [
           "clear"
@@ -183,6 +186,7 @@
         "widthMm": 40,
         "heightMm": 30,
         "shape": "rectangle",
+        "cornerRadiusMm": 2,
         "colorIds": [
           "clear",
           "white"
@@ -194,6 +198,7 @@
         "widthMm": 40,
         "heightMm": 60,
         "shape": "rectangle",
+        "cornerRadiusMm": 2,
         "colorIds": [
           "clear",
           "white",
@@ -206,6 +211,7 @@
         "widthMm": 50,
         "heightMm": 70,
         "shape": "rectangle",
+        "cornerRadiusMm": 2,
         "colorIds": [
           "brushed-silver",
           "white",
@@ -221,6 +227,7 @@
         "widthMm": 50,
         "heightMm": 80,
         "shape": "rectangle",
+        "cornerRadiusMm": 2,
         "colorIds": [
           "hologram",
           "clear"
@@ -232,6 +239,7 @@
         "widthMm": 40,
         "heightMm": 40,
         "shape": "rectangle",
+        "cornerRadiusMm": 2,
         "colorIds": [
           "matte-black"
         ]
@@ -242,6 +250,7 @@
         "widthMm": 50,
         "heightMm": 50,
         "shape": "round",
+        "cornerRadiusMm": 25,
         "colorIds": [
           "round-black",
           "round-white"
@@ -253,6 +262,7 @@
         "widthMm": 31,
         "heightMm": 31,
         "shape": "round",
+        "cornerRadiusMm": 15.5,
         "colorIds": [
           "colorful-round"
         ]
@@ -263,6 +273,7 @@
         "widthMm": 25,
         "heightMm": 78,
         "shape": "rectangle",
+        "cornerRadiusMm": 2,
         "colorIds": [
           "white"
         ]
