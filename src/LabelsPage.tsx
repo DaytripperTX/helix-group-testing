@@ -158,6 +158,7 @@ const labelTemplates: LabelTemplate[] = [
 ];
 
 const printerCatalog = printerCatalogData as PrinterConfig[];
+const supportedLabelMediaIds = ['40x20', '50x30', '28x14-round'] as const;
 
 function LabelsPage() {
   const defaultPrinter = printerCatalog[0];
@@ -179,7 +180,6 @@ function LabelsPage() {
   const [selectedLabelColorId, setSelectedLabelColorId] = useState(
     defaultPrinter.labelMediaSupported[0].colorIds[0],
   );
-  const [isLabelMediaExpanded, setIsLabelMediaExpanded] = useState(false);
   const [uploadForm, setUploadForm] = useState<UploadedLabelForm>({
     name: '',
     author: '',
@@ -189,8 +189,12 @@ function LabelsPage() {
 
   const selectedPrinter =
     printerCatalog.find((printer) => printer.id === selectedPrinterId) ?? defaultPrinter;
+  const supportedLabelMediaOptions = selectedPrinter.labelMediaSupported.filter((media) =>
+    supportedLabelMediaIds.includes(media.id as (typeof supportedLabelMediaIds)[number]),
+  );
   const selectedLabelMedia =
-    selectedPrinter.labelMediaSupported.find((media) => media.id === selectedLabelMediaId) ??
+    supportedLabelMediaOptions.find((media) => media.id === selectedLabelMediaId) ??
+    supportedLabelMediaOptions[0] ??
     selectedPrinter.labelMediaSupported[0];
   const supportedLabelColors = selectedPrinter.labelColorsSupported.filter((color) =>
     selectedLabelMedia.colorIds.includes(color.id),
@@ -201,11 +205,6 @@ function LabelsPage() {
     ) ??
     supportedLabelColors[0] ??
     selectedPrinter.labelColorsSupported[0];
-  const commonLabelMedia = selectedPrinter.labelMediaSupported.filter((media) => media.common);
-  const visibleLabelMedia =
-    isLabelMediaExpanded || commonLabelMedia.length === 0
-      ? selectedPrinter.labelMediaSupported
-      : commonLabelMedia;
   const availablePrintColors = selectedPrinter.printTextColorsSupported.filter((color) =>
     availablePrintColorIds.includes(color.id),
   );
@@ -244,16 +243,21 @@ function LabelsPage() {
     const nextPrinter = printerCatalog.find((printer) => printer.id === printerId) ?? defaultPrinter;
 
     setSelectedPrinterId(nextPrinter.id);
-    setSelectedLabelMediaId(nextPrinter.labelMediaSupported[0].id);
-    setSelectedLabelColorId(nextPrinter.labelMediaSupported[0].colorIds[0]);
-    setIsLabelMediaExpanded(false);
+    const nextSupportedMedia =
+      nextPrinter.labelMediaSupported.find((media) =>
+        supportedLabelMediaIds.includes(media.id as (typeof supportedLabelMediaIds)[number]),
+      ) ?? nextPrinter.labelMediaSupported[0];
+
+    setSelectedLabelMediaId(nextSupportedMedia.id);
+    setSelectedLabelColorId(nextSupportedMedia.colorIds[0]);
     setAvailablePrintColorIds(nextPrinter.printTextColorsSupported.map((color) => color.id));
     setSelectedPrintColorId(nextPrinter.printTextColorsSupported[0].id);
   };
 
   const updateSelectedLabelMedia = (mediaId: string) => {
     const nextMedia =
-      selectedPrinter.labelMediaSupported.find((media) => media.id === mediaId) ??
+      supportedLabelMediaOptions.find((media) => media.id === mediaId) ??
+      supportedLabelMediaOptions[0] ??
       selectedPrinter.labelMediaSupported[0];
 
     setSelectedLabelMediaId(nextMedia.id);
@@ -453,20 +457,10 @@ function LabelsPage() {
                   <span>Label size</span>
                   <DropdownSelect
                     value={selectedLabelMedia.id}
-                    options={visibleLabelMedia.map((media) => ({
+                    options={supportedLabelMediaOptions.map((media) => ({
                       value: media.id,
                       label: media.name,
                     }))}
-                    extraAction={
-                      !isLabelMediaExpanded &&
-                      commonLabelMedia.length > 0 &&
-                      commonLabelMedia.length < selectedPrinter.labelMediaSupported.length
-                        ? {
-                            label: 'Show more...',
-                            onClick: () => setIsLabelMediaExpanded(true),
-                          }
-                        : undefined
-                    }
                     onChange={updateSelectedLabelMedia}
                   />
                 </div>

@@ -31,6 +31,7 @@
   - Remove blank fields from the generated label output.
   - Add COA QR codes when a COA link is provided, with the QR code no smaller than 10mm x 10mm.
   - Add printer model selection so the generator can determine and limit the available color palette and label media options. For example, Niimbot M2 supports a small palette of several print colors, plus several different colored label stocks.
+  - Add support for exporting labels as PNG and PDF, multipage PDF for multi-color prints (M2)
 - FAQs:
   - Add common questions and answers about participation, vendor-direct payment, delivery, testing coordination, disclaimers, and site workflow.
 

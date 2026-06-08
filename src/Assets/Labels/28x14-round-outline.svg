@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="28mm" height="14mm" viewBox="0 0 28 14" role="img" aria-label="Two 14 mm round label outlines">
+  <circle cx="7" cy="7" r="7" fill="#ffffff" />
+  <circle cx="21" cy="7" r="7" fill="#ffffff" />
+  <circle cx="7" cy="7" r="6.825" fill="none" stroke="#07101f" stroke-width="0.35" />
+  <circle cx="21" cy="7" r="6.825" fill="none" stroke="#07101f" stroke-width="0.35" />
+</svg>

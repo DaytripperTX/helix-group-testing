@@ -170,10 +170,10 @@
       },
       {
         "id": "28x14-round",
-        "name": "28 x 14 mm Round",
+        "name": "28 x 14 mm Twin Round",
         "widthMm": 28,
         "heightMm": 14,
-        "shape": "round",
+        "shape": "twin round",
         "cornerRadiusMm": 7,
         "common": true,
         "colorIds": [
