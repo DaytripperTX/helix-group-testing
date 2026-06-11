@@ -3,6 +3,21 @@
   publish = "dist"
 
 [[redirects]]
+  from = "/api/data/*"
+  to = "/.netlify/functions/data/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/api/admin/*"
+  to = "/.netlify/functions/admin/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/api/labels"
+  to = "/.netlify/functions/data/labels"
+  status = 200
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200

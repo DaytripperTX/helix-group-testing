@@ -169,6 +169,16 @@ const peptideCategoryOptions = [
 ] as const;
 
 const commonLabelSizes = ['40x20 mm', '50x30 mm', '28x14 mm', '31x31 mm', '50x50 mm'] as const;
+const emptyNativeLabelForm: NativeLabelUploadForm = {
+  previewDataUrl: '',
+  previewFileName: '',
+  niimbotCode: '',
+  templateName: '',
+  peptideName: '',
+  massMg: '',
+  labelSize: '',
+  tags: '',
+};
 
 const peptideDefinitions: Record<string, { categories: string[] }> = {
   'AOD-9604': { categories: ['Metabolic'] },
@@ -278,7 +288,7 @@ const minExportDpi = 300;
 const maxExportDpi = 2400;
 const binaryWhiteThreshold = 235;
 
-function LabelsPage() {
+function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const defaultPrinter = printerCatalog[0];
   const [selectedTemplateId, setSelectedTemplateId] = useState(labelTemplates[0].id);
   const [selectedPeptideType, setSelectedPeptideType] = useState<'all' | string>('all');
@@ -296,16 +306,10 @@ function LabelsPage() {
   const [nativeSortKey, setNativeSortKey] = useState<NativeSortKey>('featured');
   const [isNativeSortReversed, setIsNativeSortReversed] = useState(false);
   const [expandedNativeLabelId, setExpandedNativeLabelId] = useState<string | null>(null);
-  const [nativeUploadForm, setNativeUploadForm] = useState<NativeLabelUploadForm>({
-    previewDataUrl: '',
-    previewFileName: '',
-    niimbotCode: '',
-    templateName: '',
-    peptideName: '',
-    massMg: '',
-    labelSize: '',
-    tags: '',
-  });
+  const [nativeUploadForm, setNativeUploadForm] = useState<NativeLabelUploadForm>(emptyNativeLabelForm);
+  const [editingNativeLabel, setEditingNativeLabel] = useState<NativeLabelTemplate | null>(null);
+  const [nativeEditForm, setNativeEditForm] = useState<NativeLabelUploadForm>(emptyNativeLabelForm);
+  const [nativeEditStatus, setNativeEditStatus] = useState('');
   const [localVotes, setLocalVotes] = useState<Record<string, boolean>>({});
   const [selectedPrinterId, setSelectedPrinterId] = useState(defaultPrinter.id);
   const [availablePrintColorIds, setAvailablePrintColorIds] = useState<string[]>(
@@ -614,16 +618,7 @@ function LabelsPage() {
 
       setNativeLabelTemplates(templates);
       setNativeTemplateStatus('');
-      setNativeUploadForm({
-        previewDataUrl: '',
-        previewFileName: '',
-        niimbotCode: '',
-        templateName: '',
-        peptideName: '',
-        massMg: '',
-        labelSize: '',
-        tags: '',
-      });
+      setNativeUploadForm(emptyNativeLabelForm);
       event.currentTarget.reset();
     } catch (error) {
       console.error(error);
@@ -636,6 +631,130 @@ function LabelsPage() {
       ...currentVotes,
       [templateId]: !currentVotes[templateId],
     }));
+  };
+
+  const openNativeLabelEditor = (template: NativeLabelTemplate) => {
+    setEditingNativeLabel(template);
+    setNativeEditForm({
+      previewDataUrl: template.previewDataUrl,
+      previewFileName: template.previewFileName,
+      niimbotCode: template.niimbotCode,
+      templateName: template.templateName ?? '',
+      peptideName: template.peptideName ?? '',
+      massMg: template.massMg ?? '',
+      labelSize: template.labelSize ?? '',
+      tags: (template.tags ?? []).join(', '),
+    });
+    setNativeEditStatus('');
+  };
+
+  const closeNativeLabelEditor = () => {
+    setEditingNativeLabel(null);
+    setNativeEditForm(emptyNativeLabelForm);
+    setNativeEditStatus('');
+  };
+
+  const updateNativeEditField = (field: keyof NativeLabelUploadForm, value: string) => {
+    setNativeEditForm((currentForm) => ({
+      ...currentForm,
+      [field]: value,
+    }));
+  };
+
+  const updateNativeEditCode = (value: string) => {
+    const parsedShare = parseNiimbotShareText(value);
+
+    setNativeEditForm((currentForm) => ({
+      ...currentForm,
+      niimbotCode: parsedShare.codeWithDelimiters ?? value,
+      templateName:
+        currentForm.templateName.trim() || !parsedShare.templateName
+          ? currentForm.templateName
+          : parsedShare.templateName,
+    }));
+  };
+
+  const updateNativeEditPreview = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      setNativeEditForm((currentForm) => ({
+        ...currentForm,
+        previewDataUrl: String(reader.result ?? ''),
+        previewFileName: file.name || `edited-preview-${Date.now()}.png`,
+      }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const saveNativeLabelEdit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!editingNativeLabel) {
+      return;
+    }
+
+    const labelSize = normalizeLabelSize(nativeEditForm.labelSize);
+    const peptideName = nativeEditForm.peptideName.trim();
+    const massMg = nativeEditForm.massMg.trim();
+    const niimbotCode = nativeEditForm.niimbotCode.trim();
+
+    if (!nativeEditForm.previewDataUrl || !niimbotCode || !peptideName || !massMg || !labelSize) {
+      setNativeEditStatus('Complete the required fields before saving.');
+      return;
+    }
+
+    const nextTemplate: NativeLabelTemplate = {
+      ...editingNativeLabel,
+      previewDataUrl: nativeEditForm.previewDataUrl,
+      previewFileName: nativeEditForm.previewFileName,
+      niimbotCode,
+      templateName: nativeEditForm.templateName.trim() || undefined,
+      peptideName,
+      massMg,
+      labelSize,
+      peptideCategories: getPeptideCategories(peptideName).slice(0, 3),
+      tags: parseNativeTags(nativeEditForm.tags),
+    };
+
+    try {
+      const templates = await updateNativeLabelTemplate(nextTemplate);
+
+      setNativeLabelTemplates(templates);
+      closeNativeLabelEditor();
+    } catch (error) {
+      console.error(error);
+      setNativeEditStatus('Could not save changes. Check your admin session and try again.');
+    }
+  };
+
+  const deleteNativeLabel = async () => {
+    if (!editingNativeLabel) {
+      return;
+    }
+
+    const title = getNativeLabelTitle(editingNativeLabel);
+    const confirmed = window.confirm(`Delete "${title}" from the label library? This cannot be undone.`);
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const templates = await deleteNativeLabelTemplate(editingNativeLabel.id);
+
+      setNativeLabelTemplates(templates);
+      closeNativeLabelEditor();
+    } catch (error) {
+      console.error(error);
+      setNativeEditStatus('Could not delete this template. Check your admin session and try again.');
+    }
   };
 
   const toggleNativeLabelVote = async (template: NativeLabelTemplate) => {
@@ -855,6 +974,7 @@ function LabelsPage() {
                   {filteredNativeLabelTemplates.map((template) => (
                     <NativeLabelTemplateCard
                       template={template}
+                      isAdmin={isAdmin}
                       isTagListExpanded={expandedNativeLabelId === template.id}
                       isVoted={localVotes[template.id] ?? false}
                       isCommunityFavorite={nativeFavoriteIds.has(template.id)}
@@ -873,6 +993,7 @@ function LabelsPage() {
                       onVote={() => {
                         void toggleNativeLabelVote(template);
                       }}
+                      onEdit={() => openNativeLabelEditor(template)}
                     />
                   ))}
                 </div>
@@ -986,6 +1107,117 @@ function LabelsPage() {
             </aside>
           </div>
         </section>
+
+        {isAdmin && editingNativeLabel && (
+          <div className="admin-modal-backdrop" role="presentation">
+            <section
+              className="admin-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="native-label-edit-title"
+            >
+              <form className="admin-modal__content" onSubmit={saveNativeLabelEdit}>
+                <div className="admin-modal__header">
+                  <div>
+                    <p className="eyebrow">Admin edit</p>
+                    <h2 id="native-label-edit-title">Label template</h2>
+                  </div>
+                  <button
+                    className="admin-modal__close"
+                    type="button"
+                    aria-label="Close editor"
+                    onClick={closeNativeLabelEditor}
+                  >
+                    x
+                  </button>
+                </div>
+
+                <label className="label-field">
+                  <span>Template name</span>
+                  <input
+                    type="text"
+                    value={nativeEditForm.templateName}
+                    onChange={(event) => updateNativeEditField('templateName', event.target.value)}
+                  />
+                </label>
+
+                <label className="label-field">
+                  <span>Screenshot preview</span>
+                  <input type="file" accept="image/*" onChange={updateNativeEditPreview} />
+                </label>
+
+                {nativeEditForm.previewDataUrl && (
+                  <div className="native-upload-preview">
+                    <img src={nativeEditForm.previewDataUrl} alt="" />
+                    <span>{nativeEditForm.previewFileName}</span>
+                  </div>
+                )}
+
+                <label className="label-field">
+                  <span>NIIMBOT share code *</span>
+                  <textarea
+                    required
+                    value={nativeEditForm.niimbotCode}
+                    rows={3}
+                    onChange={(event) => updateNativeEditCode(event.target.value)}
+                  />
+                </label>
+
+                <label className="label-field">
+                  <span>Peptide name *</span>
+                  <input
+                    type="text"
+                    list="common-peptide-names"
+                    required
+                    value={nativeEditForm.peptideName}
+                    onChange={(event) => updateNativeEditField('peptideName', event.target.value)}
+                  />
+                </label>
+
+                <label className="label-field">
+                  <span>Mass (mg) *</span>
+                  <input
+                    type="text"
+                    required
+                    value={nativeEditForm.massMg}
+                    onChange={(event) => updateNativeEditField('massMg', event.target.value)}
+                  />
+                </label>
+
+                <label className="label-field">
+                  <span>Label size *</span>
+                  <input
+                    type="text"
+                    list="native-label-sizes"
+                    required
+                    value={nativeEditForm.labelSize}
+                    onChange={(event) => updateNativeEditField('labelSize', event.target.value)}
+                  />
+                </label>
+
+                <label className="label-field">
+                  <span>Tags</span>
+                  <input
+                    type="text"
+                    value={nativeEditForm.tags}
+                    onChange={(event) => updateNativeEditField('tags', event.target.value)}
+                  />
+                </label>
+
+                {nativeEditStatus && <p className="admin-status">{nativeEditStatus}</p>}
+
+                <div className="admin-modal__actions">
+                  <button className="admin-delete-button" type="button" onClick={deleteNativeLabel}>
+                    Delete
+                  </button>
+                  <button className="label-primary-action" type="submit">
+                    Save Changes
+                  </button>
+                </div>
+              </form>
+            </section>
+          </div>
+        )}
       </>
     );
   }
@@ -1379,21 +1611,25 @@ function LabelTemplateCard({
 
 function NativeLabelTemplateCard({
   template,
+  isAdmin,
   isTagListExpanded,
   isVoted,
   isCommunityFavorite,
   onSelectLabel,
   onToggleTagList,
   onVote,
+  onEdit,
   votes,
 }: {
   template: NativeLabelTemplate;
+  isAdmin: boolean;
   isTagListExpanded: boolean;
   isVoted: boolean;
   isCommunityFavorite: boolean;
   onSelectLabel: () => void;
   onToggleTagList: () => void;
   onVote: () => void;
+  onEdit: () => void;
   votes: number;
 }) {
   const title = getNativeLabelTitle(template);
@@ -1411,7 +1647,24 @@ function NativeLabelTemplateCard({
     <article className="native-label-card" onClick={onSelectLabel}>
       <div className="native-label-card__title">
         <h3>{title}</h3>
-        {isCommunityFavorite && <span>Community favorite</span>}
+        <div className="native-label-card__badges">
+          {isCommunityFavorite && <span>Community favorite</span>}
+          {isAdmin && (
+            <button
+              className="admin-icon-button"
+              type="button"
+              aria-label={`Edit ${title}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onEdit();
+              }}
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24">
+                <path d="M4 16.8V20h3.2L18.5 8.7l-3.2-3.2L4 16.8Zm13-12.9 3.1 3.1 1.2-1.2a1.5 1.5 0 0 0 0-2.1l-1-1a1.5 1.5 0 0 0-2.1 0L17 3.9Z" />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
       <div className="native-label-card__preview">
         <img src={template.previewDataUrl} alt={`${title} preview`} />
@@ -1728,7 +1981,7 @@ function getPeptideCategories(peptideName: string) {
 }
 
 async function fetchNativeLabelTemplates() {
-  const response = await fetch('/api/labels');
+  const response = await fetch('/api/data/label-templates');
 
   if (!response.ok) {
     throw new Error('Labels could not be loaded.');
@@ -1754,6 +2007,48 @@ async function saveNativeLabelTemplate(template: NativeLabelTemplate) {
 
   if (!response.ok) {
     throw new Error('Label could not be saved.');
+  }
+
+  const templates = (await response.json()) as unknown;
+
+  if (!Array.isArray(templates)) {
+    throw new Error('Stored label response was invalid.');
+  }
+
+  return templates.filter(isNativeLabelTemplate);
+}
+
+async function updateNativeLabelTemplate(template: NativeLabelTemplate) {
+  const response = await fetch(`/api/admin/data/label-templates/${encodeURIComponent(template.id)}`, {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(template),
+  });
+
+  if (!response.ok) {
+    throw new Error('Label could not be updated.');
+  }
+
+  const templates = (await response.json()) as unknown;
+
+  if (!Array.isArray(templates)) {
+    throw new Error('Stored label response was invalid.');
+  }
+
+  return templates.filter(isNativeLabelTemplate);
+}
+
+async function deleteNativeLabelTemplate(templateId: string) {
+  const response = await fetch(`/api/admin/data/label-templates/${encodeURIComponent(templateId)}`, {
+    method: 'DELETE',
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error('Label could not be deleted.');
   }
 
   const templates = (await response.json()) as unknown;

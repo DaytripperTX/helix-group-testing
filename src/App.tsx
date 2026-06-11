@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import FaqsPage from './FaqsPage';
 import LabelsPage from './LabelsPage';
 import OrderFormPage from './OrderFormPage';
@@ -237,24 +237,54 @@ const navItems = [
   { id: 'faqs', label: 'FAQs', path: '/faqs' },
 ] as const;
 
-type PageId = (typeof navItems)[number]['id'];
+type PageId = (typeof navItems)[number]['id'] | 'hxadmin';
 type TestingTier = (typeof testingTiers)[number];
 type TestingIconType = TestingTier['panel'][number]['icon'];
+type AdminSession = {
+  isAuthenticated: boolean;
+  role?: 'owner' | 'admin';
+};
 
 function getPageFromPath(): PageId {
   const currentPath = window.location.pathname.replace(/\/$/, '') || '/';
+
+  if (currentPath === '/hxadmin') {
+    return 'hxadmin';
+  }
+
   const match = navItems.find((item) => item.path === currentPath);
   return match?.id ?? 'home';
 }
 
 function App() {
   const [activePage, setActivePage] = useState<PageId>(getPageFromPath);
+  const [adminSession, setAdminSession] = useState<AdminSession>({ isAuthenticated: false });
 
   useEffect(() => {
     const handleNavigation = () => setActivePage(getPageFromPath());
 
     window.addEventListener('popstate', handleNavigation);
     return () => window.removeEventListener('popstate', handleNavigation);
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    fetchAdminSession()
+      .then((session) => {
+        if (isMounted) {
+          setAdminSession(session);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setAdminSession({ isAuthenticated: false });
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const navigateTo = (path: string) => {
@@ -265,14 +295,21 @@ function App() {
 
   return (
     <>
-      <SiteHeader activePage={activePage} onNavigate={navigateTo} />
+      <SiteHeader activePage={activePage} isAdmin={adminSession.isAuthenticated} onNavigate={navigateTo} />
       <main>
         {activePage === 'home' && <HomePage />}
         {activePage === 'order-form' && <OrderFormPage />}
         {activePage === 'testing' && <TestingPage />}
         {activePage === 'coas' && <CoasPage />}
-        {activePage === 'labels' && <LabelsPage />}
+        {activePage === 'labels' && <LabelsPage isAdmin={adminSession.isAuthenticated} />}
         {activePage === 'faqs' && <FaqsPage />}
+        {activePage === 'hxadmin' && (
+          <AdminPage
+            session={adminSession}
+            onSessionChange={setAdminSession}
+            onNavigate={navigateTo}
+          />
+        )}
       </main>
     </>
   );
@@ -280,11 +317,17 @@ function App() {
 
 function SiteHeader({
   activePage,
+  isAdmin,
   onNavigate,
 }: {
   activePage: PageId;
+  isAdmin: boolean;
   onNavigate: (path: string) => void;
 }) {
+  const visibleNavItems = isAdmin
+    ? [...navItems, { id: 'hxadmin', label: 'Admin', path: '/hxadmin' } as const]
+    : navItems;
+
   return (
     <header className="brand-band">
       <div className="brand-band__content">
@@ -303,7 +346,7 @@ function SiteHeader({
         </a>
 
         <nav className="site-nav" aria-label="Primary navigation">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <a
               className={item.id === activePage ? 'site-nav__link is-active' : 'site-nav__link'}
               href={item.path}
@@ -523,6 +566,94 @@ function TestingPage() {
   );
 }
 
+function AdminPage({
+  session,
+  onSessionChange,
+  onNavigate,
+}: {
+  session: AdminSession;
+  onSessionChange: (session: AdminSession) => void;
+  onNavigate: (path: string) => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [status, setStatus] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const login = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsSubmitting(true);
+    setStatus('');
+
+    try {
+      const nextSession = await loginAdmin(password);
+
+      onSessionChange(nextSession);
+      setPassword('');
+      setStatus(nextSession.isAuthenticated ? 'Logged in' : 'Login failed');
+    } catch {
+      setStatus('Login failed');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const logout = async () => {
+    setIsSubmitting(true);
+    setStatus('');
+
+    try {
+      await logoutAdmin();
+      onSessionChange({ isAuthenticated: false });
+      setStatus('Logged out');
+    } catch {
+      setStatus('Logout failed');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="admin-page" aria-labelledby="admin-title">
+      <div className="admin-page__panel">
+        <p className="eyebrow">Admin</p>
+        <h1 id="admin-title">Helix admin</h1>
+
+        {session.isAuthenticated ? (
+          <div className="admin-session-card">
+            <p>Signed in as {session.role ?? 'owner'}.</p>
+            <div className="admin-actions">
+              <button type="button" onClick={() => onNavigate('/labels')}>
+                Open Labels
+              </button>
+              <button type="button" disabled={isSubmitting} onClick={logout}>
+                Log Out
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form className="admin-login" onSubmit={login}>
+            <label>
+              <span>Password</span>
+              <input
+                type="password"
+                value={password}
+                autoComplete="current-password"
+                autoFocus
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </label>
+            <button type="submit" disabled={isSubmitting || password.trim().length === 0}>
+              Log In
+            </button>
+          </form>
+        )}
+
+        {status && <p className="admin-status">{status}</p>}
+      </div>
+    </section>
+  );
+}
+
 function TestingTierDetails({ tier }: { tier: TestingTier }) {
   return (
     <article
@@ -704,6 +835,59 @@ function CoasPage() {
       </section>
     </>
   );
+}
+
+async function fetchAdminSession(): Promise<AdminSession> {
+  const response = await fetch('/api/admin/session', {
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    return { isAuthenticated: false };
+  }
+
+  return normalizeAdminSession(await response.json());
+}
+
+async function loginAdmin(password: string): Promise<AdminSession> {
+  const response = await fetch('/api/admin/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ password }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Admin login failed.');
+  }
+
+  return normalizeAdminSession(await response.json());
+}
+
+async function logoutAdmin() {
+  const response = await fetch('/api/admin/logout', {
+    method: 'POST',
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error('Admin logout failed.');
+  }
+}
+
+function normalizeAdminSession(value: unknown): AdminSession {
+  if (!value || typeof value !== 'object') {
+    return { isAuthenticated: false };
+  }
+
+  const session = value as Partial<AdminSession>;
+
+  return {
+    isAuthenticated: session.isAuthenticated === true,
+    role: session.role === 'admin' ? 'admin' : session.isAuthenticated ? 'owner' : undefined,
+  };
 }
 
 export default App;
