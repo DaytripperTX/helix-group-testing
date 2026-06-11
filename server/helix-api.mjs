@@ -13,6 +13,7 @@ import {
   getPublicSession,
   validateAdminPassword,
 } from './helix-auth.mjs';
+import { parseVendorPriceList } from './vendor-price-list-parser.mjs';
 
 const maxBodyBytes = 24 * 1024 * 1024;
 
@@ -76,6 +77,25 @@ export async function handleHelixApiRequest(request) {
 
       const url = new URL(request.url ?? request.pathname, 'http://localhost');
       return jsonResponse(200, await searchPeptidepedia(url.searchParams.get('name') ?? ''));
+    }
+
+    if (pathname === '/api/admin/vendor-price-lists/parse' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(
+        200,
+        await parseVendorPriceList({
+          vendorId: body?.vendorId,
+          vendorName: body?.vendorName,
+          source: body?.source,
+          peptides: await readCollection('peptides'),
+        }),
+      );
     }
 
     if (pathname.startsWith('/api/admin/data/')) {

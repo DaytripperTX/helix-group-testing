@@ -119,7 +119,7 @@ main {
 }
 
 .admin-modal {
-  width: min(100%, 620px);
+  width: min(100%, 1100px);
   max-height: calc(100vh - 36px);
   overflow-y: auto;
   border-radius: 8px;
@@ -446,6 +446,102 @@ main {
 .admin-batch-row small {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.admin-form--wide {
+  width: min(94vw, 1080px);
+}
+
+.admin-price-source {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.admin-price-source .admin-primary-button {
+  min-height: 42px;
+}
+
+.admin-price-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-price-meta span {
+  border: 1px solid #d8e5ec;
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: #f8fbfd;
+  color: #566579;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.admin-price-table {
+  display: grid;
+  max-height: 56vh;
+  overflow: auto;
+  border: 1px solid #dce7ee;
+  border-radius: 8px;
+}
+
+.admin-price-row {
+  display: grid;
+  min-width: 980px;
+  grid-template-columns: 110px minmax(220px, 1.4fr) 120px 100px 90px minmax(180px, 1fr) 78px;
+  gap: 8px;
+  align-items: center;
+  border-bottom: 1px solid #e5edf2;
+  padding: 8px;
+  background: #ffffff;
+}
+
+.admin-price-row:last-child {
+  border-bottom: 0;
+}
+
+.admin-price-row.has-review {
+  background: #fff8f1;
+}
+
+.admin-price-row--header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #eef7fa;
+  color: #344154;
+  font-size: 0.78rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.admin-price-row input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd9e2;
+  border-radius: 8px;
+  padding: 8px;
+  color: #07101f;
+  font: inherit;
+}
+
+.admin-price-row span {
+  min-width: 0;
+  color: #566579;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.admin-price-row button {
+  border: 1px solid #f0b8aa;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff4f1;
+  color: #9a341e;
+  font-weight: 900;
+  cursor: pointer;
 }
 
 select {
@@ -3956,7 +4052,8 @@ h2 {
   .admin-panel__header,
   .admin-row,
   .admin-field--with-action,
-  .admin-batch-row {
+  .admin-batch-row,
+  .admin-price-source {
     grid-template-columns: 1fr;
   }
 

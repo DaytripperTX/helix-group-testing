@@ -21,6 +21,26 @@ type Vendor = {
   priceSheet?: VendorPriceSheet;
 };
 
+type VendorPriceListItem = {
+  id: string;
+  vendorCode: string;
+  productName: string;
+  mass: string;
+  price: number | null;
+  vialsPerPack: number;
+  peptideIds: string[];
+  needsReview?: boolean;
+};
+
+type VendorPriceList = {
+  id: string;
+  vendorId: string;
+  vendorName: string;
+  source: VendorPriceSheet | { type: 'file'; fileName: string; mimeType: string };
+  items: VendorPriceListItem[];
+  parsedAt: string;
+};
+
 type Peptide = {
   id: string;
   name: string;
@@ -85,6 +105,7 @@ function AdminPage({
   const [activeTab, setActiveTab] = useState<AdminTab>('vendors');
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [peptides, setPeptides] = useState<Peptide[]>([]);
+  const [priceLists, setPriceLists] = useState<VendorPriceList[]>([]);
   const [editingVendor, setEditingVendor] = useState<Vendor | null>(null);
   const [vendorForm, setVendorForm] = useState<VendorForm>(emptyVendorForm);
   const [isVendorModalOpen, setIsVendorModalOpen] = useState(false);
@@ -95,6 +116,11 @@ function AdminPage({
   const [batchRows, setBatchRows] = useState<BatchPeptideRow[]>([]);
   const [batchStatus, setBatchStatus] = useState('');
   const [peptidepediaStatus, setPeptidepediaStatus] = useState('');
+  const [priceListVendor, setPriceListVendor] = useState<Vendor | null>(null);
+  const [priceListDraft, setPriceListDraft] = useState<VendorPriceList | null>(null);
+  const [priceListFile, setPriceListFile] = useState<File | null>(null);
+  const [priceListUrl, setPriceListUrl] = useState('');
+  const [priceListStatus, setPriceListStatus] = useState('');
 
   useEffect(() => {
     if (!session.isAuthenticated) {
@@ -114,13 +140,15 @@ function AdminPage({
   );
 
   const refreshAdminData = async () => {
-    const [nextVendors, nextPeptides] = await Promise.all([
+    const [nextVendors, nextPeptides, nextPriceLists] = await Promise.all([
       fetchCollection<Vendor>('vendors'),
       fetchCollection<Peptide>('peptides'),
+      fetchCollection<VendorPriceList>('vendor-price-lists'),
     ]);
 
     setVendors(nextVendors);
     setPeptides(nextPeptides);
+    setPriceLists(nextPriceLists);
   };
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
@@ -229,6 +257,114 @@ function AdminPage({
     } catch (error) {
       console.error(error);
       setStatus('Vendor could not be deleted.');
+    }
+  };
+
+  const openPriceListModal = (vendor: Vendor) => {
+    const existingPriceList = priceLists.find((priceList) => priceList.vendorId === vendor.id) ?? null;
+
+    setPriceListVendor(vendor);
+    setPriceListDraft(existingPriceList);
+    setPriceListFile(null);
+    setPriceListUrl(vendor.priceSheet?.type === 'google-sheet' ? vendor.priceSheet.url : '');
+    setPriceListStatus(
+      existingPriceList
+        ? `${existingPriceList.items.length} saved rows.`
+        : 'Upload a price sheet or use a public Google Sheet link to parse a preview.',
+    );
+  };
+
+  const parseVendorPriceList = async () => {
+    if (!priceListVendor) {
+      return;
+    }
+
+    const source = await getPriceListParseSource(priceListFile, priceListUrl);
+
+    if (!source) {
+      setPriceListStatus('Choose a file or enter a Google Sheet URL first.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setPriceListStatus('Parsing price list...');
+
+    try {
+      const parsedPriceList = await parseVendorPriceListSource(
+        priceListVendor,
+        source,
+      );
+
+      setPriceListDraft(parsedPriceList);
+      setPriceListStatus(`${parsedPriceList.items.length} rows parsed. Review before saving.`);
+    } catch (error) {
+      console.error(error);
+      setPriceListStatus('Price list could not be parsed.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const updatePriceListItem = (
+    itemId: string,
+    field: keyof Pick<VendorPriceListItem, 'vendorCode' | 'productName' | 'mass' | 'price' | 'vialsPerPack'>,
+    value: string,
+  ) => {
+    setPriceListDraft((currentDraft) => {
+      if (!currentDraft) {
+        return currentDraft;
+      }
+
+      return {
+        ...currentDraft,
+        items: currentDraft.items.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                [field]:
+                  field === 'price'
+                    ? parseNullableNumber(value)
+                    : field === 'vialsPerPack'
+                      ? Math.max(1, Math.trunc(parseNullableNumber(value) ?? 10))
+                      : value,
+                ...(field === 'productName' ? { peptideIds: matchPeptideIds(value, peptides) } : {}),
+                ...(field === 'price' ? { needsReview: parseNullableNumber(value) === null } : {}),
+              }
+            : item,
+        ),
+      };
+    });
+  };
+
+  const removePriceListItem = (itemId: string) => {
+    setPriceListDraft((currentDraft) =>
+      currentDraft
+        ? {
+            ...currentDraft,
+            items: currentDraft.items.filter((item) => item.id !== itemId),
+          }
+        : currentDraft,
+    );
+  };
+
+  const saveVendorPriceList = async () => {
+    if (!priceListDraft) {
+      setPriceListStatus('Parse or load a price list before saving.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const nextPriceLists = await saveCollectionItem<VendorPriceList>('vendor-price-lists', priceListDraft);
+
+      setPriceLists(nextPriceLists);
+      setPriceListStatus('Price list saved.');
+    } catch (error) {
+      console.error(error);
+      setPriceListStatus('Price list could not be saved.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -459,14 +595,19 @@ function AdminPage({
                 <article className="admin-row" key={vendor.id}>
                   <div>
                     <strong>{vendor.name}</strong>
-                    <span>{vendor.nickname || 'No nickname'} · {vendor.whatsapp || 'No WhatsApp'}</span>
+                    <span>{vendor.nickname || 'No nickname'} - {vendor.whatsapp || 'No WhatsApp'}</span>
                     {vendor.description && <p>{vendor.description}</p>}
                   </div>
                   <div>
                     <span>{vendor.negotiatedDiscount || 'No discount'}</span>
-                    <small>{formatPriceSheet(vendor.priceSheet)}</small>
+                    <small>
+                      {formatPriceSheet(vendor.priceSheet)}; {formatPriceListSummary(priceLists, vendor.id)}
+                    </small>
                   </div>
                   <div className="admin-row__actions">
+                    <button type="button" onClick={() => openPriceListModal(vendor)}>
+                      Price List
+                    </button>
                     <button type="button" onClick={() => openEditVendorModal(vendor)}>
                       Edit
                     </button>
@@ -658,6 +799,75 @@ function AdminPage({
               </button>
               <button className="admin-primary-button" type="button" disabled={isSubmitting || batchRows.length === 0} onClick={() => void savePeptideBatch()}>
                 Save Valid Rows
+              </button>
+            </div>
+          </div>
+        </AdminModal>
+      )}
+
+      {priceListVendor && (
+        <AdminModal title={`${priceListVendor.name} price list`} onClose={() => setPriceListVendor(null)}>
+          <div className="admin-form admin-form--wide">
+            <div className="admin-price-source">
+              <label className="admin-field">
+                <span>Upload CSV or Excel price sheet</span>
+                <input
+                  type="file"
+                  accept=".csv,.xls,.xlsx,.xlsm,.xlsb,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={(event) => setPriceListFile(event.target.files?.[0] ?? null)}
+                />
+              </label>
+              <AdminTextField
+                label="Google Sheet URL"
+                value={priceListUrl}
+                onChange={setPriceListUrl}
+              />
+              <button className="admin-primary-button" type="button" disabled={isSubmitting} onClick={() => void parseVendorPriceList()}>
+                Parse Preview
+              </button>
+            </div>
+
+            {priceListStatus && <p className="admin-status">{priceListStatus}</p>}
+
+            {priceListDraft && (
+              <>
+                <div className="admin-price-meta">
+                  <span>{priceListDraft.items.length} rows</span>
+                  <span>Parsed {formatDateTime(priceListDraft.parsedAt)}</span>
+                </div>
+                <div className="admin-price-table">
+                  <div className="admin-price-row admin-price-row--header">
+                    <span>Code</span>
+                    <span>Product</span>
+                    <span>Mass</span>
+                    <span>Price</span>
+                    <span>Pack</span>
+                    <span>Peptides</span>
+                    <span />
+                  </div>
+                  {priceListDraft.items.map((item) => (
+                    <div className={item.needsReview ? 'admin-price-row has-review' : 'admin-price-row'} key={item.id}>
+                      <input value={item.vendorCode} onChange={(event) => updatePriceListItem(item.id, 'vendorCode', event.target.value)} />
+                      <input value={item.productName} onChange={(event) => updatePriceListItem(item.id, 'productName', event.target.value)} />
+                      <input value={item.mass} onChange={(event) => updatePriceListItem(item.id, 'mass', event.target.value)} />
+                      <input value={item.price ?? ''} onChange={(event) => updatePriceListItem(item.id, 'price', event.target.value)} />
+                      <input value={item.vialsPerPack} onChange={(event) => updatePriceListItem(item.id, 'vialsPerPack', event.target.value)} />
+                      <span>{formatPeptideLinks(item.peptideIds, peptides)}</span>
+                      <button type="button" onClick={() => removePriceListItem(item.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <div className="admin-modal__actions">
+              <button type="button" onClick={() => setPriceListVendor(null)}>
+                Close
+              </button>
+              <button className="admin-primary-button" type="button" disabled={isSubmitting || !priceListDraft} onClick={() => void saveVendorPriceList()}>
+                Save Price List
               </button>
             </div>
           </div>
@@ -886,6 +1096,52 @@ async function resolveVendorPriceSheet(
   return (await response.json()) as VendorPriceSheet;
 }
 
+async function getPriceListParseSource(file: File | null, url: string) {
+  if (file) {
+    return {
+      type: 'file',
+      fileName: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      base64: await fileToBase64(file),
+    };
+  }
+
+  const cleanUrl = url.trim();
+
+  if (cleanUrl) {
+    return {
+      type: 'google-sheet',
+      url: cleanUrl,
+    };
+  }
+
+  return null;
+}
+
+async function parseVendorPriceListSource(
+  vendor: Vendor,
+  source: Awaited<ReturnType<typeof getPriceListParseSource>>,
+) {
+  const response = await fetch('/api/admin/vendor-price-lists/parse', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      vendorId: vendor.id,
+      vendorName: vendor.name,
+      source,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Vendor price list could not be parsed.');
+  }
+
+  return (await response.json()) as VendorPriceList;
+}
+
 async function searchPeptidepedia(name: string): Promise<{ name: string; url: string } | null> {
   const response = await fetch(`/api/admin/peptidepedia/search?name=${encodeURIComponent(name)}`, {
     credentials: 'same-origin',
@@ -1003,6 +1259,69 @@ function formatPriceSheet(priceSheet: VendorPriceSheet | undefined) {
   }
 
   return priceSheet.type === 'google-sheet' ? 'Google Sheet linked' : `File: ${priceSheet.fileName}`;
+}
+
+function formatPriceListSummary(priceLists: VendorPriceList[], vendorId: string) {
+  const priceList = priceLists.find((currentPriceList) => currentPriceList.vendorId === vendorId);
+
+  if (!priceList) {
+    return 'No parsed list';
+  }
+
+  return `${priceList.items.length} parsed rows`;
+}
+
+function formatPeptideLinks(peptideIds: string[], peptides: Peptide[]) {
+  if (peptideIds.length === 0) {
+    return 'Unlinked';
+  }
+
+  return peptideIds
+    .map((peptideId) => peptides.find((peptide) => peptide.id === peptideId)?.name ?? peptideId)
+    .join(', ');
+}
+
+function matchPeptideIds(productName: string, peptides: Peptide[]) {
+  const normalizedProduct = normalizeName(productName);
+
+  if (!normalizedProduct) {
+    return [];
+  }
+
+  const exactMatch = peptides.find((peptide) => normalizeName(peptide.name) === normalizedProduct);
+
+  if (exactMatch) {
+    return [exactMatch.id];
+  }
+
+  return peptides
+    .filter((peptide) => {
+      const normalizedPeptide = normalizeName(peptide.name);
+      return normalizedPeptide.length > 0 && normalizedProduct.includes(normalizedPeptide);
+    })
+    .map((peptide) => peptide.id);
+}
+
+function formatDateTime(value: string) {
+  if (!value) {
+    return 'not saved';
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+}
+
+function parseNullableNumber(value: string) {
+  const cleanValue = value.trim().replace(/[$,\s]/g, '');
+
+  if (!cleanValue) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(cleanValue);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function fileToBase64(file: File) {
