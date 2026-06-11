@@ -5,6 +5,7 @@ export async function handleHelixApiNodeRequest(request, response, pathname) {
   const result = await handleHelixApiRequest({
     method: request.method ?? 'GET',
     pathname,
+    url: request.url ?? pathname,
     headers: request.headers,
     bodyText,
   });

@@ -70,6 +70,44 @@ export async function deleteCollectionItem(collectionName, itemId) {
   return nextItems;
 }
 
+export async function writeAsset(asset) {
+  if (
+    !asset ||
+    typeof asset !== 'object' ||
+    typeof asset.fileName !== 'string' ||
+    typeof asset.mimeType !== 'string' ||
+    typeof asset.base64 !== 'string'
+  ) {
+    throw createHttpError(400, 'Invalid asset upload.');
+  }
+
+  const safeFileName = asset.fileName.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const blobKey = `assets/vendor-price-sheets/${Date.now()}-${safeFileName}`;
+  const assetBuffer = Buffer.from(asset.base64, 'base64');
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    await store.set(blobKey, assetBuffer, {
+      metadata: {
+        fileName: asset.fileName,
+        mimeType: asset.mimeType,
+      },
+    });
+  } else {
+    const localAssetPath = path.join(localDataDir, blobKey);
+
+    await mkdir(path.dirname(localAssetPath), { recursive: true });
+    await writeFile(localAssetPath, assetBuffer);
+  }
+
+  return {
+    type: 'file',
+    fileName: asset.fileName,
+    mimeType: asset.mimeType,
+    blobKey,
+  };
+}
+
 export async function publicUpsertLabelTemplate(template) {
   if (!isNativeLabelTemplate(template)) {
     throw createHttpError(400, 'Invalid label template.');
@@ -119,7 +157,11 @@ async function readLocalDocument(collectionName, config) {
   await ensureLocalDocument(collectionName, config);
 
   try {
-    return normalizeDocument(collectionName, JSON.parse(await readFile(getLocalPath(config), 'utf8')));
+    return await enrichDocumentFromSeed(
+      collectionName,
+      config,
+      normalizeDocument(collectionName, JSON.parse(await readFile(getLocalPath(config), 'utf8'))),
+    );
   } catch {
     return await readSeedDocument(collectionName, config);
   }
@@ -160,7 +202,7 @@ async function readBlobDocument(collectionName, config) {
   const document = await store.get(config.fileName, { type: 'json' });
 
   if (document) {
-    return normalizeDocument(collectionName, document);
+    return await enrichDocumentFromSeed(collectionName, config, normalizeDocument(collectionName, document));
   }
 
   const seedDocument = await readSeedDocument(collectionName, config);
@@ -232,6 +274,32 @@ function normalizeDocument(collectionName, value) {
   }
 
   return createCollectionDocument(collectionName, value && typeof value === 'object' ? value : {});
+}
+
+async function enrichDocumentFromSeed(collectionName, config, document) {
+  if (collectionName !== 'peptides' || config.kind !== 'items' || !Array.isArray(document.items)) {
+    return document;
+  }
+
+  try {
+    const seedDocument = normalizeDocument(
+      collectionName,
+      JSON.parse(await readFile(path.join(seedDir, config.fileName), 'utf8')),
+    );
+    const seedItemsById = new Map(seedDocument.items.map((item) => [item.id, item]));
+
+    return {
+      ...document,
+      items: document.items.map((item) => ({
+        ...seedItemsById.get(item.id),
+        ...item,
+        description: item.description || seedItemsById.get(item.id)?.description || '',
+        peptidepediaUrl: item.peptidepediaUrl || seedItemsById.get(item.id)?.peptidepediaUrl || '',
+      })),
+    };
+  } catch {
+    return document;
+  }
 }
 
 function getDocumentPayload(collectionName, document) {

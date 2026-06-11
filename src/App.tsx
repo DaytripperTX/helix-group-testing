@@ -1,4 +1,5 @@
-import { type FormEvent, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import AdminPage from './AdminPage';
 import FaqsPage from './FaqsPage';
 import LabelsPage from './LabelsPage';
 import OrderFormPage from './OrderFormPage';
@@ -348,7 +349,13 @@ function SiteHeader({
         <nav className="site-nav" aria-label="Primary navigation">
           {visibleNavItems.map((item) => (
             <a
-              className={item.id === activePage ? 'site-nav__link is-active' : 'site-nav__link'}
+              className={[
+                'site-nav__link',
+                item.id === activePage ? 'is-active' : '',
+                item.id === 'hxadmin' ? 'site-nav__link--admin' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
               href={item.path}
               key={item.id}
               onClick={(event) => {
@@ -561,94 +568,6 @@ function TestingPage() {
         </div>
 
         <TestingTierDetails tier={selectedTier} />
-      </div>
-    </section>
-  );
-}
-
-function AdminPage({
-  session,
-  onSessionChange,
-  onNavigate,
-}: {
-  session: AdminSession;
-  onSessionChange: (session: AdminSession) => void;
-  onNavigate: (path: string) => void;
-}) {
-  const [password, setPassword] = useState('');
-  const [status, setStatus] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const login = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setIsSubmitting(true);
-    setStatus('');
-
-    try {
-      const nextSession = await loginAdmin(password);
-
-      onSessionChange(nextSession);
-      setPassword('');
-      setStatus(nextSession.isAuthenticated ? 'Logged in' : 'Login failed');
-    } catch {
-      setStatus('Login failed');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const logout = async () => {
-    setIsSubmitting(true);
-    setStatus('');
-
-    try {
-      await logoutAdmin();
-      onSessionChange({ isAuthenticated: false });
-      setStatus('Logged out');
-    } catch {
-      setStatus('Logout failed');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  return (
-    <section className="admin-page" aria-labelledby="admin-title">
-      <div className="admin-page__panel">
-        <p className="eyebrow">Admin</p>
-        <h1 id="admin-title">Helix admin</h1>
-
-        {session.isAuthenticated ? (
-          <div className="admin-session-card">
-            <p>Signed in as {session.role ?? 'owner'}.</p>
-            <div className="admin-actions">
-              <button type="button" onClick={() => onNavigate('/labels')}>
-                Open Labels
-              </button>
-              <button type="button" disabled={isSubmitting} onClick={logout}>
-                Log Out
-              </button>
-            </div>
-          </div>
-        ) : (
-          <form className="admin-login" onSubmit={login}>
-            <label>
-              <span>Password</span>
-              <input
-                type="password"
-                value={password}
-                autoComplete="current-password"
-                autoFocus
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </label>
-            <button type="submit" disabled={isSubmitting || password.trim().length === 0}>
-              Log In
-            </button>
-          </form>
-        )}
-
-        {status && <p className="admin-status">{status}</p>}
       </div>
     </section>
   );

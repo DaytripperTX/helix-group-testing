@@ -4,6 +4,7 @@ export async function handler(event) {
   return handleHelixApiRequest({
     method: event.httpMethod ?? 'GET',
     pathname: event.path ?? '/api/admin',
+    url: event.rawUrl ?? event.path ?? '/api/admin',
     headers: event.headers ?? {},
     bodyText: event.isBase64Encoded
       ? Buffer.from(event.body ?? '', 'base64').toString('utf8')

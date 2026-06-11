@@ -5,42 +5,58 @@
     {
       "id": "bpc-157",
       "name": "BPC-157",
-      "categories": ["Recovery"]
+      "categories": ["Recovery"],
+      "description": "Synthetic pentadecapeptide commonly referenced in tissue repair and recovery research.",
+      "peptidepediaUrl": "https://peptidepedia.org/recovery/bpc-157"
     },
     {
       "id": "tb-500",
       "name": "TB-500",
-      "categories": ["Recovery"]
+      "categories": ["Recovery"],
+      "description": "Synthetic fragment associated with thymosin beta-4 research and tissue repair pathways.",
+      "peptidepediaUrl": "https://peptidepedia.org/recovery/tb-500"
     },
     {
       "id": "tirzepatide",
       "name": "Tirzepatide",
-      "categories": ["GLP", "Metabolic"]
+      "categories": ["GLP", "Metabolic"],
+      "description": "Dual GIP and GLP-1 receptor agonist studied and used for metabolic disease and weight management.",
+      "peptidepediaUrl": "https://peptidepedia.org/weight-loss/tirzepatide"
     },
     {
       "id": "retatrutide",
       "name": "Retatrutide",
-      "categories": ["GLP", "Metabolic"]
+      "categories": ["GLP", "Metabolic"],
+      "description": "Triple GLP-1, GIP, and glucagon receptor agonist in clinical development for metabolic indications.",
+      "peptidepediaUrl": "https://peptidepedia.org/weight-loss/retatrutide"
     },
     {
       "id": "semaglutide",
       "name": "Semaglutide",
-      "categories": ["GLP", "Metabolic"]
+      "categories": ["GLP", "Metabolic"],
+      "description": "GLP-1 receptor agonist used for type 2 diabetes and chronic weight management.",
+      "peptidepediaUrl": "https://peptidepedia.org/weight-loss/semaglutide"
     },
     {
       "id": "ghk-cu",
       "name": "GHK-Cu",
-      "categories": ["Skin"]
+      "categories": ["Skin"],
+      "description": "Naturally occurring copper peptide studied for skin, wound healing, and tissue remodeling effects.",
+      "peptidepediaUrl": "https://peptidepedia.org/aesthetics/ghk-cu"
     },
     {
       "id": "nad-plus",
       "name": "NAD+",
-      "categories": ["Mitochondrial", "Metabolic"]
+      "categories": ["Mitochondrial", "Metabolic"],
+      "description": "Nicotinamide adenine dinucleotide, a cellular cofactor involved in redox metabolism and energy pathways.",
+      "peptidepediaUrl": ""
     },
     {
       "id": "kpv",
       "name": "KPV",
-      "categories": ["Immune", "Skin"]
+      "categories": ["Immune", "Skin"],
+      "description": "Alpha-MSH-derived tripeptide commonly referenced for anti-inflammatory research.",
+      "peptidepediaUrl": "https://peptidepedia.org/longevity/kpv"
     }
   ]
 }
