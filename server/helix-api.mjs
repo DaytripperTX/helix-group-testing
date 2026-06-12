@@ -239,6 +239,7 @@ function extractPeptidepediaEntries(html) {
         name: title,
         aliases: [],
         url: `https://peptidepedia.org${href}`,
+        categories: getPeptidepediaCategories(`https://peptidepedia.org${href}`),
       });
     }
   }
@@ -259,35 +260,156 @@ const peptidepediaIndex = [
     name: 'BPC-157',
     aliases: ['BPC 157'],
     url: 'https://peptidepedia.org/recovery/bpc-157',
+    categories: ['Recovery'],
   },
   {
     name: 'Semaglutide',
     aliases: [],
     url: 'https://peptidepedia.org/weight-loss/semaglutide',
+    categories: ['GLP', 'Metabolic'],
   },
   {
     name: 'Tirzepatide',
     aliases: [],
     url: 'https://peptidepedia.org/weight-loss/tirzepatide',
+    categories: ['GLP', 'Metabolic'],
   },
   {
     name: 'TB-500',
     aliases: ['TB 500'],
     url: 'https://peptidepedia.org/recovery/tb-500',
+    categories: ['Recovery'],
   },
   {
     name: 'Retatrutide',
     aliases: [],
     url: 'https://peptidepedia.org/weight-loss/retatrutide',
+    categories: ['GLP', 'Metabolic'],
   },
   {
     name: 'GHK-Cu',
     aliases: ['GHK Cu'],
     url: 'https://peptidepedia.org/aesthetics/ghk-cu',
+    categories: ['Skin'],
   },
   {
     name: 'KPV',
     aliases: [],
     url: 'https://peptidepedia.org/longevity/kpv',
+    categories: ['Longevity', 'Immune', 'Skin'],
+  },
+  {
+    name: 'Ipamorelin',
+    aliases: [],
+    url: 'https://peptidepedia.org/performance/ipamorelin',
+    categories: ['Performance', 'Hormone'],
+  },
+  {
+    name: 'CJC-1295',
+    aliases: ['CJC 1295'],
+    url: 'https://peptidepedia.org/performance/cjc-1295',
+    categories: ['Performance', 'Hormone'],
+  },
+  {
+    name: 'Sermorelin',
+    aliases: [],
+    url: 'https://peptidepedia.org/performance/sermorelin',
+    categories: ['Performance', 'Hormone'],
+  },
+  {
+    name: 'PT-141',
+    aliases: ['PT 141', 'Bremelanotide'],
+    url: 'https://peptidepedia.org/performance/pt-141',
+    categories: ['Performance', 'Hormone'],
+  },
+  {
+    name: 'Melanotan II',
+    aliases: ['Melanotan 2'],
+    url: 'https://peptidepedia.org/aesthetics/melanotan-ii',
+    categories: ['Skin', 'Aesthetics'],
+  },
+  {
+    name: 'AOD-9604',
+    aliases: ['AOD 9604'],
+    url: 'https://peptidepedia.org/weight-loss/aod-9604',
+    categories: ['Metabolic'],
+  },
+  {
+    name: 'Tesamorelin',
+    aliases: [],
+    url: 'https://peptidepedia.org/performance/tesamorelin',
+    categories: ['Performance', 'Hormone', 'Metabolic'],
+  },
+  {
+    name: 'Liraglutide',
+    aliases: [],
+    url: 'https://peptidepedia.org/weight-loss/liraglutide',
+    categories: ['GLP', 'Metabolic'],
+  },
+  {
+    name: 'Epithalon',
+    aliases: ['Epitalon'],
+    url: 'https://peptidepedia.org/longevity/epithalon',
+    categories: ['Longevity', 'Bioregulators'],
+  },
+  {
+    name: 'Thymosin Alpha 1',
+    aliases: ['Thymosin Alpha-1', 'TA1'],
+    url: 'https://peptidepedia.org/longevity/thymosin-alpha-1',
+    categories: ['Longevity', 'Immune'],
+  },
+  {
+    name: 'Selank',
+    aliases: [],
+    url: 'https://peptidepedia.org/cognitive/selank',
+    categories: ['Cognitive'],
+  },
+  {
+    name: 'Semax',
+    aliases: [],
+    url: 'https://peptidepedia.org/cognitive/semax',
+    categories: ['Cognitive'],
+  },
+  {
+    name: 'GHRP-2',
+    aliases: ['GHRP 2'],
+    url: 'https://peptidepedia.org/performance/ghrp-2',
+    categories: ['Performance', 'Hormone'],
+  },
+  {
+    name: 'GHRP-6',
+    aliases: ['GHRP 6'],
+    url: 'https://peptidepedia.org/performance/ghrp-6',
+    categories: ['Performance', 'Hormone'],
+  },
+  {
+    name: 'SS-31',
+    aliases: ['SS 31', 'Elamipretide'],
+    url: 'https://peptidepedia.org/longevity/ss-31',
+    categories: ['Longevity', 'Mitochondrial'],
+  },
+  {
+    name: 'Survodutide',
+    aliases: ['BI 456906'],
+    url: 'https://peptidepedia.org/weight-loss/survodutide',
+    categories: ['GLP', 'Metabolic'],
   },
 ];
+
+function getPeptidepediaCategories(url) {
+  try {
+    const segment = new URL(url).pathname.split('/').filter(Boolean)[0] ?? '';
+    const category = {
+      aesthetics: ['Aesthetics'],
+      cognitive: ['Cognitive'],
+      longevity: ['Longevity'],
+      performance: ['Performance'],
+      recovery: ['Recovery'],
+      'weight-loss': ['GLP', 'Metabolic'],
+    }[segment];
+
+    return category ?? [];
+  } catch {
+    return [];
+  }
+}

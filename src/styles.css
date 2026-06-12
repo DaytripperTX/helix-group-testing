@@ -479,6 +479,22 @@ main {
   font-weight: 850;
 }
 
+.admin-price-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-price-actions button {
+  border: 1px solid #c8d7e1;
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #ffffff;
+  color: #07101f;
+  font-weight: 900;
+  cursor: pointer;
+}
+
 .admin-price-table {
   display: grid;
   max-height: 56vh;

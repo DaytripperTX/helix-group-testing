@@ -12,6 +12,7 @@ const storeName = 'helix-data';
 
 const collections = new Map([
   ['peptides', { fileName: 'peptides.json', kind: 'items' }],
+  ['peptide-categories', { fileName: 'peptide-categories.json', kind: 'items' }],
   ['label-templates', { fileName: 'label-templates.json', kind: 'items' }],
   ['vendors', { fileName: 'vendors.json', kind: 'items' }],
   ['vendor-price-lists', { fileName: 'vendor-price-lists.json', kind: 'items' }],

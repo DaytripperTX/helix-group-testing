@@ -36,7 +36,9 @@ type VendorPriceList = {
   id: string;
   vendorId: string;
   vendorName: string;
-  source: VendorPriceSheet | { type: 'file'; fileName: string; mimeType: string };
+  source:
+    | VendorPriceSheet
+    | { type: 'file'; fileName: string; mimeType: string; base64?: string };
   items: VendorPriceListItem[];
   parsedAt: string;
 };
@@ -47,6 +49,11 @@ type Peptide = {
   categories: string[];
   description?: string;
   peptidepediaUrl?: string;
+};
+
+type PeptideCategory = {
+  id: string;
+  name: string;
 };
 
 type VendorForm = {
@@ -105,6 +112,7 @@ function AdminPage({
   const [activeTab, setActiveTab] = useState<AdminTab>('vendors');
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [peptides, setPeptides] = useState<Peptide[]>([]);
+  const [peptideCategories, setPeptideCategories] = useState<PeptideCategory[]>([]);
   const [priceLists, setPriceLists] = useState<VendorPriceList[]>([]);
   const [editingVendor, setEditingVendor] = useState<Vendor | null>(null);
   const [vendorForm, setVendorForm] = useState<VendorForm>(emptyVendorForm);
@@ -140,15 +148,17 @@ function AdminPage({
   );
 
   const refreshAdminData = async () => {
-    const [nextVendors, nextPeptides, nextPriceLists] = await Promise.all([
+    const [nextVendors, nextPeptides, nextPriceLists, nextPeptideCategories] = await Promise.all([
       fetchCollection<Vendor>('vendors'),
       fetchCollection<Peptide>('peptides'),
       fetchCollection<VendorPriceList>('vendor-price-lists'),
+      fetchCollection<PeptideCategory>('peptide-categories'),
     ]);
 
     setVendors(nextVendors);
     setPeptides(nextPeptides);
     setPriceLists(nextPriceLists);
+    setPeptideCategories(nextPeptideCategories);
   };
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
@@ -210,7 +220,7 @@ function AdminPage({
   const saveVendor = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const name = vendorForm.name.trim();
+    const name = titleCase(sanitizeText(vendorForm.name));
 
     if (!name) {
       setStatus('Vendor name is required.');
@@ -226,10 +236,10 @@ function AdminPage({
       const vendor: Vendor = {
         id,
         name,
-        nickname: vendorForm.nickname.trim(),
-        whatsapp: vendorForm.whatsapp.trim(),
-        description: vendorForm.description.trim(),
-        negotiatedDiscount: vendorForm.negotiatedDiscount.trim(),
+        nickname: sanitizeText(vendorForm.nickname),
+        whatsapp: sanitizeText(vendorForm.whatsapp),
+        description: sanitizeText(vendorForm.description),
+        negotiatedDiscount: sanitizeText(vendorForm.negotiatedDiscount),
         ...(priceSheet ? { priceSheet } : {}),
       };
 
@@ -356,13 +366,76 @@ function AdminPage({
     setIsSubmitting(true);
 
     try {
-      const nextPriceLists = await saveCollectionItem<VendorPriceList>('vendor-price-lists', priceListDraft);
+      const savedSource =
+        priceListDraft.source.type === 'file' && !('blobKey' in priceListDraft.source) && priceListFile
+          ? await uploadVendorPriceSheetFile(priceListFile)
+          : priceListDraft.source;
+      const nextDraft = {
+        ...priceListDraft,
+        source: savedSource,
+      };
+      const nextPriceLists = await saveCollectionItem<VendorPriceList>('vendor-price-lists', nextDraft);
+      const currentVendor = vendors.find((vendor) => vendor.id === priceListDraft.vendorId) ?? priceListVendor;
+      let nextVendors = vendors;
+
+      if (currentVendor && isVendorPriceSheetSource(savedSource)) {
+        const nextVendor = {
+          ...currentVendor,
+          priceSheet: savedSource,
+        };
+        nextVendors = await saveCollectionItem<Vendor>('vendors', nextVendor);
+        setVendors(nextVendors);
+        setPriceListVendor(nextVendor);
+      }
 
       setPriceLists(nextPriceLists);
+      setPriceListDraft(nextDraft);
       setPriceListStatus('Price list saved.');
     } catch (error) {
       console.error(error);
       setPriceListStatus('Price list could not be saved.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const refreshPriceListPeptideLinks = () => {
+    setPriceListDraft((currentDraft) =>
+      currentDraft
+        ? {
+            ...currentDraft,
+            items: currentDraft.items.map((item) => ({
+              ...item,
+              peptideIds: matchPeptideIds(item.productName, peptides),
+            })),
+          }
+        : currentDraft,
+    );
+    setPriceListStatus('Peptide links refreshed from the current dictionary.');
+  };
+
+  const deleteVendorPriceList = async () => {
+    if (!priceListVendor || !priceListDraft) {
+      return;
+    }
+
+    if (!window.confirm(`Delete the saved price list for "${priceListVendor.name}"? This cannot be undone.`)) {
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const nextPriceLists = await deleteCollectionItem<VendorPriceList>('vendor-price-lists', priceListDraft.id);
+
+      setPriceLists(nextPriceLists);
+      setPriceListDraft(null);
+      setPriceListFile(null);
+      setPriceListUrl('');
+      setPriceListStatus('Saved price list deleted.');
+    } catch (error) {
+      console.error(error);
+      setPriceListStatus('Price list could not be deleted.');
     } finally {
       setIsSubmitting(false);
     }
@@ -392,7 +465,7 @@ function AdminPage({
   const savePeptide = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const name = peptideForm.name.trim();
+    const name = normalizePeptideName(peptideForm.name);
 
     if (!name) {
       setStatus('Peptide name is required.');
@@ -404,17 +477,20 @@ function AdminPage({
     try {
       const existingPeptide = findByNormalizedName(peptides, name);
       const id = editingPeptide?.id ?? existingPeptide?.id ?? createUniqueId(name, peptides);
+      const normalizedCategories = normalizeCategories(peptideForm.categories);
+      const nextPeptideCategories = await ensurePeptideCategories(normalizedCategories, peptideCategories);
       const peptide: Peptide = {
         id,
         name,
-        categories: parseList(peptideForm.categories),
-        description: peptideForm.description.trim(),
-        peptidepediaUrl: peptideForm.peptidepediaUrl.trim(),
+        categories: normalizedCategories,
+        description: sanitizeText(peptideForm.description),
+        peptidepediaUrl: sanitizeUrl(peptideForm.peptidepediaUrl),
       };
 
       const nextPeptides = await saveCollectionItem<Peptide>('peptides', peptide);
 
       setPeptides(nextPeptides);
+      setPeptideCategories(nextPeptideCategories);
       setIsPeptideModalOpen(false);
       setStatus('Peptide saved.');
     } catch (error) {
@@ -460,8 +536,13 @@ function AdminPage({
       setPeptideForm((currentForm) => ({
         ...currentForm,
         peptidepediaUrl: match.url,
+        categories: mergeCategoryText(currentForm.categories, match.categories ?? [], peptideCategories),
       }));
-      setPeptidepediaStatus(`Matched ${match.name}.`);
+      setPeptidepediaStatus(
+        match.categories?.length
+          ? `Matched ${match.name}. Categories suggested: ${match.categories.join(', ')}.`
+          : `Matched ${match.name}.`,
+      );
     } catch {
       setPeptidepediaStatus('Peptidepedia search failed.');
     }
@@ -487,7 +568,21 @@ function AdminPage({
   };
 
   const savePeptideBatch = async () => {
-    const validRows = batchRows.filter((row) => row.errors.length === 0);
+    const seenNames = new Set<string>();
+    const validRows = batchRows.filter((row) => {
+      if (row.errors.length > 0) {
+        return false;
+      }
+
+      const normalizedRowName = normalizeName(row.name);
+
+      if (seenNames.has(normalizedRowName)) {
+        return false;
+      }
+
+      seenNames.add(normalizedRowName);
+      return true;
+    });
 
     if (validRows.length === 0) {
       setBatchStatus('No valid rows to save.');
@@ -498,12 +593,14 @@ function AdminPage({
 
     try {
       let nextPeptides = peptides;
+      let nextPeptideCategories = peptideCategories;
 
       for (const row of validRows) {
         const existingPeptide = findByNormalizedName(nextPeptides, row.name);
+        nextPeptideCategories = await ensurePeptideCategories(row.categories, nextPeptideCategories);
         const peptide = {
           id: existingPeptide?.id ?? row.id,
-          name: row.name,
+          name: normalizePeptideName(row.name),
           categories: row.categories,
           description: row.description ?? '',
           peptidepediaUrl: row.peptidepediaUrl ?? '',
@@ -513,6 +610,7 @@ function AdminPage({
       }
 
       setPeptides(nextPeptides);
+      setPeptideCategories(nextPeptideCategories);
       setIsBatchModalOpen(false);
       setBatchRows([]);
       setBatchStatus('');
@@ -601,7 +699,10 @@ function AdminPage({
                   <div>
                     <span>{vendor.negotiatedDiscount || 'No discount'}</span>
                     <small>
-                      {formatPriceSheet(vendor.priceSheet)}; {formatPriceListSummary(priceLists, vendor.id)}
+                      {formatPriceSheet(
+                        vendor.priceSheet,
+                        priceLists.find((priceList) => priceList.vendorId === vendor.id)?.source,
+                      )}; {formatPriceListSummary(priceLists, vendor.id)}
                     </small>
                   </div>
                   <div className="admin-row__actions">
@@ -741,7 +842,21 @@ function AdminPage({
               }}
               onChange={(value) => setPeptideForm({ ...peptideForm, name: value })}
             />
-            <AdminTextField label="Categories" value={peptideForm.categories} placeholder="GLP, Metabolic" onChange={(value) => setPeptideForm({ ...peptideForm, categories: value })} />
+            <label className="admin-field">
+              <span>Categories</span>
+              <input
+                type="text"
+                list="peptide-category-options"
+                value={peptideForm.categories}
+                placeholder="GLP, Metabolic"
+                onChange={(event) => setPeptideForm({ ...peptideForm, categories: event.target.value })}
+              />
+              <datalist id="peptide-category-options">
+                {peptideCategories.map((category) => (
+                  <option value={category.name} key={category.id} />
+                ))}
+              </datalist>
+            </label>
             <AdminTextArea label="Description" value={peptideForm.description} onChange={(value) => setPeptideForm({ ...peptideForm, description: value })} />
             <div className="admin-field admin-field--with-action">
               <label>
@@ -834,6 +949,14 @@ function AdminPage({
                 <div className="admin-price-meta">
                   <span>{priceListDraft.items.length} rows</span>
                   <span>Parsed {formatDateTime(priceListDraft.parsedAt)}</span>
+                </div>
+                <div className="admin-price-actions">
+                  <button type="button" onClick={refreshPriceListPeptideLinks}>
+                    Refresh Peptide Links
+                  </button>
+                  <button type="button" onClick={() => void deleteVendorPriceList()}>
+                    Delete Entire Price List
+                  </button>
                 </div>
                 <div className="admin-price-table">
                   <div className="admin-price-row admin-price-row--header">
@@ -1142,7 +1265,29 @@ async function parseVendorPriceListSource(
   return (await response.json()) as VendorPriceList;
 }
 
-async function searchPeptidepedia(name: string): Promise<{ name: string; url: string } | null> {
+async function uploadVendorPriceSheetFile(file: File): Promise<VendorPriceSheet> {
+  const base64 = await fileToBase64(file);
+  const response = await fetch('/api/admin/assets/vendor-price-sheet', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      fileName: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      base64,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Vendor price sheet could not be uploaded.');
+  }
+
+  return (await response.json()) as VendorPriceSheet;
+}
+
+async function searchPeptidepedia(name: string): Promise<{ name: string; url: string; categories?: string[] } | null> {
   const response = await fetch(`/api/admin/peptidepedia/search?name=${encodeURIComponent(name)}`, {
     credentials: 'same-origin',
   });
@@ -1151,7 +1296,7 @@ async function searchPeptidepedia(name: string): Promise<{ name: string; url: st
     throw new Error('Peptidepedia search failed.');
   }
 
-  const result = (await response.json()) as { match?: { name: string; url: string } | null };
+  const result = (await response.json()) as { match?: { name: string; url: string; categories?: string[] } | null };
   return result.match ?? null;
 }
 
@@ -1167,22 +1312,33 @@ async function parsePeptideSpreadsheet(file: File, existingPeptides: Peptide[]) 
     defval: '',
   });
 
+  const seenNames = new Set<string>();
+
   return rawRows.map((row, index) => {
     const normalizedRow = normalizeSpreadsheetRow(row);
-    const name = normalizedRow.name;
+    const name = normalizePeptideName(normalizedRow.name);
     const existingPeptide = findByNormalizedName(existingPeptides, name);
+    const normalizedRowName = normalizeName(name);
     const peptide: BatchPeptideRow = {
       rowNumber: index + 2,
       id: existingPeptide?.id ?? createUniqueId(name || `peptide-${index + 2}`, existingPeptides),
       name,
-      categories: parseList(normalizedRow.categories),
-      description: normalizedRow.description,
-      peptidepediaUrl: normalizedRow.peptidepediaUrl,
+      categories: normalizeCategories(normalizedRow.categories),
+      description: sanitizeText(normalizedRow.description),
+      peptidepediaUrl: sanitizeUrl(normalizedRow.peptidepediaUrl),
       errors: [],
     };
 
     if (!name) {
       peptide.errors.push('Missing name');
+    }
+
+    if (normalizedRowName) {
+      if (seenNames.has(normalizedRowName)) {
+        peptide.errors.push('Duplicate name in import');
+      } else {
+        seenNames.add(normalizedRowName);
+      }
     }
 
     return peptide;
@@ -1200,6 +1356,143 @@ function normalizeSpreadsheetRow(row: Record<string, unknown>) {
     description: fields.get('description') ?? '',
     peptidepediaUrl: fields.get('peptidepediaurl') ?? fields.get('peptidepedia') ?? fields.get('url') ?? '',
   };
+}
+
+async function ensurePeptideCategories(
+  categoryNames: string[],
+  existingCategories: PeptideCategory[],
+) {
+  let nextCategories = existingCategories;
+
+  for (const categoryName of categoryNames) {
+    const existingCategory = findByNormalizedName(nextCategories, categoryName);
+
+    if (existingCategory) {
+      continue;
+    }
+
+    const category: PeptideCategory = {
+      id: createUniqueId(categoryName, nextCategories),
+      name: categoryName,
+    };
+
+    nextCategories = await saveCollectionItem<PeptideCategory>('peptide-categories', category);
+  }
+
+  return nextCategories;
+}
+
+function mergeCategoryText(
+  currentCategoryText: string,
+  suggestedCategories: string[],
+  existingCategories: PeptideCategory[],
+) {
+  const currentCategories = normalizeCategories(currentCategoryText);
+  const mappedSuggestions = suggestedCategories.map((category) =>
+    mapSuggestedCategory(category, existingCategories),
+  );
+  const mergedCategories = [...currentCategories];
+
+  for (const category of mappedSuggestions) {
+    if (!mergedCategories.some((currentCategory) => normalizeName(currentCategory) === normalizeName(category))) {
+      mergedCategories.push(category);
+    }
+  }
+
+  return mergedCategories.join(', ');
+}
+
+function mapSuggestedCategory(category: string, existingCategories: PeptideCategory[]) {
+  const normalizedCategory = normalizeName(category);
+  const existingCategory = existingCategories.find(
+    (currentCategory) => normalizeName(currentCategory.name) === normalizedCategory,
+  );
+
+  return existingCategory?.name ?? normalizeCategoryName(category);
+}
+
+function normalizePeptideName(value: string) {
+  const cleanValue = sanitizeText(value);
+  const specialNames = new Map([
+    ['bpc157', 'BPC-157'],
+    ['tb500', 'TB-500'],
+    ['pt141', 'PT-141'],
+    ['cjc1295', 'CJC-1295'],
+    ['ghkcu', 'GHK-Cu'],
+    ['nad', 'NAD+'],
+    ['nadplus', 'NAD+'],
+    ['ss31', 'SS-31'],
+    ['aod9604', 'AOD-9604'],
+    ['ghrp2', 'GHRP-2'],
+    ['ghrp6', 'GHRP-6'],
+  ]);
+
+  return specialNames.get(normalizeName(cleanValue)) ?? titleCase(cleanValue);
+}
+
+function normalizeCategories(value: string | string[]) {
+  const rawCategories = Array.isArray(value) ? value : parseList(value);
+  const categories: string[] = [];
+
+  for (const category of rawCategories) {
+    const normalizedCategory = normalizeCategoryName(category);
+
+    if (
+      normalizedCategory &&
+      !categories.some((currentCategory) => normalizeName(currentCategory) === normalizeName(normalizedCategory))
+    ) {
+      categories.push(normalizedCategory);
+    }
+  }
+
+  return categories;
+}
+
+function normalizeCategoryName(value: string) {
+  const cleanValue = sanitizeText(value);
+  const specialCategories = new Map([
+    ['glp', 'GLP'],
+    ['glp1', 'GLP'],
+    ['nad', 'NAD+'],
+    ['nadplus', 'NAD+'],
+  ]);
+
+  return specialCategories.get(normalizeName(cleanValue)) ?? titleCase(cleanValue);
+}
+
+function sanitizeText(value: string) {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function sanitizeUrl(value: string) {
+  const cleanValue = sanitizeText(value);
+
+  if (!cleanValue) {
+    return '';
+  }
+
+  try {
+    return new URL(cleanValue).toString();
+  } catch {
+    return cleanValue;
+  }
+}
+
+function titleCase(value: string) {
+  return value
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => {
+      if (word === word.toUpperCase() && word.length <= 5) {
+        return word;
+      }
+
+      return word
+        .split('-')
+        .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}` : part))
+        .join('-');
+    })
+    .join(' ');
 }
 
 function normalizeAdminSession(value: unknown): AdminSession {
@@ -1253,12 +1546,19 @@ function parseList(value: string) {
     .filter(Boolean);
 }
 
-function formatPriceSheet(priceSheet: VendorPriceSheet | undefined) {
-  if (!priceSheet) {
+function formatPriceSheet(
+  priceSheet: VendorPriceSheet | undefined,
+  priceListSource?: VendorPriceList['source'],
+) {
+  const displaySource = priceSheet ?? (isVendorPriceSheetSource(priceListSource) ? priceListSource : undefined);
+
+  if (!displaySource) {
     return 'No price sheet';
   }
 
-  return priceSheet.type === 'google-sheet' ? 'Google Sheet linked' : `File: ${priceSheet.fileName}`;
+  return displaySource.type === 'google-sheet'
+    ? 'Google Sheet linked'
+    : `File: ${displaySource.fileName}`;
 }
 
 function formatPriceListSummary(priceLists: VendorPriceList[], vendorId: string) {
@@ -1269,6 +1569,12 @@ function formatPriceListSummary(priceLists: VendorPriceList[], vendorId: string)
   }
 
   return `${priceList.items.length} parsed rows`;
+}
+
+function isVendorPriceSheetSource(
+  source: VendorPriceList['source'] | undefined,
+): source is VendorPriceSheet {
+  return source?.type === 'google-sheet' || (source?.type === 'file' && 'blobKey' in source);
 }
 
 function formatPeptideLinks(peptideIds: string[], peptides: Peptide[]) {

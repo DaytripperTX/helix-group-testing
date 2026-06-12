@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-11T00:00:00.000Z",
+  "items": [
+    { "id": "recovery", "name": "Recovery" },
+    { "id": "glp", "name": "GLP" },
+    { "id": "metabolic", "name": "Metabolic" },
+    { "id": "skin", "name": "Skin" },
+    { "id": "mitochondrial", "name": "Mitochondrial" },
+    { "id": "immune", "name": "Immune" }
+  ]
+}
