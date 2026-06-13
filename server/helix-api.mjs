@@ -1,4 +1,9 @@
 import {
+  readFile,
+} from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
   deleteCollectionItem,
   getCollectionNames,
   publicUpsertLabelTemplate,
@@ -11,11 +16,15 @@ import {
   createLogoutCookie,
   getAdminSession,
   getPublicSession,
-  validateAdminPassword,
+  validateRolePassword,
 } from './helix-auth.mjs';
 import { parseVendorPriceList } from './vendor-price-list-parser.mjs';
 
 const maxBodyBytes = 24 * 1024 * 1024;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(__dirname, '..');
+const pepPediaIndexPath = path.join(rootDir, 'data', 'pep-pedia-index.json');
+let cachedPepPediaIndex = null;
 
 export { maxBodyBytes };
 
@@ -25,7 +34,13 @@ export async function handleHelixApiRequest(request) {
 
   try {
     if (method === 'GET' && pathname.startsWith('/api/data/')) {
-      return jsonResponse(200, await readCollection(getPathPart(pathname, 3)));
+      const collectionName = getPathPart(pathname, 3);
+
+      if (collectionName === 'admin-notes' && !getAdminSession(request.headers)) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      return jsonResponse(200, await readCollection(collectionName));
     }
 
     if (pathname === '/api/labels') {
@@ -40,13 +55,14 @@ export async function handleHelixApiRequest(request) {
 
     if (pathname === '/api/admin/login' && method === 'POST') {
       const body = parseJsonBody(request.bodyText);
+      const role = body?.role === 'owner' ? 'owner' : 'admin';
 
-      if (!validateAdminPassword(body?.password)) {
+      if (!validateRolePassword(body?.password, role)) {
         return jsonResponse(401, { error: 'Invalid password' });
       }
 
-      return jsonResponse(200, getPublicSession({ role: 'owner' }), {
-        'Set-Cookie': createAdminSessionCookie(),
+      return jsonResponse(200, getPublicSession({ role }), {
+        'Set-Cookie': createAdminSessionCookie(role),
       });
     }
 
@@ -68,7 +84,7 @@ export async function handleHelixApiRequest(request) {
       return jsonResponse(200, await writeAsset(parseJsonBody(request.bodyText)));
     }
 
-    if (pathname === '/api/admin/peptidepedia/search' && method === 'GET') {
+    if ((pathname === '/api/admin/wiki/search' || pathname === '/api/admin/peptidepedia/search') && method === 'GET') {
       const session = getAdminSession(request.headers);
 
       if (!session) {
@@ -76,7 +92,7 @@ export async function handleHelixApiRequest(request) {
       }
 
       const url = new URL(request.url ?? request.pathname, 'http://localhost');
-      return jsonResponse(200, await searchPeptidepedia(url.searchParams.get('name') ?? ''));
+      return jsonResponse(200, await searchWiki(url.searchParams.get('name') ?? ''));
     }
 
     if (pathname === '/api/admin/vendor-price-lists/parse' && method === 'POST') {
@@ -183,12 +199,48 @@ function getPathPart(pathname, index) {
   return pathname.split('/')[index] ?? '';
 }
 
-async function searchPeptidepedia(name) {
+async function searchWiki(name) {
   const normalizedName = normalizeSearchText(name);
 
   if (!normalizedName) {
     return { match: null };
   }
+
+  const peptidepediaMatch = await searchPeptidepedia(name);
+  const pepPediaMatch = await searchPepPedia(name);
+  const wikiLinks = [];
+
+  if (peptidepediaMatch) {
+    wikiLinks.push(createWikiLink({
+      source: 'peptidepedia',
+      url: peptidepediaMatch.url,
+      status: 'verified',
+    }));
+  }
+
+  if (pepPediaMatch) {
+    wikiLinks.push(createWikiLink({
+      source: 'pep-pedia',
+      url: pepPediaMatch.url,
+      status: 'verified',
+    }));
+  }
+
+  if (wikiLinks.length === 0) {
+    return { match: null };
+  }
+
+  return {
+    match: {
+      name: peptidepediaMatch?.name ?? name.trim(),
+      categories: peptidepediaMatch?.categories ?? [],
+      wikiLinks,
+    },
+  };
+}
+
+async function searchPeptidepedia(name) {
+  const normalizedName = normalizeSearchText(name);
 
   const fallbackMatch = peptidepediaIndex.find((entry) =>
     normalizeSearchText(entry.name) === normalizedName ||
@@ -207,14 +259,30 @@ async function searchPeptidepedia(name) {
       );
 
       if (match) {
-        return { match };
+        return match;
       }
     }
   } catch {
     // Fall back to the bundled index when Peptidepedia is unreachable.
   }
 
-  return { match: fallbackMatch ?? null };
+  return fallbackMatch ?? null;
+}
+
+async function searchPepPedia(name) {
+  const normalizedName = normalizeSearchText(name);
+  const entries = await getPepPediaIndex();
+  const exactMatch = entries.find((entry) =>
+    normalizeSearchText(entry.slug) === normalizedName ||
+    normalizeSearchText(entry.slug.replace(/-/g, ' ')) === normalizedName ||
+    normalizeSearchText(entry.slug.replace(/-plus\b/g, '+')) === normalizedName,
+  );
+
+  if (exactMatch) {
+    return { url: exactMatch.url };
+  }
+
+  return null;
 }
 
 function extractPeptidepediaEntries(html) {
@@ -253,6 +321,25 @@ function stripHtml(value) {
 
 function normalizeSearchText(value) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function createWikiLink({ source, url, status }) {
+  return { source, url, status };
+}
+
+async function getPepPediaIndex() {
+  if (cachedPepPediaIndex) {
+    return cachedPepPediaIndex;
+  }
+
+  try {
+    const document = JSON.parse(await readFile(pepPediaIndexPath, 'utf8'));
+    cachedPepPediaIndex = Array.isArray(document.items) ? document.items : [];
+  } catch {
+    cachedPepPediaIndex = [];
+  }
+
+  return cachedPepPediaIndex;
 }
 
 const peptidepediaIndex = [

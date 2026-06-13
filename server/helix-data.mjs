@@ -16,6 +16,7 @@ const collections = new Map([
   ['label-templates', { fileName: 'label-templates.json', kind: 'items' }],
   ['vendors', { fileName: 'vendors.json', kind: 'items' }],
   ['vendor-price-lists', { fileName: 'vendor-price-lists.json', kind: 'items' }],
+  ['admin-notes', { fileName: 'admin-notes.json', kind: 'items' }],
   ['current-round', { fileName: 'current-round.json', kind: 'data' }],
   ['reports', { fileName: 'reports.json', kind: 'items' }],
 ]);
@@ -257,10 +258,12 @@ function normalizeDocument(collectionName, value) {
 
   if (value && typeof value === 'object' && !Array.isArray(value) && typeof value.version === 'number') {
     if (config.kind === 'items') {
+      const items = Array.isArray(value.items) ? value.items : [];
+
       return {
         version: value.version,
         updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date().toISOString(),
-        items: Array.isArray(value.items) ? value.items : [],
+        items: collectionName === 'peptides' ? items.map((item) => normalizePeptideItem(item)) : items,
       };
     }
 
@@ -272,7 +275,12 @@ function normalizeDocument(collectionName, value) {
   }
 
   if (config.kind === 'items') {
-    return createCollectionDocument(collectionName, Array.isArray(value) ? value : []);
+    const items = Array.isArray(value) ? value : [];
+
+    return createCollectionDocument(
+      collectionName,
+      collectionName === 'peptides' ? items.map((item) => normalizePeptideItem(item)) : items,
+    );
   }
 
   return createCollectionDocument(collectionName, value && typeof value === 'object' ? value : {});
@@ -292,16 +300,92 @@ async function enrichDocumentFromSeed(collectionName, config, document) {
 
     return {
       ...document,
-      items: document.items.map((item) => ({
-        ...seedItemsById.get(item.id),
-        ...item,
-        description: item.description || seedItemsById.get(item.id)?.description || '',
-        peptidepediaUrl: item.peptidepediaUrl || seedItemsById.get(item.id)?.peptidepediaUrl || '',
-      })),
+      items: document.items.map((item) => normalizePeptideItem(item, seedItemsById.get(item.id))),
     };
   } catch {
     return document;
   }
+}
+
+function normalizePeptideItem(item, seedItem = {}) {
+  const mergedItem = {
+    ...seedItem,
+    ...item,
+    description: item?.description || seedItem?.description || '',
+    wikiLinks: normalizePeptideWikiLinks(item, seedItem),
+  };
+
+  delete mergedItem.peptidepediaUrl;
+
+  return mergedItem;
+}
+
+function normalizePeptideWikiLinks(item = {}, seedItem = {}) {
+  const sourceLinks = Array.isArray(item?.wikiLinks)
+    ? item.wikiLinks
+    : item?.peptidepediaUrl
+      ? [createPeptidepediaWikiLink(item.peptidepediaUrl)]
+      : Array.isArray(seedItem?.wikiLinks)
+        ? seedItem.wikiLinks
+        : seedItem?.peptidepediaUrl
+          ? [createPeptidepediaWikiLink(seedItem.peptidepediaUrl)]
+          : [];
+  const links = sourceLinks
+    .map((link) => normalizePeptideWikiLink(link))
+    .filter(Boolean);
+
+  return sortPeptideWikiLinks(dedupePeptideWikiLinks(links));
+}
+
+function createPeptidepediaWikiLink(url) {
+  return {
+    source: 'peptidepedia',
+    url,
+    status: 'verified',
+  };
+}
+
+function normalizePeptideWikiLink(link) {
+  if (!link || typeof link !== 'object' || Array.isArray(link) || typeof link.url !== 'string' || !link.url.trim()) {
+    return null;
+  }
+
+  const source = ['peptidepedia', 'pep-pedia', 'other'].includes(link.source) ? link.source : 'other';
+  const status = ['verified', 'suggested', 'manual'].includes(link.status) ? link.status : 'manual';
+
+  return {
+    source,
+    url: link.url.trim(),
+    status,
+  };
+}
+
+function dedupePeptideWikiLinks(links) {
+  const seen = new Set();
+  const nextLinks = [];
+
+  for (const link of links) {
+    const key = `${link.source}:${link.url.toLowerCase()}`;
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    nextLinks.push(link);
+  }
+
+  return nextLinks;
+}
+
+function sortPeptideWikiLinks(links) {
+  const order = {
+    peptidepedia: 0,
+    'pep-pedia': 1,
+    other: 2,
+  };
+
+  return [...links].sort((first, second) => order[first.source] - order[second.source]);
 }
 
 function getDocumentPayload(collectionName, document) {

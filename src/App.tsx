@@ -238,7 +238,7 @@ const navItems = [
   { id: 'faqs', label: 'FAQs', path: '/faqs' },
 ] as const;
 
-type PageId = (typeof navItems)[number]['id'] | 'hxadmin';
+type PageId = (typeof navItems)[number]['id'] | 'hxadmin' | 'hxowner';
 type TestingTier = (typeof testingTiers)[number];
 type TestingIconType = TestingTier['panel'][number]['icon'];
 type AdminSession = {
@@ -249,8 +249,8 @@ type AdminSession = {
 function getPageFromPath(): PageId {
   const currentPath = window.location.pathname.replace(/\/$/, '') || '/';
 
-  if (currentPath === '/hxadmin') {
-    return 'hxadmin';
+  if (currentPath === '/hxadmin' || currentPath === '/hxowner') {
+    return currentPath.slice(1) as PageId;
   }
 
   const match = navItems.find((item) => item.path === currentPath);
@@ -304,9 +304,10 @@ function App() {
         {activePage === 'coas' && <CoasPage />}
         {activePage === 'labels' && <LabelsPage isAdmin={adminSession.isAuthenticated} />}
         {activePage === 'faqs' && <FaqsPage />}
-        {activePage === 'hxadmin' && (
+        {(activePage === 'hxadmin' || activePage === 'hxowner') && (
           <AdminPage
             session={adminSession}
+            loginRole={activePage === 'hxowner' ? 'owner' : 'admin'}
             onSessionChange={setAdminSession}
             onNavigate={navigateTo}
           />
@@ -763,23 +764,6 @@ async function fetchAdminSession(): Promise<AdminSession> {
 
   if (!response.ok) {
     return { isAuthenticated: false };
-  }
-
-  return normalizeAdminSession(await response.json());
-}
-
-async function loginAdmin(password: string): Promise<AdminSession> {
-  const response = await fetch('/api/admin/login', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ password }),
-  });
-
-  if (!response.ok) {
-    throw new Error('Admin login failed.');
   }
 
   return normalizeAdminSession(await response.json());

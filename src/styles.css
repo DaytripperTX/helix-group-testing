@@ -78,6 +78,27 @@ main {
   outline: 3px solid rgba(19, 244, 255, 0.24);
 }
 
+.admin-password-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+}
+
+.admin-login .admin-password-field input {
+  border-radius: 8px 0 0 8px;
+  border-right: 0;
+}
+
+.admin-login .admin-password-field button {
+  border: 1px solid #cbd9e2;
+  border-radius: 0 8px 8px 0;
+  padding: 0 13px;
+  background: #f8fbfd;
+  color: #07101f;
+  font-weight: 900;
+  cursor: pointer;
+}
+
 .admin-login button,
 .admin-actions button {
   border: 0;
@@ -418,6 +439,119 @@ main {
   gap: 7px;
 }
 
+.admin-wiki-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-wiki-links a {
+  border: 1px solid #d8e5ec;
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: #f8fbfd;
+  font-size: 0.82rem;
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.admin-wiki-editor {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #dce7ee;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.admin-wiki-editor__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  color: #334152;
+  font-weight: 850;
+}
+
+.admin-wiki-editor__header button,
+.admin-wiki-editor > button,
+.admin-wiki-row button {
+  border: 1px solid #c8d7e1;
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #ffffff;
+  color: #07101f;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.admin-wiki-row {
+  display: grid;
+  grid-template-columns: 140px 130px minmax(220px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.admin-wiki-row label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: #334152;
+  font-size: 0.86rem;
+  font-weight: 850;
+}
+
+.admin-wiki-row input,
+.admin-wiki-row select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd9e2;
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: #07101f;
+  font: inherit;
+}
+
+.admin-note-row p {
+  white-space: pre-wrap;
+}
+
+.admin-note-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-note-tags span {
+  border: 1px solid #d8e5ec;
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: #f8fbfd;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.admin-check-group {
+  border: 1px solid #dce7ee;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.admin-check-group legend {
+  padding: 0 4px;
+  color: #334152;
+}
+
+.admin-check-group label {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin-right: 14px;
+}
+
+.admin-check-group input {
+  width: auto;
+}
+
 .admin-batch-preview {
   display: grid;
   max-height: 320px;
@@ -479,20 +613,34 @@ main {
   font-weight: 850;
 }
 
-.admin-price-actions {
+.admin-price-toolbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
-.admin-price-actions button {
-  border: 1px solid #c8d7e1;
-  border-radius: 8px;
-  padding: 9px 12px;
-  background: #ffffff;
-  color: #07101f;
-  font-weight: 900;
-  cursor: pointer;
+.admin-price-toolbar .admin-price-meta {
+  margin: 0;
+}
+
+.admin-price-footer-actions {
+  align-items: center;
+}
+
+.admin-price-footer-main {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.admin-modal__actions .admin-delete-button {
+  border-color: #f0b8aa;
+  background: #fff4f1;
+  color: #9a341e;
 }
 
 .admin-price-table {
@@ -4083,7 +4231,30 @@ h2 {
     justify-content: flex-start;
   }
 
+  .admin-wiki-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-wiki-editor__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .admin-modal__actions {
     flex-direction: column-reverse;
+  }
+
+  .admin-price-footer-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-price-footer-main {
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  .admin-price-toolbar {
+    align-items: stretch;
   }
 }

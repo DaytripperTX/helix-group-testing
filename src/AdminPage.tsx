@@ -5,7 +5,8 @@ type AdminSession = {
   role?: 'owner' | 'admin';
 };
 
-type AdminTab = 'vendors' | 'peptides' | 'labels';
+type AdminRole = 'owner' | 'admin';
+type AdminTab = 'vendors' | 'peptides' | 'notes' | 'labels';
 
 type VendorPriceSheet =
   | { type: 'google-sheet'; url: string }
@@ -43,11 +44,21 @@ type VendorPriceList = {
   parsedAt: string;
 };
 
+type WikiSource = 'peptidepedia' | 'pep-pedia' | 'other';
+type WikiStatus = 'verified' | 'suggested' | 'manual';
+
+type WikiLink = {
+  source: WikiSource;
+  url: string;
+  status: WikiStatus;
+};
+
 type Peptide = {
   id: string;
   name: string;
   categories: string[];
   description?: string;
+  wikiLinks?: WikiLink[];
   peptidepediaUrl?: string;
 };
 
@@ -71,12 +82,28 @@ type PeptideForm = {
   name: string;
   categories: string;
   description: string;
-  peptidepediaUrl: string;
+  wikiLinks: WikiLink[];
 };
 
 type BatchPeptideRow = Peptide & {
   rowNumber: number;
   errors: string[];
+};
+
+type AdminNote = {
+  id: string;
+  sender: string;
+  subject: string;
+  body: string;
+  tags: AdminRole[];
+  createdAt: string;
+};
+
+type AdminNoteForm = {
+  sender: string;
+  subject: string;
+  body: string;
+  tags: AdminRole[];
 };
 
 const emptyVendorForm: VendorForm = {
@@ -94,24 +121,35 @@ const emptyPeptideForm: PeptideForm = {
   name: '',
   categories: '',
   description: '',
-  peptidepediaUrl: '',
+  wikiLinks: createDefaultWikiLinks(),
+};
+
+const emptyAdminNoteForm: AdminNoteForm = {
+  sender: '',
+  subject: '',
+  body: '',
+  tags: [],
 };
 
 function AdminPage({
   session,
+  loginRole,
   onSessionChange,
   onNavigate,
 }: {
   session: AdminSession;
+  loginRole: AdminRole;
   onSessionChange: (session: AdminSession) => void;
   onNavigate: (path: string) => void;
 }) {
   const [password, setPassword] = useState('');
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [status, setStatus] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>('vendors');
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [peptides, setPeptides] = useState<Peptide[]>([]);
+  const [adminNotes, setAdminNotes] = useState<AdminNote[]>([]);
   const [peptideCategories, setPeptideCategories] = useState<PeptideCategory[]>([]);
   const [priceLists, setPriceLists] = useState<VendorPriceList[]>([]);
   const [editingVendor, setEditingVendor] = useState<Vendor | null>(null);
@@ -121,9 +159,11 @@ function AdminPage({
   const [peptideForm, setPeptideForm] = useState<PeptideForm>(emptyPeptideForm);
   const [isPeptideModalOpen, setIsPeptideModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [batchRows, setBatchRows] = useState<BatchPeptideRow[]>([]);
+  const [noteForm, setNoteForm] = useState<AdminNoteForm>(emptyAdminNoteForm);
   const [batchStatus, setBatchStatus] = useState('');
-  const [peptidepediaStatus, setPeptidepediaStatus] = useState('');
+  const [wikiStatus, setWikiStatus] = useState('');
   const [priceListVendor, setPriceListVendor] = useState<Vendor | null>(null);
   const [priceListDraft, setPriceListDraft] = useState<VendorPriceList | null>(null);
   const [priceListFile, setPriceListFile] = useState<File | null>(null);
@@ -146,19 +186,25 @@ function AdminPage({
     () => [...peptides].sort((first, second) => first.name.localeCompare(second.name)),
     [peptides],
   );
+  const sortedAdminNotes = useMemo(
+    () => [...adminNotes].sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime()),
+    [adminNotes],
+  );
 
   const refreshAdminData = async () => {
-    const [nextVendors, nextPeptides, nextPriceLists, nextPeptideCategories] = await Promise.all([
+    const [nextVendors, nextPeptides, nextPriceLists, nextPeptideCategories, nextAdminNotes] = await Promise.all([
       fetchCollection<Vendor>('vendors'),
       fetchCollection<Peptide>('peptides'),
       fetchCollection<VendorPriceList>('vendor-price-lists'),
       fetchCollection<PeptideCategory>('peptide-categories'),
+      fetchCollection<AdminNote>('admin-notes'),
     ]);
 
     setVendors(nextVendors);
     setPeptides(nextPeptides);
     setPriceLists(nextPriceLists);
     setPeptideCategories(nextPeptideCategories);
+    setAdminNotes(nextAdminNotes);
   };
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
@@ -167,7 +213,7 @@ function AdminPage({
     setStatus('');
 
     try {
-      const nextSession = await loginAdmin(password);
+      const nextSession = await loginAdmin(password, loginRole);
 
       onSessionChange(nextSession);
       setPassword('');
@@ -443,8 +489,8 @@ function AdminPage({
 
   const openNewPeptideModal = () => {
     setEditingPeptide(null);
-    setPeptideForm(emptyPeptideForm);
-    setPeptidepediaStatus('');
+    setPeptideForm(createEmptyPeptideForm());
+    setWikiStatus('');
     setIsPeptideModalOpen(true);
     setStatus('');
   };
@@ -455,9 +501,9 @@ function AdminPage({
       name: peptide.name,
       categories: peptide.categories.join(', '),
       description: peptide.description ?? '',
-      peptidepediaUrl: peptide.peptidepediaUrl ?? '',
+      wikiLinks: createWikiLinkFormRows(peptide),
     });
-    setPeptidepediaStatus('');
+    setWikiStatus('');
     setIsPeptideModalOpen(true);
     setStatus('');
   };
@@ -472,10 +518,16 @@ function AdminPage({
       return;
     }
 
+    const existingPeptide = findByNormalizedName(peptides, name);
+
+    if (editingPeptide && existingPeptide && existingPeptide.id !== editingPeptide.id) {
+      setStatus('A different peptide already uses that name.');
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
-      const existingPeptide = findByNormalizedName(peptides, name);
       const id = editingPeptide?.id ?? existingPeptide?.id ?? createUniqueId(name, peptides);
       const normalizedCategories = normalizeCategories(peptideForm.categories);
       const nextPeptideCategories = await ensurePeptideCategories(normalizedCategories, peptideCategories);
@@ -484,7 +536,7 @@ function AdminPage({
         name,
         categories: normalizedCategories,
         description: sanitizeText(peptideForm.description),
-        peptidepediaUrl: sanitizeUrl(peptideForm.peptidepediaUrl),
+        wikiLinks: normalizeWikiLinks({ wikiLinks: peptideForm.wikiLinks }),
       };
 
       const nextPeptides = await saveCollectionItem<Peptide>('peptides', peptide);
@@ -515,36 +567,184 @@ function AdminPage({
     }
   };
 
-  const autofillPeptidepediaUrl = async () => {
-    const name = peptideForm.name.trim();
+  const fillMissingWikiLinksForPeptides = async () => {
+    const candidates = peptides.filter((peptide) => {
+      const links = normalizeWikiLinks(peptide);
 
-    if (!name) {
-      setPeptidepediaStatus('Enter a peptide name first.');
+      return !links.some((link) => link.source === 'peptidepedia') || !links.some((link) => link.source === 'pep-pedia');
+    });
+
+    if (candidates.length === 0) {
+      setStatus('All peptides already have primary wiki links.');
       return;
     }
 
-    setPeptidepediaStatus('Searching Peptidepedia...');
+    setIsSubmitting(true);
+    setStatus(`Searching wiki links for ${candidates.length} peptides...`);
 
     try {
-      const match = await searchPeptidepedia(name);
+      let nextPeptides = peptides;
+      let updatedCount = 0;
+
+      for (const peptide of candidates) {
+        const match = await searchWikiLinks(peptide.name);
+
+        if (!match) {
+          continue;
+        }
+
+        const wikiLinks = mergeWikiLinks(normalizeWikiLinks(peptide), match.wikiLinks);
+        const changed = JSON.stringify(wikiLinks) !== JSON.stringify(normalizeWikiLinks(peptide));
+
+        if (!changed) {
+          continue;
+        }
+
+        nextPeptides = await saveCollectionItem<Peptide>('peptides', {
+          ...peptide,
+          wikiLinks,
+        });
+        updatedCount += 1;
+      }
+
+      setPeptides(nextPeptides);
+      setStatus(updatedCount > 0 ? `Wiki links updated for ${updatedCount} peptides.` : 'No new wiki links found.');
+    } catch (error) {
+      console.error(error);
+      setStatus('Batch wiki link search failed.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const updateWikiLink = (index: number, field: keyof WikiLink, value: string) => {
+    setPeptideForm((currentForm) => {
+      const wikiLinks = currentForm.wikiLinks.map((link, currentIndex) => {
+        if (currentIndex !== index) {
+          return link;
+        }
+
+        const nextLink = {
+          ...link,
+          [field]: value,
+        };
+
+        if (field === 'url') {
+          return {
+            ...nextLink,
+            source: inferWikiSourceFromUrl(value),
+          };
+        }
+
+        return nextLink;
+      });
+
+      return { ...currentForm, wikiLinks };
+    });
+  };
+
+  const addWikiLink = () => {
+    setPeptideForm((currentForm) => ({
+      ...currentForm,
+      wikiLinks: [
+        ...currentForm.wikiLinks,
+        createWikiLink({ source: 'other', status: 'manual', url: '' }),
+      ],
+    }));
+  };
+
+  const removeWikiLink = (index: number) => {
+    setPeptideForm((currentForm) => {
+      const wikiLinks = currentForm.wikiLinks.filter((_, currentIndex) => currentIndex !== index);
+
+      return {
+        ...currentForm,
+        wikiLinks: wikiLinks.length > 0 ? wikiLinks : [createWikiLink({ source: 'other', status: 'manual', url: '' })],
+      };
+    });
+  };
+
+  const autofillWikiLinks = async () => {
+    const name = peptideForm.name.trim();
+
+    if (!name) {
+      setWikiStatus('Enter a peptide name first.');
+      return;
+    }
+
+    setWikiStatus('Searching wiki sources...');
+
+    try {
+      const match = await searchWikiLinks(name);
 
       if (!match) {
-        setPeptidepediaStatus('No Peptidepedia match found.');
+        setWikiStatus('No wiki match found.');
         return;
       }
 
       setPeptideForm((currentForm) => ({
         ...currentForm,
-        peptidepediaUrl: match.url,
+        wikiLinks: mergeWikiLinks(currentForm.wikiLinks, match.wikiLinks),
         categories: mergeCategoryText(currentForm.categories, match.categories ?? [], peptideCategories),
       }));
-      setPeptidepediaStatus(
-        match.categories?.length
-          ? `Matched ${match.name}. Categories suggested: ${match.categories.join(', ')}.`
-          : `Matched ${match.name}.`,
-      );
+      const suggestedLinks = match.wikiLinks.filter((link) => link.status === 'suggested');
+      const categoryText = match.categories?.length
+        ? ` Categories suggested: ${match.categories.join(', ')}.`
+        : '';
+      const warningText = suggestedLinks.length > 0
+        ? ' Suggested wiki links should be verified before trusting.'
+        : '';
+
+      setWikiStatus(`Matched ${match.name}.${categoryText}${warningText}`);
     } catch {
-      setPeptidepediaStatus('Peptidepedia search failed.');
+      setWikiStatus('Wiki search failed.');
+    }
+  };
+
+  const openNewNoteModal = () => {
+    setNoteForm({
+      ...emptyAdminNoteForm,
+      sender: session.role === 'owner' ? 'Owner' : 'Admin',
+    });
+    setStatus('');
+    setIsNoteModalOpen(true);
+  };
+
+  const saveAdminNote = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const sender = sanitizeText(noteForm.sender);
+    const subject = sanitizeText(noteForm.subject);
+    const body = noteForm.body.trim();
+
+    if (!sender || !subject || !body) {
+      setStatus('Sender, subject, and note are required.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const createdAt = new Date().toISOString();
+      const note: AdminNote = {
+        id: createUniqueId(`${subject}-${createdAt}`, adminNotes),
+        sender,
+        subject,
+        body,
+        tags: normalizeNoteTags(noteForm.tags),
+        createdAt,
+      };
+
+      const nextNotes = await saveCollectionItem<AdminNote>('admin-notes', note);
+
+      setAdminNotes(nextNotes);
+      setIsNoteModalOpen(false);
+      setStatus('Note saved.');
+    } catch (error) {
+      console.error(error);
+      setStatus('Note could not be saved.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -603,7 +803,7 @@ function AdminPage({
           name: normalizePeptideName(row.name),
           categories: row.categories,
           description: row.description ?? '',
-          peptidepediaUrl: row.peptidepediaUrl ?? '',
+          wikiLinks: normalizeWikiLinks(row),
         };
 
         nextPeptides = await saveCollectionItem<Peptide>('peptides', peptide);
@@ -628,17 +828,26 @@ function AdminPage({
       <section className="admin-page admin-page--login" aria-labelledby="admin-title">
         <div className="admin-page__panel">
           <p className="eyebrow">Admin</p>
-          <h1 id="admin-title">Helix admin</h1>
+          <h1 id="admin-title">{loginRole === 'owner' ? 'Helix owner' : 'Helix admin'}</h1>
           <form className="admin-login" onSubmit={login}>
             <label>
-              <span>Password</span>
-              <input
-                type="password"
-                value={password}
-                autoComplete="current-password"
-                autoFocus
-                onChange={(event) => setPassword(event.target.value)}
-              />
+              <span>{loginRole === 'owner' ? 'Owner password' : 'Admin password'}</span>
+              <span className="admin-password-field">
+                <input
+                  type={isPasswordVisible ? 'text' : 'password'}
+                  value={password}
+                  autoComplete="current-password"
+                  autoFocus
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+                <button
+                  type="button"
+                  aria-label={isPasswordVisible ? 'Hide password' : 'Show password'}
+                  onClick={() => setIsPasswordVisible((currentValue) => !currentValue)}
+                >
+                  {isPasswordVisible ? 'Hide' : 'Show'}
+                </button>
+              </span>
             </label>
             <button type="submit" disabled={isSubmitting || password.trim().length === 0}>
               Log In
@@ -665,7 +874,7 @@ function AdminPage({
         </header>
 
         <nav className="admin-tabs" aria-label="Admin sections">
-          {(['vendors', 'peptides', 'labels'] as AdminTab[]).map((tab) => (
+          {(['vendors', 'peptides', 'notes', 'labels'] as AdminTab[]).map((tab) => (
             <button
               className={activeTab === tab ? 'is-selected' : ''}
               type="button"
@@ -730,12 +939,14 @@ function AdminPage({
               count={peptides.length}
               actionLabel="Add Peptide"
               secondaryActionLabel="Batch Import"
+              tertiaryActionLabel="Find Missing Wiki Links"
               onAction={openNewPeptideModal}
               onSecondaryAction={() => {
                 setBatchRows([]);
                 setBatchStatus('');
                 setIsBatchModalOpen(true);
               }}
+              onTertiaryAction={() => void fillMissingWikiLinksForPeptides()}
             />
             <div className="admin-table">
               {sortedPeptides.map((peptide) => (
@@ -745,14 +956,8 @@ function AdminPage({
                     <span>{peptide.categories.length > 0 ? peptide.categories.join(', ') : 'No categories'}</span>
                     {peptide.description && <p>{peptide.description}</p>}
                   </div>
-                  <div>
-                    {peptide.peptidepediaUrl ? (
-                      <a href={peptide.peptidepediaUrl} target="_blank" rel="noreferrer">
-                        Peptidepedia
-                      </a>
-                    ) : (
-                      <span>No reference link</span>
-                    )}
+                  <div className="admin-wiki-links">
+                    {formatWikiLinks(peptide)}
                   </div>
                   <div className="admin-row__actions">
                     <button type="button" onClick={() => openEditPeptideModal(peptide)}>
@@ -765,6 +970,39 @@ function AdminPage({
                 </article>
               ))}
               {peptides.length === 0 && <p className="admin-empty">No peptides yet.</p>}
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'notes' && (
+          <section className="admin-panel" aria-labelledby="notes-title">
+            <AdminPanelHeader
+              title="Admin Notes"
+              count={adminNotes.length}
+              actionLabel="Add Note"
+              onAction={openNewNoteModal}
+            />
+            {hasRoleTaggedNotes(sortedAdminNotes, session.role) && (
+              <p className="admin-status admin-status--panel">
+                Notes tagged @{session.role} need attention.
+              </p>
+            )}
+            <div className="admin-table">
+              {sortedAdminNotes.map((note) => (
+                <article className="admin-row admin-note-row" key={note.id}>
+                  <div>
+                    <strong>{note.subject}</strong>
+                    <span>
+                      From {note.sender} - {formatDateTime(note.createdAt)}
+                    </span>
+                    <p>{note.body}</p>
+                  </div>
+                  <div className="admin-note-tags">
+                    {note.tags.length > 0 ? note.tags.map((tag) => <span key={tag}>@{tag}</span>) : <span>No role tags</span>}
+                  </div>
+                </article>
+              ))}
+              {adminNotes.length === 0 && <p className="admin-empty">No notes yet.</p>}
             </div>
           </section>
         )}
@@ -836,8 +1074,8 @@ function AdminPage({
               value={peptideForm.name}
               required
               onBlur={() => {
-                if (!peptideForm.peptidepediaUrl.trim()) {
-                  void autofillPeptidepediaUrl();
+                if (!hasWikiLinkUrl(peptideForm.wikiLinks)) {
+                  void autofillWikiLinks();
                 }
               }}
               onChange={(value) => setPeptideForm({ ...peptideForm, name: value })}
@@ -858,20 +1096,55 @@ function AdminPage({
               </datalist>
             </label>
             <AdminTextArea label="Description" value={peptideForm.description} onChange={(value) => setPeptideForm({ ...peptideForm, description: value })} />
-            <div className="admin-field admin-field--with-action">
-              <label>
-                <span>Peptidepedia URL</span>
-                <input
-                  type="url"
-                  value={peptideForm.peptidepediaUrl}
-                  onChange={(event) => setPeptideForm({ ...peptideForm, peptidepediaUrl: event.target.value })}
-                />
-              </label>
-              <button type="button" onClick={() => void autofillPeptidepediaUrl()}>
-                Find Link
+            <div className="admin-wiki-editor">
+              <div className="admin-wiki-editor__header">
+                <span>Wiki Links</span>
+                <button type="button" onClick={() => void autofillWikiLinks()}>
+                  Find Wiki Links
+                </button>
+              </div>
+              {peptideForm.wikiLinks.map((link, index) => (
+                <div className="admin-wiki-row" key={`${link.source}-${index}`}>
+                  <label>
+                    <span>Source</span>
+                    <select
+                      value={link.source}
+                      onChange={(event) => updateWikiLink(index, 'source', event.target.value as WikiSource)}
+                    >
+                      <option value="peptidepedia">Peptidepedia</option>
+                      <option value="pep-pedia">Pep-Pedia</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Status</span>
+                    <select
+                      value={link.status}
+                      onChange={(event) => updateWikiLink(index, 'status', event.target.value as WikiStatus)}
+                    >
+                      <option value="verified">Verified</option>
+                      <option value="suggested">Suggested</option>
+                      <option value="manual">Manual</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>URL</span>
+                    <input
+                      type="url"
+                      value={link.url}
+                      onChange={(event) => updateWikiLink(index, 'url', event.target.value)}
+                    />
+                  </label>
+                  <button type="button" onClick={() => removeWikiLink(index)}>
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <button type="button" onClick={addWikiLink}>
+                Add Wiki Link
               </button>
             </div>
-            {peptidepediaStatus && <p className="admin-status">{peptidepediaStatus}</p>}
+            {wikiStatus && <p className="admin-status">{wikiStatus}</p>}
             <div className="admin-modal__actions">
               <button type="button" onClick={() => setIsPeptideModalOpen(false)}>
                 Cancel
@@ -895,7 +1168,7 @@ function AdminPage({
                 onChange={loadPeptideBatch}
               />
             </label>
-            <p className="admin-help">Accepted columns: name, categories, description, peptidepediaUrl.</p>
+            <p className="admin-help">Accepted columns: name, categories, description, wikiLinks, peptidepediaUrl, pepPediaUrl.</p>
             {batchStatus && <p className="admin-status">{batchStatus}</p>}
             {batchRows.length > 0 && (
               <div className="admin-batch-preview">
@@ -917,6 +1190,43 @@ function AdminPage({
               </button>
             </div>
           </div>
+        </AdminModal>
+      )}
+
+      {isNoteModalOpen && (
+        <AdminModal title="Add admin note" onClose={() => setIsNoteModalOpen(false)}>
+          <form className="admin-form" onSubmit={saveAdminNote}>
+            <AdminTextField label="Sender" value={noteForm.sender} required onChange={(value) => setNoteForm({ ...noteForm, sender: value })} />
+            <AdminTextField label="Subject" value={noteForm.subject} required onChange={(value) => setNoteForm({ ...noteForm, subject: value })} />
+            <AdminTextArea label="Note" value={noteForm.body} onChange={(value) => setNoteForm({ ...noteForm, body: value })} />
+            <fieldset className="admin-field admin-check-group">
+              <legend>Role tags</legend>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={noteForm.tags.includes('admin')}
+                  onChange={(event) => setNoteForm({ ...noteForm, tags: toggleNoteTag(noteForm.tags, 'admin', event.target.checked) })}
+                />
+                <span>@admin</span>
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={noteForm.tags.includes('owner')}
+                  onChange={(event) => setNoteForm({ ...noteForm, tags: toggleNoteTag(noteForm.tags, 'owner', event.target.checked) })}
+                />
+                <span>@owner</span>
+              </label>
+            </fieldset>
+            <div className="admin-modal__actions">
+              <button type="button" onClick={() => setIsNoteModalOpen(false)}>
+                Cancel
+              </button>
+              <button className="admin-primary-button" type="submit" disabled={isSubmitting}>
+                Save Note
+              </button>
+            </div>
+          </form>
         </AdminModal>
       )}
 
@@ -946,15 +1256,12 @@ function AdminPage({
 
             {priceListDraft && (
               <>
-                <div className="admin-price-meta">
-                  <span>{priceListDraft.items.length} rows</span>
-                  <span>Parsed {formatDateTime(priceListDraft.parsedAt)}</span>
-                </div>
-                <div className="admin-price-actions">
-                  <button type="button" onClick={refreshPriceListPeptideLinks}>
-                    Refresh Peptide Links
-                  </button>
-                  <button type="button" onClick={() => void deleteVendorPriceList()}>
+                <div className="admin-price-toolbar">
+                  <div className="admin-price-meta">
+                    <span>{priceListDraft.items.length} rows</span>
+                    <span>Parsed {formatDateTime(priceListDraft.parsedAt)}</span>
+                  </div>
+                  <button className="admin-delete-button" type="button" onClick={() => void deleteVendorPriceList()}>
                     Delete Entire Price List
                   </button>
                 </div>
@@ -985,13 +1292,20 @@ function AdminPage({
               </>
             )}
 
-            <div className="admin-modal__actions">
+            <div className="admin-modal__actions admin-price-footer-actions">
               <button type="button" onClick={() => setPriceListVendor(null)}>
                 Close
               </button>
-              <button className="admin-primary-button" type="button" disabled={isSubmitting || !priceListDraft} onClick={() => void saveVendorPriceList()}>
-                Save Price List
-              </button>
+              <div className="admin-price-footer-main">
+                {priceListDraft && (
+                  <button type="button" onClick={refreshPriceListPeptideLinks}>
+                    Refresh Peptide Links
+                  </button>
+                )}
+                <button className="admin-primary-button" type="button" disabled={isSubmitting || !priceListDraft} onClick={() => void saveVendorPriceList()}>
+                  Save Price List
+                </button>
+              </div>
             </div>
           </div>
         </AdminModal>
@@ -1005,15 +1319,19 @@ function AdminPanelHeader({
   count,
   actionLabel,
   secondaryActionLabel,
+  tertiaryActionLabel,
   onAction,
   onSecondaryAction,
+  onTertiaryAction,
 }: {
   title: string;
   count: number;
   actionLabel: string;
   secondaryActionLabel?: string;
+  tertiaryActionLabel?: string;
   onAction: () => void;
   onSecondaryAction?: () => void;
+  onTertiaryAction?: () => void;
 }) {
   return (
     <div className="admin-panel__header">
@@ -1025,6 +1343,11 @@ function AdminPanelHeader({
         {secondaryActionLabel && onSecondaryAction && (
           <button type="button" onClick={onSecondaryAction}>
             {secondaryActionLabel}
+          </button>
+        )}
+        {tertiaryActionLabel && onTertiaryAction && (
+          <button type="button" onClick={onTertiaryAction}>
+            {tertiaryActionLabel}
           </button>
         )}
         <button className="admin-primary-button" type="button" onClick={onAction}>
@@ -1106,14 +1429,14 @@ function AdminTextArea({
   );
 }
 
-async function loginAdmin(password: string): Promise<AdminSession> {
+async function loginAdmin(password: string, role: AdminRole): Promise<AdminSession> {
   const response = await fetch('/api/admin/login', {
     method: 'POST',
     credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ password, role }),
   });
 
   if (!response.ok) {
@@ -1287,17 +1610,221 @@ async function uploadVendorPriceSheetFile(file: File): Promise<VendorPriceSheet>
   return (await response.json()) as VendorPriceSheet;
 }
 
-async function searchPeptidepedia(name: string): Promise<{ name: string; url: string; categories?: string[] } | null> {
-  const response = await fetch(`/api/admin/peptidepedia/search?name=${encodeURIComponent(name)}`, {
+async function searchWikiLinks(name: string): Promise<{ name: string; wikiLinks: WikiLink[]; categories?: string[] } | null> {
+  const response = await fetch(`/api/admin/wiki/search?name=${encodeURIComponent(name)}`, {
     credentials: 'same-origin',
   });
 
   if (!response.ok) {
-    throw new Error('Peptidepedia search failed.');
+    throw new Error('Wiki search failed.');
   }
 
-  const result = (await response.json()) as { match?: { name: string; url: string; categories?: string[] } | null };
+  const result = (await response.json()) as { match?: { name: string; wikiLinks: WikiLink[]; categories?: string[] } | null };
   return result.match ?? null;
+}
+
+function createEmptyPeptideForm(): PeptideForm {
+  return {
+    name: '',
+    categories: '',
+    description: '',
+    wikiLinks: createDefaultWikiLinks(),
+  };
+}
+
+function createDefaultWikiLinks() {
+  return [
+    createWikiLink({ source: 'peptidepedia', status: 'manual', url: '' }),
+    createWikiLink({ source: 'pep-pedia', status: 'manual', url: '' }),
+  ];
+}
+
+function createWikiLink(link: Partial<WikiLink>): WikiLink {
+  const source = link.source ?? 'other';
+
+  return {
+    source,
+    url: sanitizeUrl(link.url ?? ''),
+    status: link.status ?? 'manual',
+  };
+}
+
+function createWikiLinkFormRows(peptide: Partial<Peptide>) {
+  const links = normalizeWikiLinks(peptide);
+
+  return links.length > 0 ? links : createDefaultWikiLinks();
+}
+
+function normalizeWikiLinks(peptide: { wikiLinks?: unknown; peptidepediaUrl?: string }) {
+  const rawLinks = Array.isArray(peptide.wikiLinks) ? peptide.wikiLinks : [];
+  const links = rawLinks
+    .map((link) => normalizeWikiLink(link))
+    .filter((link): link is WikiLink => Boolean(link));
+
+  if (links.length === 0 && peptide.peptidepediaUrl) {
+    const legacyLink = createWikiLink({
+      source: 'peptidepedia',
+      url: peptide.peptidepediaUrl,
+      status: 'verified',
+    });
+
+    if (legacyLink.url) {
+      links.push(legacyLink);
+    }
+  }
+
+  return sortWikiLinks(dedupeWikiLinks(links));
+}
+
+function normalizeWikiLink(value: unknown): WikiLink | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const link = value as Partial<WikiLink>;
+  const url = sanitizeUrl(String(link.url ?? ''));
+
+  if (!url) {
+    return null;
+  }
+
+  const source = normalizeWikiSource(link.source);
+  const status = normalizeWikiStatus(link.status);
+
+  return createWikiLink({
+    source,
+    url,
+    status,
+  });
+}
+
+function normalizeWikiSource(value: unknown): WikiSource {
+  return value === 'peptidepedia' || value === 'pep-pedia' || value === 'other'
+    ? value
+    : 'other';
+}
+
+function inferWikiSourceFromUrl(url: string): WikiSource {
+  try {
+    const host = new URL(sanitizeUrl(url)).hostname.replace(/^www\./, '');
+
+    if (host === 'peptidepedia.org') {
+      return 'peptidepedia';
+    }
+
+    if (host === 'pep-pedia.org') {
+      return 'pep-pedia';
+    }
+  } catch {
+    // Fall through to other for incomplete or invalid URLs while editing.
+  }
+
+  return 'other';
+}
+
+function normalizeWikiStatus(value: unknown): WikiStatus {
+  return value === 'verified' || value === 'suggested' || value === 'manual'
+    ? value
+    : 'manual';
+}
+
+function dedupeWikiLinks(links: WikiLink[]) {
+  const seen = new Set<string>();
+  const nextLinks: WikiLink[] = [];
+
+  for (const link of links) {
+    const key = `${link.source}:${normalizeName(link.url)}`;
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    nextLinks.push(link);
+  }
+
+  return nextLinks;
+}
+
+function sortWikiLinks(links: WikiLink[]) {
+  const order: Record<WikiSource, number> = {
+    peptidepedia: 0,
+    'pep-pedia': 1,
+    other: 2,
+  };
+
+  return [...links].sort((first, second) => order[first.source] - order[second.source]);
+}
+
+function mergeWikiLinks(currentLinks: WikiLink[], incomingLinks: WikiLink[]) {
+  const nextLinks = normalizeWikiLinks({ wikiLinks: currentLinks });
+
+  for (const incomingLink of normalizeWikiLinks({ wikiLinks: incomingLinks })) {
+    const existingIndex = nextLinks.findIndex((link) => link.source === incomingLink.source);
+
+    if (existingIndex >= 0) {
+      nextLinks[existingIndex] = incomingLink;
+    } else {
+      nextLinks.push(incomingLink);
+    }
+  }
+
+  return createWikiLinkFormRows({ wikiLinks: nextLinks });
+}
+
+function hasWikiLinkUrl(wikiLinks: WikiLink[]) {
+  return normalizeWikiLinks({ wikiLinks }).length > 0;
+}
+
+function getWikiSourceLabel(source: WikiSource) {
+  return {
+    peptidepedia: 'Peptidepedia',
+    'pep-pedia': 'Pep-Pedia',
+    other: 'Wiki',
+  }[source];
+}
+
+function formatWikiLinks(peptide: Peptide): ReactNode {
+  const links = normalizeWikiLinks(peptide);
+
+  if (links.length === 0) {
+    return <span>No wiki links</span>;
+  }
+
+  return links.map((link) => (
+    <a href={link.url} target="_blank" rel="noreferrer" key={`${link.source}-${link.url}`}>
+      {getWikiSourceLabel(link.source)}
+      {link.status === 'suggested' ? ' (suggested)' : ''}
+    </a>
+  ));
+}
+
+function normalizeNoteTags(tags: AdminRole[]) {
+  const nextTags: AdminRole[] = [];
+
+  for (const tag of tags) {
+    if ((tag === 'admin' || tag === 'owner') && !nextTags.includes(tag)) {
+      nextTags.push(tag);
+    }
+  }
+
+  return nextTags;
+}
+
+function toggleNoteTag(tags: AdminRole[], tag: AdminRole, checked: boolean) {
+  const nextTags = new Set(tags);
+
+  if (checked) {
+    nextTags.add(tag);
+  } else {
+    nextTags.delete(tag);
+  }
+
+  return normalizeNoteTags([...nextTags]);
+}
+
+function hasRoleTaggedNotes(notes: AdminNote[], role: AdminSession['role']) {
+  return Boolean(role && notes.some((note) => note.tags.includes(role)));
 }
 
 async function parsePeptideSpreadsheet(file: File, existingPeptides: Peptide[]) {
@@ -1325,7 +1852,7 @@ async function parsePeptideSpreadsheet(file: File, existingPeptides: Peptide[]) 
       name,
       categories: normalizeCategories(normalizedRow.categories),
       description: sanitizeText(normalizedRow.description),
-      peptidepediaUrl: sanitizeUrl(normalizedRow.peptidepediaUrl),
+      wikiLinks: normalizedRow.wikiLinks,
       errors: [],
     };
 
@@ -1341,6 +1868,10 @@ async function parsePeptideSpreadsheet(file: File, existingPeptides: Peptide[]) 
       }
     }
 
+    if (normalizedRow.wikiLinksError) {
+      peptide.errors.push(normalizedRow.wikiLinksError);
+    }
+
     return peptide;
   });
 }
@@ -1350,11 +1881,61 @@ function normalizeSpreadsheetRow(row: Record<string, unknown>) {
     Object.entries(row).map(([key, value]) => [key.trim().toLowerCase().replace(/[^a-z0-9]/g, ''), String(value ?? '').trim()]),
   );
 
+  const wikiLinksResult = parseSpreadsheetWikiLinks({
+    wikiLinks: fields.get('wikilinks') ?? '',
+    peptidepediaUrl: fields.get('peptidepediaurl') ?? fields.get('peptidepedia') ?? fields.get('url') ?? '',
+    pepPediaUrl: fields.get('peppediaurl') ?? fields.get('peppedia') ?? '',
+  });
+
   return {
     name: fields.get('name') ?? '',
     categories: fields.get('categories') ?? fields.get('category') ?? '',
     description: fields.get('description') ?? '',
-    peptidepediaUrl: fields.get('peptidepediaurl') ?? fields.get('peptidepedia') ?? fields.get('url') ?? '',
+    wikiLinks: wikiLinksResult.wikiLinks,
+    wikiLinksError: wikiLinksResult.error,
+  };
+}
+
+function parseSpreadsheetWikiLinks({
+  wikiLinks,
+  peptidepediaUrl,
+  pepPediaUrl,
+}: {
+  wikiLinks: string;
+  peptidepediaUrl: string;
+  pepPediaUrl: string;
+}) {
+  const links: WikiLink[] = [];
+  let error = '';
+
+  if (wikiLinks.trim()) {
+    try {
+      const parsedLinks = JSON.parse(wikiLinks);
+      links.push(...normalizeWikiLinks({ wikiLinks: parsedLinks }));
+    } catch {
+      error = 'Invalid wikiLinks JSON';
+    }
+  }
+
+  if (peptidepediaUrl.trim()) {
+    links.push(createWikiLink({
+      source: 'peptidepedia',
+      url: peptidepediaUrl,
+      status: 'manual',
+    }));
+  }
+
+  if (pepPediaUrl.trim()) {
+    links.push(createWikiLink({
+      source: 'pep-pedia',
+      url: pepPediaUrl,
+      status: 'manual',
+    }));
+  }
+
+  return {
+    wikiLinks: normalizeWikiLinks({ wikiLinks: links }),
+    error,
   };
 }
 
@@ -1550,7 +2131,7 @@ function formatPriceSheet(
   priceSheet: VendorPriceSheet | undefined,
   priceListSource?: VendorPriceList['source'],
 ) {
-  const displaySource = priceSheet ?? (isVendorPriceSheetSource(priceListSource) ? priceListSource : undefined);
+  const displaySource = priceSheet ?? priceListSource;
 
   if (!displaySource) {
     return 'No price sheet';

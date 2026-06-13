@@ -1,0 +1,331 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-12T16:44:28.227Z",
+  "source": "local-reference-assets/pep-pedia-sitemap.xml",
+  "items": [
+    {
+      "slug": "5-amino-1mq",
+      "url": "https://pep-pedia.org/peptides/5-amino-1mq"
+    },
+    {
+      "slug": "adalank",
+      "url": "https://pep-pedia.org/peptides/adalank"
+    },
+    {
+      "slug": "adamax",
+      "url": "https://pep-pedia.org/peptides/adamax"
+    },
+    {
+      "slug": "adipotide",
+      "url": "https://pep-pedia.org/peptides/adipotide"
+    },
+    {
+      "slug": "ahk-cu",
+      "url": "https://pep-pedia.org/peptides/ahk-cu"
+    },
+    {
+      "slug": "aod-9604",
+      "url": "https://pep-pedia.org/peptides/aod-9604"
+    },
+    {
+      "slug": "ara-290",
+      "url": "https://pep-pedia.org/peptides/ara-290"
+    },
+    {
+      "slug": "bioglutide",
+      "url": "https://pep-pedia.org/peptides/bioglutide"
+    },
+    {
+      "slug": "bpc-157",
+      "url": "https://pep-pedia.org/peptides/bpc-157"
+    },
+    {
+      "slug": "bromantane",
+      "url": "https://pep-pedia.org/peptides/bromantane"
+    },
+    {
+      "slug": "cagrilintide",
+      "url": "https://pep-pedia.org/peptides/cagrilintide"
+    },
+    {
+      "slug": "cardiogen",
+      "url": "https://pep-pedia.org/peptides/cardiogen"
+    },
+    {
+      "slug": "cartalax",
+      "url": "https://pep-pedia.org/peptides/cartalax"
+    },
+    {
+      "slug": "cerebrolysin",
+      "url": "https://pep-pedia.org/peptides/cerebrolysin"
+    },
+    {
+      "slug": "cjc-1295",
+      "url": "https://pep-pedia.org/peptides/cjc-1295"
+    },
+    {
+      "slug": "cjc-1295-dac",
+      "url": "https://pep-pedia.org/peptides/cjc-1295-dac"
+    },
+    {
+      "slug": "cjc-ipa-protocol",
+      "url": "https://pep-pedia.org/peptides/cjc-ipa-protocol"
+    },
+    {
+      "slug": "cyclic-glycine-proline",
+      "url": "https://pep-pedia.org/peptides/cyclic-glycine-proline"
+    },
+    {
+      "slug": "dihexa",
+      "url": "https://pep-pedia.org/peptides/dihexa"
+    },
+    {
+      "slug": "dsip",
+      "url": "https://pep-pedia.org/peptides/dsip"
+    },
+    {
+      "slug": "eloralintide",
+      "url": "https://pep-pedia.org/peptides/eloralintide"
+    },
+    {
+      "slug": "epitalon",
+      "url": "https://pep-pedia.org/peptides/epitalon"
+    },
+    {
+      "slug": "fat-blaster",
+      "url": "https://pep-pedia.org/peptides/fat-blaster"
+    },
+    {
+      "slug": "follistatin-344",
+      "url": "https://pep-pedia.org/peptides/follistatin-344"
+    },
+    {
+      "slug": "foxo4-dri",
+      "url": "https://pep-pedia.org/peptides/foxo4-dri"
+    },
+    {
+      "slug": "ghk-cu",
+      "url": "https://pep-pedia.org/peptides/ghk-cu"
+    },
+    {
+      "slug": "ghrp-6",
+      "url": "https://pep-pedia.org/peptides/ghrp-6"
+    },
+    {
+      "slug": "glow",
+      "url": "https://pep-pedia.org/peptides/glow"
+    },
+    {
+      "slug": "glutathione",
+      "url": "https://pep-pedia.org/peptides/glutathione"
+    },
+    {
+      "slug": "hcg",
+      "url": "https://pep-pedia.org/peptides/hcg"
+    },
+    {
+      "slug": "hexarelin",
+      "url": "https://pep-pedia.org/peptides/hexarelin"
+    },
+    {
+      "slug": "hgh",
+      "url": "https://pep-pedia.org/peptides/hgh"
+    },
+    {
+      "slug": "igf-1-lr3",
+      "url": "https://pep-pedia.org/peptides/igf-1-lr3"
+    },
+    {
+      "slug": "ipamorelin",
+      "url": "https://pep-pedia.org/peptides/ipamorelin"
+    },
+    {
+      "slug": "kisspeptin",
+      "url": "https://pep-pedia.org/peptides/kisspeptin"
+    },
+    {
+      "slug": "klow",
+      "url": "https://pep-pedia.org/peptides/klow"
+    },
+    {
+      "slug": "kpv",
+      "url": "https://pep-pedia.org/peptides/kpv"
+    },
+    {
+      "slug": "l-carnitine",
+      "url": "https://pep-pedia.org/peptides/l-carnitine"
+    },
+    {
+      "slug": "lipo-c",
+      "url": "https://pep-pedia.org/peptides/lipo-c"
+    },
+    {
+      "slug": "livagen",
+      "url": "https://pep-pedia.org/peptides/livagen"
+    },
+    {
+      "slug": "ll-37",
+      "url": "https://pep-pedia.org/peptides/ll-37"
+    },
+    {
+      "slug": "mazdutide",
+      "url": "https://pep-pedia.org/peptides/mazdutide"
+    },
+    {
+      "slug": "melanotan-1",
+      "url": "https://pep-pedia.org/peptides/melanotan-1"
+    },
+    {
+      "slug": "melanotan-ii",
+      "url": "https://pep-pedia.org/peptides/melanotan-ii"
+    },
+    {
+      "slug": "mk-677",
+      "url": "https://pep-pedia.org/peptides/mk-677"
+    },
+    {
+      "slug": "mots-c",
+      "url": "https://pep-pedia.org/peptides/mots-c"
+    },
+    {
+      "slug": "na-semax-amidate",
+      "url": "https://pep-pedia.org/peptides/na-semax-amidate"
+    },
+    {
+      "slug": "nad-plus",
+      "url": "https://pep-pedia.org/peptides/nad-plus"
+    },
+    {
+      "slug": "omberacetam",
+      "url": "https://pep-pedia.org/peptides/omberacetam"
+    },
+    {
+      "slug": "orforglipron",
+      "url": "https://pep-pedia.org/peptides/orforglipron"
+    },
+    {
+      "slug": "ovagen",
+      "url": "https://pep-pedia.org/peptides/ovagen"
+    },
+    {
+      "slug": "oxytocin",
+      "url": "https://pep-pedia.org/peptides/oxytocin"
+    },
+    {
+      "slug": "p21",
+      "url": "https://pep-pedia.org/peptides/p21"
+    },
+    {
+      "slug": "pe-22-28",
+      "url": "https://pep-pedia.org/peptides/pe-22-28"
+    },
+    {
+      "slug": "peg-mgf",
+      "url": "https://pep-pedia.org/peptides/peg-mgf"
+    },
+    {
+      "slug": "pinealon",
+      "url": "https://pep-pedia.org/peptides/pinealon"
+    },
+    {
+      "slug": "pnc-27",
+      "url": "https://pep-pedia.org/peptides/pnc-27"
+    },
+    {
+      "slug": "prostamax",
+      "url": "https://pep-pedia.org/peptides/prostamax"
+    },
+    {
+      "slug": "pt-141",
+      "url": "https://pep-pedia.org/peptides/pt-141"
+    },
+    {
+      "slug": "retatrutide",
+      "url": "https://pep-pedia.org/peptides/retatrutide"
+    },
+    {
+      "slug": "selank",
+      "url": "https://pep-pedia.org/peptides/selank"
+    },
+    {
+      "slug": "semaglutide",
+      "url": "https://pep-pedia.org/peptides/semaglutide"
+    },
+    {
+      "slug": "semax",
+      "url": "https://pep-pedia.org/peptides/semax"
+    },
+    {
+      "slug": "sermorelin",
+      "url": "https://pep-pedia.org/peptides/sermorelin"
+    },
+    {
+      "slug": "slu-pp-332",
+      "url": "https://pep-pedia.org/peptides/slu-pp-332"
+    },
+    {
+      "slug": "snap-8",
+      "url": "https://pep-pedia.org/peptides/snap-8"
+    },
+    {
+      "slug": "ss-31",
+      "url": "https://pep-pedia.org/peptides/ss-31"
+    },
+    {
+      "slug": "survodutide",
+      "url": "https://pep-pedia.org/peptides/survodutide"
+    },
+    {
+      "slug": "tb-500",
+      "url": "https://pep-pedia.org/peptides/tb-500"
+    },
+    {
+      "slug": "tesamorelin",
+      "url": "https://pep-pedia.org/peptides/tesamorelin"
+    },
+    {
+      "slug": "tesofensine",
+      "url": "https://pep-pedia.org/peptides/tesofensine"
+    },
+    {
+      "slug": "testagen",
+      "url": "https://pep-pedia.org/peptides/testagen"
+    },
+    {
+      "slug": "thymalin",
+      "url": "https://pep-pedia.org/peptides/thymalin"
+    },
+    {
+      "slug": "thymosin-alpha-1",
+      "url": "https://pep-pedia.org/peptides/thymosin-alpha-1"
+    },
+    {
+      "slug": "thymosin-beta-4",
+      "url": "https://pep-pedia.org/peptides/thymosin-beta-4"
+    },
+    {
+      "slug": "thymulin",
+      "url": "https://pep-pedia.org/peptides/thymulin"
+    },
+    {
+      "slug": "tirzepatide",
+      "url": "https://pep-pedia.org/peptides/tirzepatide"
+    },
+    {
+      "slug": "trt",
+      "url": "https://pep-pedia.org/peptides/trt"
+    },
+    {
+      "slug": "vesugen",
+      "url": "https://pep-pedia.org/peptides/vesugen"
+    },
+    {
+      "slug": "vip",
+      "url": "https://pep-pedia.org/peptides/vip"
+    },
+    {
+      "slug": "wolverine-stack",
+      "url": "https://pep-pedia.org/peptides/wolverine-stack"
+    }
+  ]
+}

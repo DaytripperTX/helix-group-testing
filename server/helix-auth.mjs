@@ -4,6 +4,7 @@ export const adminCookieName = 'helix_admin_session';
 
 const sessionMaxAgeSeconds = 60 * 60 * 12;
 const localAdminPassword = 'helix-admin';
+const localOwnerPassword = 'helix-owner';
 
 export function getAdminSession(headers = {}) {
   const token = getCookie(headers, adminCookieName);
@@ -23,8 +24,8 @@ export function getAdminSession(headers = {}) {
   };
 }
 
-export function validateAdminPassword(password) {
-  const configuredPassword = getConfiguredAdminPassword();
+export function validateRolePassword(password, role = 'admin') {
+  const configuredPassword = getConfiguredPasswordForRole(role);
 
   if (!configuredPassword || typeof password !== 'string') {
     return false;
@@ -33,10 +34,10 @@ export function validateAdminPassword(password) {
   return timingSafeStringEqual(password, configuredPassword);
 }
 
-export function createAdminSessionCookie() {
+export function createAdminSessionCookie(role = 'admin') {
   const expiresAt = Math.floor(Date.now() / 1000) + sessionMaxAgeSeconds;
   const token = signSessionToken({
-    role: 'owner',
+    role: role === 'owner' ? 'owner' : 'admin',
     exp: expiresAt,
     nonce: randomBytes(12).toString('hex'),
   });
@@ -100,12 +101,21 @@ function signText(value) {
 function getSessionSecret() {
   return (
     process.env.HELIX_ADMIN_SESSION_SECRET ||
+    process.env.HELIX_OWNER_PASSWORD ||
     process.env.HELIX_ADMIN_PASSWORD ||
     'local-helix-admin-session-secret'
   );
 }
 
-function getConfiguredAdminPassword() {
+function getConfiguredPasswordForRole(role) {
+  if (role === 'owner') {
+    if (process.env.HELIX_OWNER_PASSWORD) {
+      return process.env.HELIX_OWNER_PASSWORD;
+    }
+
+    return process.env.NETLIFY === 'true' ? '' : localOwnerPassword;
+  }
+
   if (process.env.HELIX_ADMIN_PASSWORD) {
     return process.env.HELIX_ADMIN_PASSWORD;
   }
