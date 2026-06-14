@@ -1,10 +1,19 @@
 # Helix Group Testing
 
-Local MVP for a static Helix Group Testing website. This project is a Vite + React + TypeScript frontend with no backend, database, user accounts, payments, or order form yet.
+Helix Group Testing is a Vite + React + TypeScript site for coordinating group testing information, labels, admin-managed data, and order-interest workflows.
 
 ## Local setup
 
 Use Node.js 18.18 or newer.
+
+Create local-only environment variables:
+
+```bash
+cp .env.example .env.local
+```
+
+Then set local admin values in `.env.local`. This file is ignored by Git and should
+not be committed.
 
 Install dependencies:
 
@@ -54,6 +63,14 @@ This repo includes `netlify.toml` with:
 
 - Build command: `npm run build`
 - Publish directory: `dist`
+
+Set these environment variables in the Netlify site UI before sharing a deploy:
+
+- `HELIX_ADMIN_PASSWORD`
+- `HELIX_OWNER_PASSWORD`
+- `HELIX_ADMIN_SESSION_SECRET`
+
+Do not set `HELIX_ALLOW_LOCAL_DEFAULTS=true` in Netlify.
 
 To deploy later:
 

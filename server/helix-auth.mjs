@@ -1,10 +1,10 @@
+import './helix-env.mjs';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const adminCookieName = 'helix_admin_session';
 
 const sessionMaxAgeSeconds = 60 * 60 * 12;
-const localAdminPassword = 'helix-admin';
-const localOwnerPassword = 'helix-owner';
+const ephemeralLocalSessionSecret = randomBytes(32).toString('base64url');
 
 export function getAdminSession(headers = {}) {
   const token = getCookie(headers, adminCookieName);
@@ -99,28 +99,23 @@ function signText(value) {
 }
 
 function getSessionSecret() {
-  return (
-    process.env.HELIX_ADMIN_SESSION_SECRET ||
-    process.env.HELIX_OWNER_PASSWORD ||
-    process.env.HELIX_ADMIN_PASSWORD ||
-    'local-helix-admin-session-secret'
-  );
+  if (process.env.HELIX_ADMIN_SESSION_SECRET) {
+    return process.env.HELIX_ADMIN_SESSION_SECRET;
+  }
+
+  if (isLocalDefaultsAllowed()) {
+    return ephemeralLocalSessionSecret;
+  }
+
+  throw new Error('HELIX_ADMIN_SESSION_SECRET is required for admin sessions.');
 }
 
 function getConfiguredPasswordForRole(role) {
   if (role === 'owner') {
-    if (process.env.HELIX_OWNER_PASSWORD) {
-      return process.env.HELIX_OWNER_PASSWORD;
-    }
-
-    return process.env.NETLIFY === 'true' ? '' : localOwnerPassword;
+    return process.env.HELIX_OWNER_PASSWORD ?? '';
   }
 
-  if (process.env.HELIX_ADMIN_PASSWORD) {
-    return process.env.HELIX_ADMIN_PASSWORD;
-  }
-
-  return process.env.NETLIFY === 'true' ? '' : localAdminPassword;
+  return process.env.HELIX_ADMIN_PASSWORD ?? '';
 }
 
 function timingSafeStringEqual(first, second) {
@@ -184,6 +179,14 @@ function serializeCookie(name, value, options) {
 
 function shouldUseSecureCookies() {
   return process.env.NETLIFY === 'true' || process.env.HELIX_SECURE_COOKIES === 'true';
+}
+
+function isLocalDefaultsAllowed() {
+  return (
+    process.env.HELIX_ALLOW_LOCAL_DEFAULTS === 'true' &&
+    process.env.NETLIFY !== 'true' &&
+    process.env.NODE_ENV !== 'production'
+  );
 }
 
 function base64UrlEncode(value) {

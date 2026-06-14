@@ -4,6 +4,7 @@ dist
 .tmp
 .env
 .env.*
+!.env.example
 *.local
 npm-debug.log*
 yarn-debug.log*

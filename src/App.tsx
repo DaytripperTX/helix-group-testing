@@ -384,7 +384,7 @@ function HomePage() {
               src="/helix_logo.svg"
               alt="The Helix Group Testing logo"
             />
-            <p className="eyebrow">Local MVP</p>
+            <p className="eyebrow">Testing coordination</p>
             <h1 id="hero-title">Helix Group Testing</h1>
             <p className="hero__lede">
               A volunteer-run, non-commercial coordination site for formatting
@@ -443,7 +443,7 @@ function HomePage() {
             <p className="eyebrow">Workflow</p>
             <h2 id="coordination-title">What this site should coordinate</h2>
             <p>
-              The current group workflow lives in a Google Sheet/Form. This MVP
+              The current group workflow lives in a Google Sheet/Form. This site
               prepares a clearer public-facing structure before any automated
               order-interest submission is added.
             </p>
