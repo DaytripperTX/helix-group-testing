@@ -1,3 +1,5 @@
+import { readSpreadsheetRows } from './spreadsheet-reader.mjs';
+
 const defaultVialsPerPack = 10;
 
 const headerAliases = {
@@ -36,8 +38,7 @@ async function readSourceRows(source) {
       throw createHttpError(400, 'Uploaded file data is required.');
     }
 
-    const buffer = Buffer.from(source.base64, 'base64');
-    return readWorkbookRows(buffer, source.fileName);
+    return readSpreadsheetRows(source);
   }
 
   if (source.type === 'google-sheet') {
@@ -51,38 +52,13 @@ async function readSourceRows(source) {
       throw createHttpError(400, 'Google Sheet could not be fetched.');
     }
 
-    return readWorkbookRows(await response.text(), 'price-list.csv');
+    return readSpreadsheetRows({
+      fileName: 'price-list.csv',
+      text: await response.text(),
+    });
   }
 
   throw createHttpError(400, 'Unsupported price list source.');
-}
-
-async function readWorkbookRows(content, fileName = '') {
-  const module = await import('xlsx');
-  const XLSX = module.default ?? module;
-  const extension = fileName.split('.').pop()?.toLowerCase();
-  const workbook =
-    extension === 'csv' || typeof content === 'string'
-      ? XLSX.read(typeof content === 'string' ? content : content.toString('utf8'), { type: 'string' })
-      : XLSX.read(content, { type: 'buffer' });
-  const firstSheetName =
-    workbook.SheetNames.find((sheetName) => {
-      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
-        header: 1,
-        defval: '',
-      });
-
-      return rows.some((row) => Object.keys(getHeaderMap(row)).length >= 2);
-    }) ?? workbook.SheetNames[0];
-
-  if (!firstSheetName) {
-    throw createHttpError(400, 'Price list file does not contain a worksheet.');
-  }
-
-  return XLSX.utils.sheet_to_json(workbook.Sheets[firstSheetName], {
-    header: 1,
-    defval: '',
-  });
 }
 
 function parseRows(vendorId, rows, peptides) {
@@ -204,15 +180,62 @@ function normalizeSource(source) {
 }
 
 function getGoogleSheetCsvUrl(url) {
-  const parsedUrl = new URL(url);
-  const match = parsedUrl.pathname.match(/\/spreadsheets\/d\/([^/]+)/);
+  const sheetId = getRawGoogleSheetId(url);
 
-  if (!match) {
-    return url;
+  if (sheetId) {
+    return createGoogleSheetCsvUrl(sheetId, '0');
   }
 
-  const gid = parsedUrl.searchParams.get('gid') ?? '0';
-  return `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=csv&gid=${gid}`;
+  let parsedUrl;
+
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    throw createHttpError(400, 'Google Sheet URL must be a docs.google.com URL or Sheet id.');
+  }
+
+  if (parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'docs.google.com') {
+    throw createHttpError(400, 'Google Sheet URL must use https://docs.google.com.');
+  }
+
+  const urlSheetId = getGoogleSheetIdFromUrl(parsedUrl);
+
+  if (!urlSheetId) {
+    throw createHttpError(400, 'Google Sheet URL must include a recognizable Sheet id.');
+  }
+
+  return createGoogleSheetCsvUrl(urlSheetId, getGoogleSheetGid(parsedUrl));
+}
+
+function getRawGoogleSheetId(value) {
+  const trimmedValue = String(value ?? '').trim();
+  return /^[A-Za-z0-9_-]{10,}$/.test(trimmedValue) ? trimmedValue : '';
+}
+
+function getGoogleSheetIdFromUrl(parsedUrl) {
+  const pathParts = parsedUrl.pathname.split('/').filter(Boolean);
+  const idMarkerIndex = pathParts.findIndex((part) => part === 'd');
+  const pathSheetId = idMarkerIndex >= 0 ? getRawGoogleSheetId(pathParts[idMarkerIndex + 1]) : '';
+
+  return pathSheetId || getRawGoogleSheetId(parsedUrl.searchParams.get('id'));
+}
+
+function getGoogleSheetGid(parsedUrl) {
+  const queryGid = parsedUrl.searchParams.get('gid');
+
+  if (queryGid) {
+    return queryGid;
+  }
+
+  const hashParams = new URLSearchParams(parsedUrl.hash.replace(/^#/, ''));
+  return hashParams.get('gid') ?? '0';
+}
+
+function createGoogleSheetCsvUrl(sheetId, gid) {
+  const exportUrl = new URL(`https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/export`);
+  exportUrl.searchParams.set('format', 'csv');
+  exportUrl.searchParams.set('gid', gid);
+  return exportUrl.toString();
 }
 
 function createItemId(vendorId, vendorCode, productName, mass) {

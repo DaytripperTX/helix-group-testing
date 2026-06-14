@@ -22,6 +22,7 @@ import {
   getPublicSession,
   validateRolePassword,
 } from './helix-auth.mjs';
+import { parsePeptideBatch } from './peptide-batch-parser.mjs';
 import { parseVendorPriceList } from './vendor-price-list-parser.mjs';
 
 const maxBodyBytes = 24 * 1024 * 1024;
@@ -141,6 +142,22 @@ export async function handleHelixApiRequest(request) {
           peptides: await readCollection('peptides'),
         }),
       );
+    }
+
+    if (pathname === '/api/admin/peptides/parse-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, {
+        rows: await parsePeptideBatch({
+          source: body?.source,
+          peptides: await readCollection('peptides'),
+        }),
+      });
     }
 
     if (pathname.startsWith('/api/admin/data/')) {

@@ -169,6 +169,9 @@ function AdminPage({
   const [priceListFile, setPriceListFile] = useState<File | null>(null);
   const [priceListUrl, setPriceListUrl] = useState('');
   const [priceListStatus, setPriceListStatus] = useState('');
+  const [savedPriceListVendorId, setSavedPriceListVendorId] = useState('');
+  const vendorGoogleSheetUrlError =
+    vendorForm.priceSheetMode === 'google-sheet' ? validateGoogleSheetSourceInput(vendorForm.priceSheetUrl) : '';
 
   useEffect(() => {
     if (!session.isAuthenticated) {
@@ -177,6 +180,15 @@ function AdminPage({
 
     void refreshAdminData();
   }, [session.isAuthenticated]);
+
+  useEffect(() => {
+    if (!savedPriceListVendorId) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => setSavedPriceListVendorId(''), 4000);
+    return () => window.clearTimeout(timeoutId);
+  }, [savedPriceListVendorId]);
 
   const sortedVendors = useMemo(
     () => [...vendors].sort((first, second) => first.name.localeCompare(second.name)),
@@ -273,6 +285,11 @@ function AdminPage({
       return;
     }
 
+    if (vendorGoogleSheetUrlError) {
+      setStatus(vendorGoogleSheetUrlError);
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
@@ -285,7 +302,7 @@ function AdminPage({
         nickname: sanitizeText(vendorForm.nickname),
         whatsapp: sanitizeText(vendorForm.whatsapp),
         description: sanitizeText(vendorForm.description),
-        negotiatedDiscount: sanitizeText(vendorForm.negotiatedDiscount),
+        negotiatedDiscount: formatVendorDiscountInput(vendorForm.negotiatedDiscount),
         ...(priceSheet ? { priceSheet } : {}),
       };
 
@@ -436,7 +453,11 @@ function AdminPage({
 
       setPriceLists(nextPriceLists);
       setPriceListDraft(nextDraft);
-      setPriceListStatus('Price list saved.');
+      setPriceListStatus('');
+      setPriceListFile(null);
+      setPriceListVendor(null);
+      setSavedPriceListVendorId(priceListDraft.vendorId);
+      setStatus('');
     } catch (error) {
       console.error(error);
       setPriceListStatus('Price list could not be saved.');
@@ -755,8 +776,11 @@ function AdminPage({
       return;
     }
 
+    setIsSubmitting(true);
+    setBatchStatus('Reading spreadsheet...');
+
     try {
-      const rows = await parsePeptideSpreadsheet(file, peptides);
+      const rows = await parsePeptideBatchFile(file);
 
       setBatchRows(rows);
       setBatchStatus(`${rows.length} rows ready for review.`);
@@ -764,6 +788,8 @@ function AdminPage({
       console.error(error);
       setBatchRows([]);
       setBatchStatus('Could not read that spreadsheet.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -900,19 +926,27 @@ function AdminPage({
             <div className="admin-table">
               {sortedVendors.map((vendor) => (
                 <article className="admin-row" key={vendor.id}>
+                  {savedPriceListVendorId === vendor.id && (
+                    <div className="admin-row__banner" role="status">
+                      Price list saved.
+                    </div>
+                  )}
                   <div>
                     <strong>{vendor.name}</strong>
                     <span>{vendor.nickname || 'No nickname'} - {vendor.whatsapp || 'No WhatsApp'}</span>
                     {vendor.description && <p>{vendor.description}</p>}
                   </div>
-                  <div>
+                  <div className="admin-row__meta">
                     <span>{vendor.negotiatedDiscount || 'No discount'}</span>
-                    <small>
+                    <span>
                       {formatPriceSheet(
                         vendor.priceSheet,
                         priceLists.find((priceList) => priceList.vendorId === vendor.id)?.source,
-                      )}; {formatPriceListSummary(priceLists, vendor.id)}
-                    </small>
+                      )}
+                    </span>
+                    {formatPriceListSummary(priceLists, vendor.id) && (
+                      <span>{formatPriceListSummary(priceLists, vendor.id)}</span>
+                    )}
                   </div>
                   <div className="admin-row__actions">
                     <button type="button" onClick={() => openPriceListModal(vendor)}>
@@ -1039,14 +1073,19 @@ function AdminPage({
               </select>
             </label>
             {vendorForm.priceSheetMode === 'google-sheet' && (
-              <AdminTextField label="Google Sheet URL" value={vendorForm.priceSheetUrl} onChange={(value) => setVendorForm({ ...vendorForm, priceSheetUrl: value })} />
+              <AdminTextField
+                label="Google Sheet URL"
+                value={vendorForm.priceSheetUrl}
+                error={vendorGoogleSheetUrlError}
+                onChange={(value) => setVendorForm({ ...vendorForm, priceSheetUrl: value })}
+              />
             )}
             {vendorForm.priceSheetMode === 'file' && (
               <label className="admin-field">
-                <span>Excel or CSV file</span>
+                <span>CSV or XLSX file</span>
                 <input
                   type="file"
-                  accept=".csv,.xls,.xlsx,.xlsm,.xlsb,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   onChange={(event) => setVendorForm({ ...vendorForm, priceSheetFile: event.target.files?.[0] ?? null })}
                 />
                 {editingVendor?.priceSheet?.type === 'file' && !vendorForm.priceSheetFile && (
@@ -1058,7 +1097,7 @@ function AdminPage({
               <button type="button" onClick={() => setIsVendorModalOpen(false)}>
                 Cancel
               </button>
-              <button className="admin-primary-button" type="submit" disabled={isSubmitting}>
+              <button className="admin-primary-button" type="submit" disabled={isSubmitting || Boolean(vendorGoogleSheetUrlError)}>
                 Save Vendor
               </button>
             </div>
@@ -1161,10 +1200,10 @@ function AdminPage({
         <AdminModal title="Batch import peptides" onClose={() => setIsBatchModalOpen(false)}>
           <div className="admin-form">
             <label className="admin-field">
-              <span>CSV or Excel file</span>
+              <span>CSV or XLSX file</span>
               <input
                 type="file"
-                accept=".csv,.xls,.xlsx,.xlsm,.xlsb,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 onChange={loadPeptideBatch}
               />
             </label>
@@ -1235,10 +1274,10 @@ function AdminPage({
           <div className="admin-form admin-form--wide">
             <div className="admin-price-source">
               <label className="admin-field">
-                <span>Upload CSV or Excel price sheet</span>
+                <span>Upload CSV or XLSX price sheet</span>
                 <input
                   type="file"
-                  accept=".csv,.xls,.xlsx,.xlsm,.xlsb,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   onChange={(event) => setPriceListFile(event.target.files?.[0] ?? null)}
                 />
               </label>
@@ -1387,6 +1426,7 @@ function AdminTextField({
   value,
   placeholder,
   required,
+  error,
   onBlur,
   onChange,
 }: {
@@ -1394,20 +1434,23 @@ function AdminTextField({
   value: string;
   placeholder?: string;
   required?: boolean;
+  error?: string;
   onBlur?: () => void;
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="admin-field">
+    <label className={error ? 'admin-field admin-field--invalid' : 'admin-field'}>
       <span>{label}</span>
       <input
         type="text"
         value={value}
         placeholder={placeholder}
         required={required}
+        aria-invalid={error ? 'true' : undefined}
         onBlur={onBlur}
         onChange={(event) => onChange(event.target.value)}
       />
+      {error && <small className="admin-field__error">{error}</small>}
     </label>
   );
 }
@@ -1542,6 +1585,53 @@ async function resolveVendorPriceSheet(
   return (await response.json()) as VendorPriceSheet;
 }
 
+function validateGoogleSheetSourceInput(value: string) {
+  const cleanValue = value.trim();
+
+  if (!cleanValue) {
+    return '';
+  }
+
+  if (isRawGoogleSheetId(cleanValue)) {
+    return '';
+  }
+
+  let parsedUrl: URL;
+
+  try {
+    parsedUrl = new URL(cleanValue);
+  } catch {
+    return 'Use a valid Google Sheet URL or Sheet id.';
+  }
+
+  if (parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'docs.google.com') {
+    return 'Google Sheet links must start with https://docs.google.com.';
+  }
+
+  if (!getGoogleSheetIdFromUrl(parsedUrl)) {
+    return 'Google Sheet link must include a Sheet id.';
+  }
+
+  return '';
+}
+
+function isRawGoogleSheetId(value: string) {
+  return /^[A-Za-z0-9_-]{10,}$/.test(value.trim());
+}
+
+function getGoogleSheetIdFromUrl(parsedUrl: URL) {
+  const pathParts = parsedUrl.pathname.split('/').filter(Boolean);
+  const idMarkerIndex = pathParts.findIndex((part) => part === 'd');
+  const pathSheetId = idMarkerIndex >= 0 ? pathParts[idMarkerIndex + 1] ?? '' : '';
+
+  if (isRawGoogleSheetId(pathSheetId)) {
+    return pathSheetId;
+  }
+
+  const querySheetId = parsedUrl.searchParams.get('id') ?? '';
+  return isRawGoogleSheetId(querySheetId) ? querySheetId : '';
+}
+
 async function getPriceListParseSource(file: File | null, url: string) {
   if (file) {
     return {
@@ -1586,6 +1676,31 @@ async function parseVendorPriceListSource(
   }
 
   return (await response.json()) as VendorPriceList;
+}
+
+async function parsePeptideBatchFile(file: File) {
+  const response = await fetch('/api/admin/peptides/parse-batch', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      source: {
+        type: 'file',
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        base64: await fileToBase64(file),
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Peptide batch file could not be parsed.');
+  }
+
+  const result = (await response.json()) as { rows?: BatchPeptideRow[] };
+  return Array.isArray(result.rows) ? result.rows : [];
 }
 
 async function uploadVendorPriceSheetFile(file: File): Promise<VendorPriceSheet> {
@@ -1827,118 +1942,6 @@ function hasRoleTaggedNotes(notes: AdminNote[], role: AdminSession['role']) {
   return Boolean(role && notes.some((note) => note.tags.includes(role)));
 }
 
-async function parsePeptideSpreadsheet(file: File, existingPeptides: Peptide[]) {
-  const XLSX = await import('xlsx');
-  const extension = file.name.split('.').pop()?.toLowerCase();
-  const workbook =
-    extension === 'csv'
-      ? XLSX.read(await file.text(), { type: 'string' })
-      : XLSX.read(await file.arrayBuffer(), { type: 'array' });
-  const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, {
-    defval: '',
-  });
-
-  const seenNames = new Set<string>();
-
-  return rawRows.map((row, index) => {
-    const normalizedRow = normalizeSpreadsheetRow(row);
-    const name = normalizePeptideName(normalizedRow.name);
-    const existingPeptide = findByNormalizedName(existingPeptides, name);
-    const normalizedRowName = normalizeName(name);
-    const peptide: BatchPeptideRow = {
-      rowNumber: index + 2,
-      id: existingPeptide?.id ?? createUniqueId(name || `peptide-${index + 2}`, existingPeptides),
-      name,
-      categories: normalizeCategories(normalizedRow.categories),
-      description: sanitizeText(normalizedRow.description),
-      wikiLinks: normalizedRow.wikiLinks,
-      errors: [],
-    };
-
-    if (!name) {
-      peptide.errors.push('Missing name');
-    }
-
-    if (normalizedRowName) {
-      if (seenNames.has(normalizedRowName)) {
-        peptide.errors.push('Duplicate name in import');
-      } else {
-        seenNames.add(normalizedRowName);
-      }
-    }
-
-    if (normalizedRow.wikiLinksError) {
-      peptide.errors.push(normalizedRow.wikiLinksError);
-    }
-
-    return peptide;
-  });
-}
-
-function normalizeSpreadsheetRow(row: Record<string, unknown>) {
-  const fields = new Map(
-    Object.entries(row).map(([key, value]) => [key.trim().toLowerCase().replace(/[^a-z0-9]/g, ''), String(value ?? '').trim()]),
-  );
-
-  const wikiLinksResult = parseSpreadsheetWikiLinks({
-    wikiLinks: fields.get('wikilinks') ?? '',
-    peptidepediaUrl: fields.get('peptidepediaurl') ?? fields.get('peptidepedia') ?? fields.get('url') ?? '',
-    pepPediaUrl: fields.get('peppediaurl') ?? fields.get('peppedia') ?? '',
-  });
-
-  return {
-    name: fields.get('name') ?? '',
-    categories: fields.get('categories') ?? fields.get('category') ?? '',
-    description: fields.get('description') ?? '',
-    wikiLinks: wikiLinksResult.wikiLinks,
-    wikiLinksError: wikiLinksResult.error,
-  };
-}
-
-function parseSpreadsheetWikiLinks({
-  wikiLinks,
-  peptidepediaUrl,
-  pepPediaUrl,
-}: {
-  wikiLinks: string;
-  peptidepediaUrl: string;
-  pepPediaUrl: string;
-}) {
-  const links: WikiLink[] = [];
-  let error = '';
-
-  if (wikiLinks.trim()) {
-    try {
-      const parsedLinks = JSON.parse(wikiLinks);
-      links.push(...normalizeWikiLinks({ wikiLinks: parsedLinks }));
-    } catch {
-      error = 'Invalid wikiLinks JSON';
-    }
-  }
-
-  if (peptidepediaUrl.trim()) {
-    links.push(createWikiLink({
-      source: 'peptidepedia',
-      url: peptidepediaUrl,
-      status: 'manual',
-    }));
-  }
-
-  if (pepPediaUrl.trim()) {
-    links.push(createWikiLink({
-      source: 'pep-pedia',
-      url: pepPediaUrl,
-      status: 'manual',
-    }));
-  }
-
-  return {
-    wikiLinks: normalizeWikiLinks({ wikiLinks: links }),
-    error,
-  };
-}
-
 async function ensurePeptideCategories(
   categoryNames: string[],
   existingCategories: PeptideCategory[],
@@ -2045,6 +2048,22 @@ function sanitizeText(value: string) {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function formatVendorDiscountInput(value: string) {
+  const cleanValue = sanitizeText(value);
+
+  if (!cleanValue) {
+    return '';
+  }
+
+  const numericValue = cleanValue.replace(/%$/, '').trim();
+
+  if (/^\d+(?:\.\d+)?$/.test(numericValue)) {
+    return `${numericValue}%`;
+  }
+
+  return cleanValue;
+}
+
 function sanitizeUrl(value: string) {
   const cleanValue = sanitizeText(value);
 
@@ -2146,7 +2165,7 @@ function formatPriceListSummary(priceLists: VendorPriceList[], vendorId: string)
   const priceList = priceLists.find((currentPriceList) => currentPriceList.vendorId === vendorId);
 
   if (!priceList) {
-    return 'No parsed list';
+    return '';
   }
 
   return `${priceList.items.length} parsed rows`;
