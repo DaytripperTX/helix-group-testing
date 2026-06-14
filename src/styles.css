@@ -233,7 +233,8 @@ main {
 .admin-panel__actions button,
 .admin-row__actions button,
 .admin-modal__actions button,
-.admin-field--with-action button {
+.admin-field--with-action button,
+.admin-price-source button {
   border: 1px solid #c8d7e1;
   border-radius: 8px;
   padding: 9px 12px;
@@ -634,7 +635,7 @@ main {
   align-items: end;
 }
 
-.admin-price-source .admin-primary-button {
+.admin-price-source button {
   min-height: 42px;
 }
 

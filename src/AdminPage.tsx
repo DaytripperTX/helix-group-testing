@@ -1,4 +1,4 @@
-import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
 type AdminSession = {
   isAuthenticated: boolean;
@@ -169,6 +169,7 @@ function AdminPage({
   const [priceListFile, setPriceListFile] = useState<File | null>(null);
   const [priceListUrl, setPriceListUrl] = useState('');
   const [priceListStatus, setPriceListStatus] = useState('');
+  const priceListFileInputRef = useRef<HTMLInputElement | null>(null);
   const [savedPriceListVendorId, setSavedPriceListVendorId] = useState('');
   const vendorGoogleSheetUrlError =
     vendorForm.priceSheetMode === 'google-sheet' ? validateGoogleSheetSourceInput(vendorForm.priceSheetUrl) : '';
@@ -347,12 +348,15 @@ function AdminPage({
     );
   };
 
-  const parseVendorPriceList = async () => {
+  const parseVendorPriceList = async (override?: { file?: File | null; url?: string }) => {
     if (!priceListVendor) {
       return;
     }
 
-    const source = await getPriceListParseSource(priceListFile, priceListUrl);
+    const source = await getPriceListParseSource(
+      override?.file === undefined ? priceListFile : override.file,
+      override?.url === undefined ? priceListUrl : override.url,
+    );
 
     if (!source) {
       setPriceListStatus('Choose a file or enter a Google Sheet URL first.');
@@ -1276,17 +1280,36 @@ function AdminPage({
               <label className="admin-field">
                 <span>Upload CSV or XLSX price sheet</span>
                 <input
+                  ref={priceListFileInputRef}
                   type="file"
                   accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                  onChange={(event) => setPriceListFile(event.target.files?.[0] ?? null)}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    setPriceListFile(file);
+
+                    if (file) {
+                      setPriceListUrl('');
+                      void parseVendorPriceList({ file, url: '' });
+                    }
+                  }}
                 />
               </label>
               <AdminTextField
                 label="Google Sheet URL"
                 value={priceListUrl}
-                onChange={setPriceListUrl}
+                onChange={(value) => {
+                  setPriceListUrl(value);
+
+                  if (value.trim()) {
+                    setPriceListFile(null);
+
+                    if (priceListFileInputRef.current) {
+                      priceListFileInputRef.current.value = '';
+                    }
+                  }
+                }}
               />
-              <button className="admin-primary-button" type="button" disabled={isSubmitting} onClick={() => void parseVendorPriceList()}>
+              <button type="button" disabled={isSubmitting} onClick={() => void parseVendorPriceList()}>
                 Parse Preview
               </button>
             </div>
