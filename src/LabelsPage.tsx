@@ -45,6 +45,18 @@ type NativeLabelTemplate = {
   peptideCategories?: string[];
   tags?: string[];
   votes?: number;
+  moderationStatus?: 'pending' | 'approved' | 'rejected';
+  reportCount?: number;
+  reports?: NativeLabelReport[];
+  createdAt?: string;
+  updatedAt?: string;
+  clearReports?: boolean;
+};
+
+type NativeLabelReport = {
+  reason: NativeLabelReportReason;
+  details?: string;
+  createdAt: string;
 };
 
 type NativeLabelUploadForm = {
@@ -66,6 +78,8 @@ type DropdownOption = {
 type ExportType = 'svg' | 'png' | 'pdf';
 
 type NativeSortKey = 'featured' | 'popular' | 'az' | 'latest';
+
+type NativeLabelReportReason = 'offensive' | 'spam' | 'unsafe' | 'other';
 
 type PrinterColor = {
   id: string;
@@ -287,6 +301,14 @@ const nativeSortOptions: DropdownOption[] = [
 const minExportDpi = 300;
 const maxExportDpi = 2400;
 const binaryWhiteThreshold = 235;
+const maxNativePreviewBytes = 3 * 1024 * 1024;
+const nativePreviewMimeTypes = ['image/png', 'image/jpeg', 'image/webp'];
+const nativeReportReasons: { value: NativeLabelReportReason; label: string }[] = [
+  { value: 'offensive', label: 'Offensive' },
+  { value: 'spam', label: 'Spam' },
+  { value: 'unsafe', label: 'Unsafe' },
+  { value: 'other', label: 'Other' },
+];
 
 function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const defaultPrinter = printerCatalog[0];
@@ -307,9 +329,15 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const [isNativeSortReversed, setIsNativeSortReversed] = useState(false);
   const [expandedNativeLabelId, setExpandedNativeLabelId] = useState<string | null>(null);
   const [nativeUploadForm, setNativeUploadForm] = useState<NativeLabelUploadForm>(emptyNativeLabelForm);
+  const [nativeUploadStartedAt, setNativeUploadStartedAt] = useState(Date.now());
+  const [nativeUploadTrap, setNativeUploadTrap] = useState('');
   const [editingNativeLabel, setEditingNativeLabel] = useState<NativeLabelTemplate | null>(null);
   const [nativeEditForm, setNativeEditForm] = useState<NativeLabelUploadForm>(emptyNativeLabelForm);
   const [nativeEditStatus, setNativeEditStatus] = useState('');
+  const [reportingNativeLabel, setReportingNativeLabel] = useState<NativeLabelTemplate | null>(null);
+  const [nativeReportReason, setNativeReportReason] = useState<NativeLabelReportReason>('offensive');
+  const [nativeReportDetails, setNativeReportDetails] = useState('');
+  const [nativeReportStatus, setNativeReportStatus] = useState('');
   const [localVotes, setLocalVotes] = useState<Record<string, boolean>>({});
   const [selectedPrinterId, setSelectedPrinterId] = useState(defaultPrinter.id);
   const [availablePrintColorIds, setAvailablePrintColorIds] = useState<string[]>(
@@ -544,15 +572,21 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     }));
   };
 
-  const loadNativePreviewFile = (file: File) => {
+  const loadNativePreviewFile = (file: File, onLoad: (previewDataUrl: string, previewFileName: string) => void) => {
+    const fileError = validateNativePreviewFile(file);
+
+    if (fileError) {
+      setNativeTemplateStatus(fileError);
+      return;
+    }
+
     const reader = new FileReader();
 
     reader.onload = () => {
-      setNativeUploadForm((currentForm) => ({
-        ...currentForm,
-        previewDataUrl: String(reader.result ?? ''),
-        previewFileName: file.name || `clipboard-preview-${Date.now()}.png`,
-      }));
+      onLoad(String(reader.result ?? ''), file.name || `clipboard-preview-${Date.now()}.png`);
+    };
+    reader.onerror = () => {
+      setNativeTemplateStatus('Could not read that preview image.');
     };
     reader.readAsDataURL(file);
   };
@@ -569,7 +603,14 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
       return;
     }
 
-    loadNativePreviewFile(file);
+    loadNativePreviewFile(file, (previewDataUrl, previewFileName) => {
+      setNativeUploadForm((currentForm) => ({
+        ...currentForm,
+        previewDataUrl,
+        previewFileName,
+      }));
+      setNativeTemplateStatus('');
+    });
   };
 
   const pasteNativePreview = (event: ClipboardEvent<HTMLFormElement>) => {
@@ -583,7 +624,14 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     }
 
     event.preventDefault();
-    loadNativePreviewFile(file);
+    loadNativePreviewFile(file, (previewDataUrl, previewFileName) => {
+      setNativeUploadForm((currentForm) => ({
+        ...currentForm,
+        previewDataUrl,
+        previewFileName,
+      }));
+      setNativeTemplateStatus('');
+    });
   };
 
   const uploadNativeTemplate = async (event: FormEvent<HTMLFormElement>) => {
@@ -614,11 +662,16 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     };
 
     try {
-      const templates = await saveNativeLabelTemplate(nativeTemplate);
+      const templates = await saveNativeLabelTemplate(nativeTemplate, {
+        formStartedAt: nativeUploadStartedAt,
+        honeypot: nativeUploadTrap,
+      });
 
       setNativeLabelTemplates(templates);
       setNativeTemplateStatus('');
       setNativeUploadForm(emptyNativeLabelForm);
+      setNativeUploadTrap('');
+      setNativeUploadStartedAt(Date.now());
       event.currentTarget.reset();
     } catch (error) {
       console.error(error);
@@ -681,6 +734,13 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
       return;
     }
 
+    const fileError = validateNativePreviewFile(file);
+
+    if (fileError) {
+      setNativeEditStatus(fileError);
+      return;
+    }
+
     const reader = new FileReader();
 
     reader.onload = () => {
@@ -689,6 +749,9 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
         previewDataUrl: String(reader.result ?? ''),
         previewFileName: file.name || `edited-preview-${Date.now()}.png`,
       }));
+    };
+    reader.onerror = () => {
+      setNativeEditStatus('Could not read that preview image.');
     };
     reader.readAsDataURL(file);
   };
@@ -759,9 +822,10 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
 
   const toggleNativeLabelVote = async (template: NativeLabelTemplate) => {
     const wasVoted = localVotes[template.id] ?? false;
+    const direction = wasVoted ? -1 : 1;
     const nextTemplate = {
       ...template,
-      votes: Math.max(0, getNativeLabelVotes(template) + (wasVoted ? -1 : 1)),
+      votes: Math.max(0, getNativeLabelVotes(template) + direction),
     };
 
     setLocalVotes((currentVotes) => ({
@@ -775,7 +839,7 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     );
 
     try {
-      const templates = await saveNativeLabelTemplate(nextTemplate);
+      const templates = await voteNativeLabelTemplate(template.id, direction);
 
       setNativeLabelTemplates(templates);
       setNativeTemplateStatus('');
@@ -791,6 +855,62 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
         ),
       );
       setNativeTemplateStatus('Could not save vote to server storage. Make sure the Node server is running.');
+    }
+  };
+
+  const openNativeLabelReport = (template: NativeLabelTemplate) => {
+    setReportingNativeLabel(template);
+    setNativeReportReason('offensive');
+    setNativeReportDetails('');
+    setNativeReportStatus('');
+  };
+
+  const closeNativeLabelReport = () => {
+    setReportingNativeLabel(null);
+    setNativeReportDetails('');
+    setNativeReportStatus('');
+  };
+
+  const submitNativeLabelReport = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!reportingNativeLabel) {
+      return;
+    }
+
+    try {
+      const templates = await reportNativeLabelTemplate(
+        reportingNativeLabel.id,
+        nativeReportReason,
+        nativeReportDetails,
+      );
+
+      setNativeLabelTemplates(templates);
+      closeNativeLabelReport();
+      setNativeTemplateStatus('Thanks for the report. Admins will review it.');
+    } catch (error) {
+      console.error(error);
+      setNativeReportStatus('Could not submit the report. Try again later.');
+    }
+  };
+
+  const updateNativeLabelModeration = async (
+    template: NativeLabelTemplate,
+    moderationStatus: NonNullable<NativeLabelTemplate['moderationStatus']>,
+    clearReports = false,
+  ) => {
+    try {
+      const templates = await updateNativeLabelTemplate({
+        ...template,
+        moderationStatus,
+        clearReports,
+      });
+
+      setNativeLabelTemplates(templates);
+      setNativeTemplateStatus('');
+    } catch (error) {
+      console.error(error);
+      setNativeTemplateStatus('Could not update moderation. Check your admin session.');
     }
   };
 
@@ -993,7 +1113,20 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                       onVote={() => {
                         void toggleNativeLabelVote(template);
                       }}
+                      onReport={() => openNativeLabelReport(template)}
                       onEdit={() => openNativeLabelEditor(template)}
+                      onApprove={() => {
+                        void updateNativeLabelModeration(template, 'approved', true);
+                      }}
+                      onPend={() => {
+                        void updateNativeLabelModeration(template, 'pending');
+                      }}
+                      onReject={() => {
+                        void updateNativeLabelModeration(template, 'rejected');
+                      }}
+                      onClearReports={() => {
+                        void updateNativeLabelModeration(template, template.moderationStatus ?? 'pending', true);
+                      }}
                     />
                   ))}
                 </div>
@@ -1027,8 +1160,22 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
 
                 <label className="label-field">
                   <span>Screenshot preview *</span>
-                  <input type="file" accept="image/*" aria-required="true" onChange={updateNativePreview} />
+                  <input
+                    type="file"
+                    accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                    aria-required="true"
+                    onChange={updateNativePreview}
+                  />
                 </label>
+
+                <input
+                  className="label-honeypot"
+                  type="text"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={nativeUploadTrap}
+                  onChange={(event) => setNativeUploadTrap(event.target.value)}
+                />
 
                 {nativeUploadForm.previewDataUrl && (
                   <div className="native-upload-preview">
@@ -1143,7 +1290,11 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
 
                 <label className="label-field">
                   <span>Screenshot preview</span>
-                  <input type="file" accept="image/*" onChange={updateNativeEditPreview} />
+                  <input
+                    type="file"
+                    accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                    onChange={updateNativeEditPreview}
+                  />
                 </label>
 
                 {nativeEditForm.previewDataUrl && (
@@ -1212,6 +1363,64 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                   </button>
                   <button className="label-primary-action" type="submit">
                     Save Changes
+                  </button>
+                </div>
+              </form>
+            </section>
+          </div>
+        )}
+
+        {reportingNativeLabel && (
+          <div className="admin-modal-backdrop" role="presentation">
+            <section
+              className="admin-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="native-label-report-title"
+            >
+              <form className="admin-modal__content" onSubmit={submitNativeLabelReport}>
+                <div className="admin-modal__header">
+                  <div>
+                    <p className="eyebrow">Report</p>
+                    <h2 id="native-label-report-title">{getNativeLabelTitle(reportingNativeLabel)}</h2>
+                  </div>
+                  <button
+                    className="admin-modal__close"
+                    type="button"
+                    aria-label="Close report"
+                    onClick={closeNativeLabelReport}
+                  >
+                    x
+                  </button>
+                </div>
+
+                <label className="label-field">
+                  <span>Reason</span>
+                  <DropdownSelect
+                    value={nativeReportReason}
+                    options={nativeReportReasons}
+                    onChange={(value) => setNativeReportReason(value as NativeLabelReportReason)}
+                  />
+                </label>
+
+                <label className="label-field">
+                  <span>Details</span>
+                  <textarea
+                    rows={3}
+                    maxLength={400}
+                    value={nativeReportDetails}
+                    onChange={(event) => setNativeReportDetails(event.target.value)}
+                  />
+                </label>
+
+                {nativeReportStatus && <p className="admin-status">{nativeReportStatus}</p>}
+
+                <div className="admin-modal__actions">
+                  <button className="admin-delete-button" type="button" onClick={closeNativeLabelReport}>
+                    Cancel
+                  </button>
+                  <button className="label-primary-action" type="submit">
+                    Submit Report
                   </button>
                 </div>
               </form>
@@ -1618,7 +1827,12 @@ function NativeLabelTemplateCard({
   onSelectLabel,
   onToggleTagList,
   onVote,
+  onReport,
   onEdit,
+  onApprove,
+  onPend,
+  onReject,
+  onClearReports,
   votes,
 }: {
   template: NativeLabelTemplate;
@@ -1629,10 +1843,17 @@ function NativeLabelTemplateCard({
   onSelectLabel: () => void;
   onToggleTagList: () => void;
   onVote: () => void;
+  onReport: () => void;
   onEdit: () => void;
+  onApprove: () => void;
+  onPend: () => void;
+  onReject: () => void;
+  onClearReports: () => void;
   votes: number;
 }) {
   const title = getNativeLabelTitle(template);
+  const moderationStatus = template.moderationStatus ?? 'approved';
+  const reportCount = Math.max(0, Math.round(template.reportCount ?? 0));
   const metadata = [
     template.peptideName ?? '',
     template.massMg ? `${template.massMg} mg` : '',
@@ -1645,10 +1866,25 @@ function NativeLabelTemplateCard({
 
   return (
     <article className="native-label-card" onClick={onSelectLabel}>
+      {!isAdmin && (
+        <button
+          className="native-label-report-button"
+          type="button"
+          aria-label={`Report ${title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onReport();
+          }}
+        >
+          !
+        </button>
+      )}
       <div className="native-label-card__title">
         <h3>{title}</h3>
         <div className="native-label-card__badges">
           {isCommunityFavorite && <span>Community favorite</span>}
+          {isAdmin && <span>{moderationStatus}</span>}
+          {isAdmin && reportCount > 0 && <span>{reportCount} reports</span>}
           {isAdmin && (
             <button
               className="admin-icon-button"
@@ -1731,6 +1967,24 @@ function NativeLabelTemplateCard({
             <span>{Math.min(votes, 999)}</span>
           </button>
         </div>
+        {isAdmin && (
+          <div className="native-label-card__moderation">
+            <button type="button" onClick={(event) => { event.stopPropagation(); onApprove(); }}>
+              Approve
+            </button>
+            <button type="button" onClick={(event) => { event.stopPropagation(); onPend(); }}>
+              Pending
+            </button>
+            <button type="button" onClick={(event) => { event.stopPropagation(); onReject(); }}>
+              Reject
+            </button>
+            {reportCount > 0 && (
+              <button type="button" onClick={(event) => { event.stopPropagation(); onClearReports(); }}>
+                Clear reports
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </article>
   );
@@ -1860,6 +2114,12 @@ function getNativeLabelTitle(template: NativeLabelTemplate) {
 }
 
 function getNativeLabelCreatedAt(template: NativeLabelTemplate) {
+  const createdAtTimestamp = Date.parse(template.createdAt ?? '');
+
+  if (Number.isFinite(createdAtTimestamp)) {
+    return createdAtTimestamp;
+  }
+
   const idTimestamp = Number(template.id.replace(/^niimbot-/, ''));
 
   return Number.isFinite(idTimestamp) ? idTimestamp : 0;
@@ -1907,7 +2167,19 @@ function parseNativeTags(value: string) {
       }
     });
 
-  return tags.slice(0, 5);
+  return tags.slice(0, 10);
+}
+
+function validateNativePreviewFile(file: File) {
+  if (!nativePreviewMimeTypes.includes(file.type)) {
+    return 'Use a PNG, JPEG, or WebP preview image.';
+  }
+
+  if (file.size > maxNativePreviewBytes) {
+    return 'Preview image must be 3 MB or smaller.';
+  }
+
+  return '';
 }
 
 function normalizeLabelSize(value: string) {
@@ -1996,17 +2268,72 @@ async function fetchNativeLabelTemplates() {
   return templates.filter(isNativeLabelTemplate);
 }
 
-async function saveNativeLabelTemplate(template: NativeLabelTemplate) {
+async function saveNativeLabelTemplate(
+  template: NativeLabelTemplate,
+  metadata: { formStartedAt: number; honeypot: string },
+) {
   const response = await fetch('/api/labels', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(template),
+    body: JSON.stringify({
+      ...template,
+      formStartedAt: metadata.formStartedAt,
+      honeypot: metadata.honeypot,
+    }),
   });
 
   if (!response.ok) {
     throw new Error('Label could not be saved.');
+  }
+
+  const templates = (await response.json()) as unknown;
+
+  if (!Array.isArray(templates)) {
+    throw new Error('Stored label response was invalid.');
+  }
+
+  return templates.filter(isNativeLabelTemplate);
+}
+
+async function voteNativeLabelTemplate(templateId: string, direction: 1 | -1) {
+  const response = await fetch('/api/labels/vote', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ id: templateId, direction }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Vote could not be saved.');
+  }
+
+  const templates = (await response.json()) as unknown;
+
+  if (!Array.isArray(templates)) {
+    throw new Error('Stored label response was invalid.');
+  }
+
+  return templates.filter(isNativeLabelTemplate);
+}
+
+async function reportNativeLabelTemplate(
+  templateId: string,
+  reason: NativeLabelReportReason,
+  details: string,
+) {
+  const response = await fetch('/api/labels/report', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ id: templateId, reason, details }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Label report could not be saved.');
   }
 
   const templates = (await response.json()) as unknown;
@@ -2072,7 +2399,14 @@ function isNativeLabelTemplate(value: unknown): value is NativeLabelTemplate {
     typeof template.previewDataUrl === 'string' &&
     typeof template.previewFileName === 'string' &&
     typeof template.niimbotCode === 'string' &&
-    (template.votes === undefined || typeof template.votes === 'number')
+    (template.votes === undefined || typeof template.votes === 'number') &&
+    (
+      template.moderationStatus === undefined ||
+      template.moderationStatus === 'pending' ||
+      template.moderationStatus === 'approved' ||
+      template.moderationStatus === 'rejected'
+    ) &&
+    (template.reportCount === undefined || typeof template.reportCount === 'number')
   );
 }
 

@@ -5,9 +5,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   deleteCollectionItem,
+  adminUpsertLabelTemplate,
   getCollectionNames,
+  publicReportLabelTemplate,
   publicUpsertLabelTemplate,
+  publicVoteLabelTemplate,
   readCollection,
+  readPublicLabelTemplates,
   upsertCollectionItem,
   writeAsset,
 } from './helix-data.mjs';
@@ -25,6 +29,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const pepPediaIndexPath = path.join(rootDir, 'data', 'pep-pedia-index.json');
 let cachedPepPediaIndex = null;
+const throttleBuckets = new Map();
+const throttleWindowMs = 60 * 60 * 1000;
 
 export { maxBodyBytes };
 
@@ -40,16 +46,39 @@ export async function handleHelixApiRequest(request) {
         return jsonResponse(401, { error: 'Admin login required' });
       }
 
+      if (collectionName === 'label-templates' && !getAdminSession(request.headers)) {
+        return jsonResponse(200, await readPublicLabelTemplates());
+      }
+
       return jsonResponse(200, await readCollection(collectionName));
+    }
+
+    if (pathname === '/api/labels/report' && method === 'POST') {
+      enforceThrottle(request.headers, 'label-report', 20);
+      await publicReportLabelTemplate(parseJsonBody(request.bodyText));
+      return jsonResponse(200, await readPublicLabelTemplates());
+    }
+
+    if (pathname === '/api/labels/vote' && method === 'POST') {
+      enforceThrottle(request.headers, 'label-vote', 60);
+      await publicVoteLabelTemplate(parseJsonBody(request.bodyText));
+      return jsonResponse(200, await readPublicLabelTemplates());
     }
 
     if (pathname === '/api/labels') {
       if (method === 'GET') {
-        return jsonResponse(200, await readCollection('label-templates'));
+        return jsonResponse(
+          200,
+          getAdminSession(request.headers)
+            ? await readCollection('label-templates')
+            : await readPublicLabelTemplates(),
+        );
       }
 
       if (method === 'POST') {
-        return jsonResponse(200, await publicUpsertLabelTemplate(parseJsonBody(request.bodyText)));
+        enforceThrottle(request.headers, 'label-upload', 10);
+        await publicUpsertLabelTemplate(parseJsonBody(request.bodyText));
+        return jsonResponse(200, await readPublicLabelTemplates());
       }
     }
 
@@ -129,6 +158,16 @@ export async function handleHelixApiRequest(request) {
       }
 
       if (method === 'PUT') {
+        if (collectionName === 'label-templates') {
+          const body = parseJsonBody(request.bodyText);
+
+          if (body?.id !== itemId) {
+            return jsonResponse(400, { error: 'Item id must match the URL id.' });
+          }
+
+          return jsonResponse(200, await adminUpsertLabelTemplate(body));
+        }
+
         return jsonResponse(
           200,
           await upsertCollectionItem(collectionName, itemId, parseJsonBody(request.bodyText)),
@@ -197,6 +236,50 @@ function normalizeApiPath(pathname) {
 
 function getPathPart(pathname, index) {
   return pathname.split('/')[index] ?? '';
+}
+
+function enforceThrottle(headers, action, limit) {
+  const clientKey = getClientThrottleKey(headers);
+  const bucketKey = `${action}:${clientKey}`;
+  const now = Date.now();
+  const bucket = throttleBuckets.get(bucketKey);
+
+  if (!bucket || bucket.resetAt <= now) {
+    throttleBuckets.set(bucketKey, { count: 1, resetAt: now + throttleWindowMs });
+    return;
+  }
+
+  if (bucket.count >= limit) {
+    const error = new Error('Too many requests. Try again later.');
+    error.statusCode = 429;
+    throw error;
+  }
+
+  bucket.count += 1;
+}
+
+function getClientThrottleKey(headers = {}) {
+  const forwardedFor = getHeaderValue(headers, 'x-forwarded-for')?.split(',')[0]?.trim();
+  const clientIp = forwardedFor || getHeaderValue(headers, 'cf-connecting-ip') || getHeaderValue(headers, 'x-real-ip');
+  const userAgent = getHeaderValue(headers, 'user-agent') || 'unknown-agent';
+
+  return `${clientIp || 'local'}:${userAgent.slice(0, 80)}`;
+}
+
+function getHeaderValue(headers, name) {
+  if (!headers || typeof headers !== 'object') {
+    return '';
+  }
+
+  const normalizedName = name.toLowerCase();
+
+  for (const [headerName, value] of Object.entries(headers)) {
+    if (headerName.toLowerCase() === normalizedName) {
+      return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '');
+    }
+  }
+
+  return '';
 }
 
 async function searchWiki(name) {

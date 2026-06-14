@@ -1,14 +1,34 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const seedDir = path.join(rootDir, 'data');
-const localDataDir = path.join(rootDir, '.local-data');
+const localDataDir = process.env.HELIX_LOCAL_DATA_DIR
+  ? path.resolve(process.env.HELIX_LOCAL_DATA_DIR)
+  : path.join(rootDir, '.local-data');
 const legacyLabelsPath = path.join(rootDir, 'dist', 'stored-data', 'labels', 'templates.json');
 const storeName = 'helix-data';
+const maxLabelPreviewBytes = 3 * 1024 * 1024;
+const maxLabelCodeLength = 20 * 1024;
+const maxReportCountBeforeHide = 3;
+const allowedPreviewMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const allowedReportReasons = new Set(['offensive', 'spam', 'unsafe', 'other']);
+const blockedTextFragments = [
+  'fuck',
+  'shit',
+  'cunt',
+  'bitch',
+  'dick',
+  'pussy',
+  'asshole',
+  'bastard',
+  'slut',
+  'whore',
+];
 
 const collections = new Map([
   ['peptides', { fileName: 'peptides.json', kind: 'items' }],
@@ -29,6 +49,12 @@ export async function readCollection(collectionName) {
   const document = await readCollectionDocument(collectionName);
 
   return getDocumentPayload(collectionName, document);
+}
+
+export async function readPublicLabelTemplates() {
+  const templates = await readCollection('label-templates');
+
+  return templates.filter(isPubliclyVisibleLabelTemplate);
 }
 
 export async function upsertCollectionItem(collectionName, itemId, item) {
@@ -112,11 +138,114 @@ export async function writeAsset(asset) {
 }
 
 export async function publicUpsertLabelTemplate(template) {
+  const document = await readCollectionDocument('label-templates');
+  const currentItems = Array.isArray(document.items) ? document.items : [];
+  const nextTemplate = normalizePublicLabelTemplate(template, currentItems);
+  const nextItems = [nextTemplate, ...currentItems];
+  const nextDocument = createCollectionDocument('label-templates', nextItems);
+
+  await writeCollectionDocument('label-templates', nextDocument);
+
+  return nextItems;
+}
+
+export async function publicReportLabelTemplate(report) {
+  const labelId = typeof report?.id === 'string' ? report.id.trim() : '';
+  const reason = normalizeReportReason(report?.reason);
+  const details = sanitizeTextField(report?.details, {
+    maxLength: 400,
+    fieldName: 'Report details',
+    required: false,
+  });
+
+  if (!labelId || !reason) {
+    throw createHttpError(400, 'Invalid label report.');
+  }
+
+  const document = await readCollectionDocument('label-templates');
+  const currentItems = Array.isArray(document.items) ? document.items : [];
+  let wasUpdated = false;
+  const nextItems = currentItems.map((item) => {
+    if (item?.id !== labelId) {
+      return item;
+    }
+
+    wasUpdated = true;
+    const reports = Array.isArray(item.reports) ? item.reports.slice(-49) : [];
+
+    return {
+      ...item,
+      reports: [
+        ...reports,
+        {
+          reason,
+          details,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      reportCount: reports.length + 1,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  if (!wasUpdated) {
+    throw createHttpError(404, 'Label template not found.');
+  }
+
+  await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', nextItems));
+
+  return nextItems;
+}
+
+export async function publicVoteLabelTemplate(vote) {
+  const labelId = typeof vote?.id === 'string' ? vote.id.trim() : '';
+  const direction = Number(vote?.direction);
+
+  if (!labelId || (direction !== 1 && direction !== -1)) {
+    throw createHttpError(400, 'Invalid label vote.');
+  }
+
+  const document = await readCollectionDocument('label-templates');
+  const currentItems = Array.isArray(document.items) ? document.items : [];
+  let wasUpdated = false;
+  const nextItems = currentItems.map((item) => {
+    if (item?.id !== labelId) {
+      return item;
+    }
+
+    wasUpdated = true;
+
+    return {
+      ...item,
+      votes: Math.max(0, Math.round(Number(item.votes) || 0) + direction),
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  if (!wasUpdated) {
+    throw createHttpError(404, 'Label template not found.');
+  }
+
+  await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', nextItems));
+
+  return nextItems;
+}
+
+export async function adminUpsertLabelTemplate(template) {
   if (!isNativeLabelTemplate(template)) {
     throw createHttpError(400, 'Invalid label template.');
   }
 
-  return upsertCollectionItem('label-templates', template.id, template);
+  const document = await readCollectionDocument('label-templates');
+  const currentItems = Array.isArray(document.items) ? document.items : [];
+  const currentItem = currentItems.find((item) => item?.id === template.id);
+  const nextTemplate = normalizeAdminLabelTemplate(template, currentItem);
+  const nextItems = [nextTemplate, ...currentItems.filter((item) => item?.id !== template.id)];
+  const nextDocument = createCollectionDocument('label-templates', nextItems);
+
+  await writeCollectionDocument('label-templates', nextDocument);
+
+  return nextItems;
 }
 
 export function createHttpError(statusCode, message) {
@@ -403,4 +532,282 @@ function isNativeLabelTemplate(value) {
     typeof value.previewFileName === 'string' &&
     typeof value.niimbotCode === 'string'
   );
+}
+
+function normalizePublicLabelTemplate(value, currentItems) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw createHttpError(400, 'Invalid label template.');
+  }
+
+  if (typeof value.honeypot === 'string' && value.honeypot.trim()) {
+    throw createHttpError(400, 'Invalid label template.');
+  }
+
+  const formStartedAt = Number(value.formStartedAt);
+  if (!Number.isFinite(formStartedAt) || Date.now() - formStartedAt < 1500) {
+    throw createHttpError(400, 'Try submitting the label again.');
+  }
+
+  const now = new Date().toISOString();
+  const id = createLabelTemplateId(currentItems);
+  const preview = sanitizePreviewDataUrl(value.previewDataUrl);
+  const peptideName = sanitizeTextField(value.peptideName, {
+    maxLength: 80,
+    fieldName: 'Peptide name',
+    required: true,
+  });
+
+  return {
+    id,
+    previewDataUrl: preview.dataUrl,
+    previewFileName: sanitizePreviewFileName(value.previewFileName, preview.mimeType),
+    niimbotCode: sanitizeTextField(value.niimbotCode, {
+      maxLength: maxLabelCodeLength,
+      fieldName: 'NIIMBOT code',
+      required: true,
+    }),
+    templateName: sanitizeTextField(value.templateName, {
+      maxLength: 80,
+      fieldName: 'Template name',
+      required: false,
+    }) || undefined,
+    peptideName,
+    massMg: sanitizeTextField(value.massMg, {
+      maxLength: 32,
+      fieldName: 'Mass',
+      required: true,
+    }),
+    labelSize: sanitizeTextField(value.labelSize, {
+      maxLength: 40,
+      fieldName: 'Label size',
+      required: true,
+    }),
+    peptideCategories: sanitizeStringArray(value.peptideCategories, {
+      maxItems: 3,
+      maxLength: 32,
+      fieldName: 'Peptide category',
+    }),
+    tags: sanitizeStringArray(value.tags, {
+      maxItems: 10,
+      maxLength: 32,
+      fieldName: 'Tag',
+    }),
+    votes: 0,
+    moderationStatus: 'pending',
+    reportCount: 0,
+    reports: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function normalizeAdminLabelTemplate(value, currentItem = {}) {
+  const now = new Date().toISOString();
+  const moderationStatus = normalizeModerationStatus(value.moderationStatus ?? currentItem?.moderationStatus);
+  const shouldClearReports = Boolean(value.clearReports);
+  const currentReports = Array.isArray(currentItem?.reports) ? currentItem.reports : [];
+  const reports = shouldClearReports || value.reportCount === 0 ? [] : currentReports;
+  const { clearReports, ...templateValue } = value;
+
+  return {
+    ...currentItem,
+    ...templateValue,
+    id: value.id,
+    previewDataUrl: sanitizePreviewDataUrl(value.previewDataUrl).dataUrl,
+    previewFileName: sanitizePreviewFileName(value.previewFileName, value.previewDataUrl.split(';')[0]?.slice(5)),
+    niimbotCode: sanitizeTextField(value.niimbotCode, {
+      maxLength: maxLabelCodeLength,
+      fieldName: 'NIIMBOT code',
+      required: true,
+    }),
+    templateName: sanitizeTextField(value.templateName, {
+      maxLength: 80,
+      fieldName: 'Template name',
+      required: false,
+    }) || undefined,
+    peptideName: sanitizeTextField(value.peptideName, {
+      maxLength: 80,
+      fieldName: 'Peptide name',
+      required: true,
+    }),
+    massMg: sanitizeTextField(value.massMg, {
+      maxLength: 32,
+      fieldName: 'Mass',
+      required: true,
+    }),
+    labelSize: sanitizeTextField(value.labelSize, {
+      maxLength: 40,
+      fieldName: 'Label size',
+      required: true,
+    }),
+    peptideCategories: sanitizeStringArray(value.peptideCategories, {
+      maxItems: 3,
+      maxLength: 32,
+      fieldName: 'Peptide category',
+    }),
+    tags: sanitizeStringArray(value.tags, {
+      maxItems: 10,
+      maxLength: 32,
+      fieldName: 'Tag',
+    }),
+    votes: Math.max(0, Math.round(Number(value.votes ?? currentItem?.votes) || 0)),
+    moderationStatus,
+    reports,
+    reportCount: reports.length,
+    createdAt: typeof currentItem?.createdAt === 'string' ? currentItem.createdAt : now,
+    updatedAt: now,
+  };
+}
+
+function createLabelTemplateId(currentItems) {
+  const currentIds = new Set(currentItems.map((item) => item?.id).filter(Boolean));
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const id = `niimbot-${Date.now()}-${randomUUID().slice(0, 8)}`;
+
+    if (!currentIds.has(id)) {
+      return id;
+    }
+  }
+
+  throw createHttpError(500, 'Could not create label id.');
+}
+
+function sanitizePreviewDataUrl(value) {
+  if (typeof value !== 'string' || !value.startsWith('data:')) {
+    throw createHttpError(400, 'Preview image must be PNG, JPEG, or WebP.');
+  }
+
+  const match = value.match(/^data:([^;,]+);base64,([A-Za-z0-9+/]+={0,2})$/);
+
+  if (!match) {
+    throw createHttpError(400, 'Preview image must be a valid base64 data URL.');
+  }
+
+  const mimeType = match[1].toLowerCase();
+  const base64 = match[2];
+
+  if (!allowedPreviewMimeTypes.has(mimeType)) {
+    throw createHttpError(400, 'Preview image must be PNG, JPEG, or WebP.');
+  }
+
+  if (base64.length % 4 !== 0) {
+    throw createHttpError(400, 'Preview image must be valid base64.');
+  }
+
+  const buffer = Buffer.from(base64, 'base64');
+
+  if (buffer.byteLength === 0 || buffer.byteLength > maxLabelPreviewBytes) {
+    throw createHttpError(400, 'Preview image must be 3 MB or smaller.');
+  }
+
+  if (!matchesImageSignature(buffer, mimeType)) {
+    throw createHttpError(400, 'Preview image type does not match the file contents.');
+  }
+
+  return {
+    dataUrl: `data:${mimeType};base64,${base64}`,
+    mimeType,
+  };
+}
+
+function matchesImageSignature(buffer, mimeType) {
+  if (mimeType === 'image/png') {
+    return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  }
+
+  if (mimeType === 'image/jpeg') {
+    return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+
+  return (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+  );
+}
+
+function sanitizePreviewFileName(value, mimeType) {
+  const fallbackExtension = mimeType === 'image/jpeg' ? 'jpg' : mimeType?.replace('image/', '') || 'png';
+  const rawName = typeof value === 'string' && value.trim() ? value.trim() : `label-preview.${fallbackExtension}`;
+  const safeName = rawName.replace(/[^a-zA-Z0-9._ -]/g, '-').replace(/\s+/g, ' ').slice(0, 120).trim();
+
+  if (!safeName) {
+    return `label-preview.${fallbackExtension}`;
+  }
+
+  if (containsBlockedText(safeName)) {
+    throw createHttpError(400, 'Preview file name contains blocked text.');
+  }
+
+  return safeName;
+}
+
+function sanitizeTextField(value, { maxLength, fieldName, required }) {
+  const text = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+
+  if (required && !text) {
+    throw createHttpError(400, `${fieldName} is required.`);
+  }
+
+  if (text.length > maxLength) {
+    throw createHttpError(400, `${fieldName} is too long.`);
+  }
+
+  if (text && containsBlockedText(text)) {
+    throw createHttpError(400, `${fieldName} contains blocked text.`);
+  }
+
+  return text;
+}
+
+function sanitizeStringArray(value, { maxItems, maxLength, fieldName }) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const nextValues = [];
+
+  for (const item of value) {
+    const text = sanitizeTextField(item, { maxLength, fieldName, required: false });
+
+    if (text && !nextValues.some((currentValue) => currentValue.toLowerCase() === text.toLowerCase())) {
+      nextValues.push(text);
+    }
+
+    if (nextValues.length >= maxItems) {
+      break;
+    }
+  }
+
+  return nextValues;
+}
+
+function normalizeReportReason(value) {
+  const reason = typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+  return allowedReportReasons.has(reason) ? reason : '';
+}
+
+function normalizeModerationStatus(value) {
+  return ['pending', 'approved', 'rejected'].includes(value) ? value : 'pending';
+}
+
+function isPubliclyVisibleLabelTemplate(template) {
+  const status = normalizeModerationStatus(template?.moderationStatus ?? 'approved');
+  const reportCount = Math.max(0, Math.round(Number(template?.reportCount) || 0));
+
+  return status !== 'rejected' && reportCount < maxReportCountBeforeHide;
+}
+
+function containsBlockedText(value) {
+  const normalizedValue = value
+    .toLowerCase()
+    .replace(/[@]/g, 'a')
+    .replace(/[!1|]/g, 'i')
+    .replace(/[0]/g, 'o')
+    .replace(/[$5]/g, 's')
+    .replace(/[^a-z]+/g, '');
+
+  return blockedTextFragments.some((fragment) => normalizedValue.includes(fragment));
 }

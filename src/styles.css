@@ -2048,6 +2048,7 @@ h2 {
 }
 
 .native-label-card {
+  position: relative;
   display: grid;
   grid-template-rows: max-content auto 1fr;
   align-content: stretch;
@@ -2055,6 +2056,36 @@ h2 {
   border: 1px solid #d9e4eb;
   border-radius: 8px;
   background: #fbfdfe;
+}
+
+.native-label-report-button {
+  position: absolute;
+  top: 48px;
+  right: 10px;
+  z-index: 2;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid rgba(137, 154, 169, 0.42);
+  border-radius: 999px;
+  background: rgba(251, 253, 254, 0.86);
+  color: #8b6870;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 950;
+  line-height: 1;
+  opacity: 0.82;
+}
+
+.native-label-report-button:hover,
+.native-label-report-button:focus-visible {
+  border-color: #c58d96;
+  background: #fff7f7;
+  color: #9d2424;
+  opacity: 1;
+  outline: none;
 }
 
 .native-label-card__title {
@@ -2248,6 +2279,33 @@ h2 {
   width: 100%;
 }
 
+.native-label-card__moderation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.native-label-card__moderation button {
+  min-height: 34px;
+  border: 1px solid #c9d8e2;
+  border-radius: 8px;
+  padding: 0 9px;
+  background: #ffffff;
+  color: #1b384d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+
+.native-label-card__moderation button:hover,
+.native-label-card__moderation button:focus-visible {
+  border-color: #0f7d83;
+  background: #eafbff;
+  color: #0f7d83;
+  outline: none;
+}
+
 .native-label-like {
   display: inline-grid;
   grid-template-columns: 18px minmax(2.2em, auto);
@@ -2400,6 +2458,15 @@ h2 {
 .native-label-upload .label-upload {
   border-top: 0;
   padding-top: 0;
+}
+
+.label-honeypot {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .native-upload-preview {

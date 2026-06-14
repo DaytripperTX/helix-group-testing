@@ -18,6 +18,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/labels/*"
+  to = "/.netlify/functions/data/labels/:splat"
+  status = 200
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
