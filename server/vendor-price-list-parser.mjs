@@ -143,13 +143,15 @@ function parseNumber(value) {
 }
 
 function matchPeptides(productName, peptides) {
-  const normalizedProduct = normalizeName(productName);
+  const productNames = getNameMatchVariants(productName);
 
-  if (!normalizedProduct) {
+  if (productNames.length === 0) {
     return [];
   }
 
-  const exactMatch = peptides.find((peptide) => normalizeName(peptide.name) === normalizedProduct);
+  const exactMatch = peptides.find((peptide) =>
+    getNameMatchVariants(peptide.name).some((peptideName) => productNames.includes(peptideName)),
+  );
 
   if (exactMatch?.id) {
     return [exactMatch.id];
@@ -157,11 +159,25 @@ function matchPeptides(productName, peptides) {
 
   return peptides
     .filter((peptide) => {
-      const normalizedPeptide = normalizeName(peptide.name);
-      return normalizedPeptide.length > 0 && normalizedProduct.includes(normalizedPeptide);
+      const peptideNames = getNameMatchVariants(peptide.name);
+      return peptideNames.some((peptideName) =>
+        productNames.some((productNameVariant) =>
+          productNameVariant.includes(peptideName) || peptideName.includes(productNameVariant),
+        ),
+      );
     })
     .map((peptide) => peptide.id)
     .filter(Boolean);
+}
+
+function getNameMatchVariants(value) {
+  return [
+    value,
+    String(value ?? '').replace(/\([^)]*\)/g, ' '),
+  ]
+    .map((variant) => normalizeName(variant))
+    .filter(Boolean)
+    .filter((variant, index, variants) => variants.indexOf(variant) === index);
 }
 
 function normalizeSource(source) {

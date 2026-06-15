@@ -116,6 +116,23 @@ test('vendor price parser reads XLSX file uploads', async () => {
   assert.deepEqual(result.items[0].peptideIds, ['bpc-157']);
 });
 
+test('vendor price parser links peptide names by partial parenthetical match', async () => {
+  const result = await parseVendorPriceList({
+    vendorId: 'vendor-a',
+    vendorName: 'Vendor A',
+    source: {
+      type: 'file',
+      fileName: 'price-list.csv',
+      mimeType: 'text/csv',
+      base64: Buffer.from('code,product,price\n2S10,SS-31,100').toString('base64'),
+    },
+    peptides: [{ id: 'ss-31', name: 'SS-31 (elamipretide)' }],
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.deepEqual(result.items[0].peptideIds, ['ss-31']);
+});
+
 async function parseWithFetchCapture(url) {
   const fetchCalls = [];
   globalThis.fetch = async (fetchUrl) => {
