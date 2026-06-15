@@ -390,12 +390,6 @@ function HomePage() {
               A volunteer-run, non-commercial coordination site for formatting
               communication around group testing interest.
             </p>
-            <div className="hero__actions" aria-label="Project status">
-              <span>Static frontend</span>
-              <span>No accounts</span>
-              <span>No payments</span>
-              <span>No backend</span>
-            </div>
           </div>
 
           <aside className="hero__panel" aria-label="Testing scope summary">

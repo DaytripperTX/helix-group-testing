@@ -999,8 +999,8 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
       <>
         <PageHero
           eyebrow="NIIMBOT Library"
-          title="Native label library"
-          text="Store NIIMBOT-native label template codes with screenshot previews and optional peptide metadata."
+          title="Vial label library"
+          text="A community library of NIIMBOT label templates for vial labels."
         />
 
         <section className="label-page label-page--native" aria-labelledby="native-label-library-title">
