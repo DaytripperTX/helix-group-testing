@@ -133,6 +133,23 @@ test('vendor price parser links peptide names by partial parenthetical match', a
   assert.deepEqual(result.items[0].peptideIds, ['ss-31']);
 });
 
+test('vendor price parser does not link distinct normalized names by broad partial match', async () => {
+  const result = await parseVendorPriceList({
+    vendorId: 'vendor-a',
+    vendorName: 'Vendor A',
+    source: {
+      type: 'file',
+      fileName: 'price-list.csv',
+      mimeType: 'text/csv',
+      base64: Buffer.from('code,product,price\nMT1,Melanotan I,62').toString('base64'),
+    },
+    peptides: [{ id: 'melanotan-ii', name: 'Melanotan II' }],
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.deepEqual(result.items[0].peptideIds, []);
+});
+
 async function parseWithFetchCapture(url) {
   const fetchCalls = [];
   globalThis.fetch = async (fetchUrl) => {

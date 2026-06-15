@@ -160,11 +160,7 @@ function matchPeptides(productName, peptides) {
   return peptides
     .filter((peptide) => {
       const peptideNames = getNameMatchVariants(peptide.name);
-      return peptideNames.some((peptideName) =>
-        productNames.some((productNameVariant) =>
-          productNameVariant.includes(peptideName) || peptideName.includes(productNameVariant),
-        ),
-      );
+      return peptideNames.some((peptideName) => productNames.includes(peptideName));
     })
     .map((peptide) => peptide.id)
     .filter(Boolean);

@@ -74,7 +74,8 @@ export async function upsertCollectionItem(collectionName, itemId, item) {
   }
 
   const currentItems = Array.isArray(document.items) ? document.items : [];
-  const nextItems = [item, ...currentItems.filter((currentItem) => currentItem?.id !== itemId)];
+  const nextItem = normalizeCollectionItem(collectionName, item);
+  const nextItems = [nextItem, ...currentItems.filter((currentItem) => currentItem?.id !== itemId)];
   const nextDocument = createCollectionDocument(collectionName, nextItems);
 
   await writeCollectionDocument(collectionName, nextDocument);
@@ -415,6 +416,10 @@ function normalizeDocument(collectionName, value) {
   return createCollectionDocument(collectionName, value && typeof value === 'object' ? value : {});
 }
 
+function normalizeCollectionItem(collectionName, item) {
+  return collectionName === 'peptides' ? normalizePeptideItem(item) : item;
+}
+
 async function enrichDocumentFromSeed(collectionName, config, document) {
   if (collectionName !== 'peptides' || config.kind !== 'items' || !Array.isArray(document.items)) {
     return document;
@@ -479,14 +484,35 @@ function normalizePeptideWikiLink(link) {
     return null;
   }
 
+  const url = normalizeHttpUrl(link.url);
+
+  if (!url) {
+    return null;
+  }
+
   const source = ['peptidepedia', 'pep-pedia', 'other'].includes(link.source) ? link.source : 'other';
   const status = ['verified', 'suggested', 'manual'].includes(link.status) ? link.status : 'manual';
 
   return {
     source,
-    url: link.url.trim(),
+    url,
     status,
   };
+}
+
+function normalizeHttpUrl(value) {
+  const cleanValue = String(value ?? '').trim();
+
+  if (!cleanValue) {
+    return '';
+  }
+
+  try {
+    const parsedUrl = new URL(cleanValue);
+    return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:' ? parsedUrl.toString() : '';
+  } catch {
+    return '';
+  }
 }
 
 function dedupePeptideWikiLinks(links) {

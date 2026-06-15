@@ -424,6 +424,24 @@ function AdminPage({
     );
   };
 
+  const updatePriceListItemPeptide = (itemId: string, peptideId: string) => {
+    setPriceListDraft((currentDraft) =>
+      currentDraft
+        ? {
+            ...currentDraft,
+            items: currentDraft.items.map((item) =>
+              item.id === itemId
+                ? {
+                    ...item,
+                    peptideIds: peptideId ? [peptideId] : [],
+                  }
+                : item,
+            ),
+          }
+        : currentDraft,
+    );
+  };
+
   const saveVendorPriceList = async () => {
     if (!priceListDraft) {
       setPriceListStatus('Parse or load a price list before saving.');
@@ -1344,7 +1362,19 @@ function AdminPage({
                       <input value={item.mass} onChange={(event) => updatePriceListItem(item.id, 'mass', event.target.value)} />
                       <input value={item.price ?? ''} onChange={(event) => updatePriceListItem(item.id, 'price', event.target.value)} />
                       <input value={item.vialsPerPack} onChange={(event) => updatePriceListItem(item.id, 'vialsPerPack', event.target.value)} />
-                      <span>{formatPeptideLinks(item.peptideIds, peptides)}</span>
+                      <select
+                        className="admin-price-peptide-select"
+                        value={item.peptideIds[0] ?? ''}
+                        aria-label={`Peptide link for ${item.productName || item.vendorCode || 'price row'}`}
+                        onChange={(event) => updatePriceListItemPeptide(item.id, event.target.value)}
+                      >
+                        <option value="">Unlinked</option>
+                        {peptides.map((peptide) => (
+                          <option key={peptide.id} value={peptide.id}>
+                            {peptide.name}
+                          </option>
+                        ))}
+                      </select>
                       <button type="button" onClick={() => removePriceListItem(item.id)}>
                         Delete
                       </button>
@@ -2095,9 +2125,10 @@ function sanitizeUrl(value: string) {
   }
 
   try {
-    return new URL(cleanValue).toString();
+    const parsedUrl = new URL(cleanValue);
+    return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:' ? parsedUrl.toString() : '';
   } catch {
-    return cleanValue;
+    return '';
   }
 }
 
@@ -2228,11 +2259,7 @@ function matchPeptideIds(productName: string, peptides: Peptide[]) {
   return peptides
     .filter((peptide) => {
       const peptideNames = getNameMatchVariants(peptide.name);
-      return peptideNames.some((peptideName) =>
-        productNames.some((productNameVariant) =>
-          productNameVariant.includes(peptideName) || peptideName.includes(productNameVariant),
-        ),
-      );
+      return peptideNames.some((peptideName) => productNames.includes(peptideName));
     })
     .map((peptide) => peptide.id);
 }

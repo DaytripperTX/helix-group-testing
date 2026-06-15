@@ -278,9 +278,10 @@ function sanitizeUrl(value) {
   }
 
   try {
-    return new URL(cleanValue).toString();
+    const parsedUrl = new URL(cleanValue);
+    return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:' ? parsedUrl.toString() : '';
   } catch {
-    return cleanValue;
+    return '';
   }
 }
 

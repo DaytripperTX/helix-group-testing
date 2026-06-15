@@ -62,6 +62,33 @@ test('peptide batch parse returns preview rows for valid admin XLSX upload', asy
   assert.deepEqual(result.rows[0].errors, []);
 });
 
+test('peptide batch parse drops unsafe wiki URL schemes', async () => {
+  await resetData();
+  const response = await apiRequest({
+    headers: adminHeaders(),
+    body: createParseBody(
+      'peptides.csv',
+      [
+        'name,wikiLinks,peptidepediaUrl,pepPediaUrl',
+        'BPC-157,"[{""source"":""other"",""url"":""data:text/html,<h1>hi</h1>"",""status"":""manual""}]",javascript:alert(1),https://pep-pedia.org/peptides/bpc-157',
+      ].join('\n'),
+    ),
+  });
+
+  assert.equal(response.statusCode, 200);
+
+  const result = JSON.parse(response.body);
+
+  assert.deepEqual(result.rows[0].wikiLinks, [
+    {
+      source: 'pep-pedia',
+      url: 'https://pep-pedia.org/peptides/bpc-157',
+      status: 'manual',
+    },
+  ]);
+  assert.deepEqual(result.rows[0].errors, []);
+});
+
 test('peptide batch parse rejects malformed uploads', async () => {
   await resetData();
   const response = await apiRequest({

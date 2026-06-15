@@ -733,6 +733,17 @@ main {
   font: inherit;
 }
 
+.admin-price-row select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd9e2;
+  border-radius: 8px;
+  padding: 8px 28px 8px 8px;
+  color: #344154;
+  font: inherit;
+  font-weight: 800;
+}
+
 .admin-price-row span {
   min-width: 0;
   color: #566579;

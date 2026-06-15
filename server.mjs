@@ -3,9 +3,10 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { handleHelixApiNodeRequest } from './server/helix-node-adapter.mjs';
+import { resolveStaticFilePath } from './server/static-file-paths.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const distDir = path.join(__dirname, 'dist');
+const distDir = path.resolve(__dirname, 'dist');
 const port = Number(process.env.PORT ?? 4173);
 
 const mimeTypes = new Map([
@@ -41,18 +42,20 @@ server.listen(port, () => {
 });
 
 async function serveStaticFile(pathname, response) {
-  const requestedPath = pathname === '/' ? '/index.html' : pathname;
-  const resolvedPath = path.resolve(distDir, `.${decodeURIComponent(requestedPath)}`);
+  const staticFile = await resolveStaticFilePath({
+    distDir,
+    pathname,
+    isExistingFile: isFile,
+  });
 
-  if (!resolvedPath.startsWith(distDir)) {
-    response.writeHead(403);
-    response.end('Forbidden');
+  if (staticFile.statusCode !== 200) {
+    response.writeHead(staticFile.statusCode);
+    response.end(staticFile.statusCode === 400 ? 'Bad Request' : 'Forbidden');
     return;
   }
 
-  const filePath = (await isFile(resolvedPath)) ? resolvedPath : path.join(distDir, 'index.html');
-  const file = await readFile(filePath);
-  const contentType = mimeTypes.get(path.extname(filePath).toLowerCase()) ?? 'application/octet-stream';
+  const file = await readFile(staticFile.filePath);
+  const contentType = mimeTypes.get(path.extname(staticFile.filePath).toLowerCase()) ?? 'application/octet-stream';
 
   response.writeHead(200, { 'Content-Type': contentType });
   response.end(file);
