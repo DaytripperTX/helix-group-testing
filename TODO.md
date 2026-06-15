@@ -61,6 +61,18 @@
 - No payments.
 - No medical claims.
 
+## Before public release
+
+- Add an environment-controlled way to disable individual pages entirely before
+  moving from admin-only beta to public release.
+- Recommended future shape: a build/runtime setting such as
+  `VITE_HELIX_DISABLED_PAGES=order-form,labels` or equivalent route-gating
+  config.
+- Disabled pages should be removed from navigation, and direct URL access should
+  show a simple unavailable page or redirect home.
+- This is not required for admin-only beta, but it is required before public
+  launch because some pages are not ready for public release.
+
 ## Required disclaimer
 
 - ✅ Helix Group Testing does not sell products.

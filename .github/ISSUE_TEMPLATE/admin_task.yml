@@ -1,0 +1,34 @@
+name: Admin task
+description: Track authorized admin or release work.
+title: "[Admin] "
+labels:
+  - admin
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: Task
+      description: What needs to be done?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Admin portal
+        - Labels
+        - Order form
+        - Netlify
+        - GitHub/release
+        - Security
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What proves the task is complete?
+    validations:
+      required: true

@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a site issue for authorized maintainers.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Do not include passwords, tokens, private user data, or exploit details.
+  - type: input
+    id: route
+    attributes:
+      label: Route or feature
+      description: Where did the issue happen?
+      placeholder: /labels
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the shortest reliable steps.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Checks already run
+      description: Mention browser, device, route checks, tests, or builds.

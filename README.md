@@ -2,6 +2,10 @@
 
 Helix Group Testing is a Vite + React + TypeScript site for coordinating group testing information, labels, admin-managed data, and order-interest workflows.
 
+This is a proprietary project. The repository is not open source, and the code,
+assets, data files, and designs are not licensed for reproduction, redistribution,
+or competing reuse. See [LICENSE.md](LICENSE.md).
+
 ## Local setup
 
 Use Node.js 18.18 or newer.
@@ -64,6 +68,10 @@ This repo includes `netlify.toml` with:
 - Build command: `npm run build`
 - Publish directory: `dist`
 
+Production deploys should use the `prod` branch. The default working branch is
+`dev`; changes are promoted to `prod` only after they are reviewed, tested, and
+ready for deployment.
+
 Set these environment variables in the Netlify site UI before sharing a deploy:
 
 - `HELIX_ADMIN_PASSWORD`
@@ -72,10 +80,32 @@ Set these environment variables in the Netlify site UI before sharing a deploy:
 
 Do not set `HELIX_ALLOW_LOCAL_DEFAULTS=true` in Netlify.
 
+The beta is intended to be shared with site admins only. Public pages may still
+be reachable by anyone with the URL, so do not treat the Netlify URL itself as a
+secret security boundary.
+
 To deploy later:
 
 1. Push this repo to GitHub.
 2. Create a new Netlify site from the GitHub repo.
-3. Confirm the build command is `npm run build`.
-4. Confirm the publish directory is `dist`.
-5. Deploy.
+3. Set the Netlify production branch to `prod`.
+4. Confirm the build command is `npm run build`.
+5. Confirm the publish directory is `dist`.
+6. Add the required environment variables.
+7. Deploy.
+
+## Branch model
+
+- `dev`: default branch for active work and admin beta preparation.
+- `prod`: production branch used by Netlify.
+- Feature branches should target `dev`.
+- Production updates should be made by promoting verified `dev` changes into
+  `prod`.
+
+Before promoting to `prod`, run:
+
+```powershell
+npm.cmd test
+npm.cmd run build
+npm.cmd audit --registry=https://registry.npmjs.org/
+```
