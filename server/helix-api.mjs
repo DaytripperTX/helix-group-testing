@@ -12,6 +12,8 @@ import {
   publicVoteLabelTemplate,
   readCollection,
   readPublicLabelTemplates,
+  recoverLabelTemplate,
+  permanentlyDeleteLabelTemplate,
   upsertCollectionItem,
   writeAsset,
 } from './helix-data.mjs';
@@ -56,13 +58,13 @@ export async function handleHelixApiRequest(request) {
 
     if (pathname === '/api/labels/report' && method === 'POST') {
       enforceThrottle(request.headers, 'label-report', 20);
-      await publicReportLabelTemplate(parseJsonBody(request.bodyText));
+      await publicReportLabelTemplate(parseJsonBody(request.bodyText), request.headers);
       return jsonResponse(200, await readPublicLabelTemplates());
     }
 
     if (pathname === '/api/labels/vote' && method === 'POST') {
       enforceThrottle(request.headers, 'label-vote', 60);
-      await publicVoteLabelTemplate(parseJsonBody(request.bodyText));
+      await publicVoteLabelTemplate(parseJsonBody(request.bodyText), request.headers);
       return jsonResponse(200, await readPublicLabelTemplates());
     }
 
@@ -169,9 +171,18 @@ export async function handleHelixApiRequest(request) {
 
       const collectionName = getPathPart(pathname, 4);
       const itemId = decodeURIComponent(getPathPart(pathname, 5));
+      const labelAction = getPathPart(pathname, 6);
 
       if (!collectionName || !itemId) {
         return jsonResponse(404, { error: 'Unknown admin endpoint' });
+      }
+
+      if (collectionName === 'label-templates' && method === 'POST' && labelAction === 'recover') {
+        return jsonResponse(200, await recoverLabelTemplate(itemId));
+      }
+
+      if (collectionName === 'label-templates' && method === 'DELETE' && labelAction === 'permanent') {
+        return jsonResponse(200, await permanentlyDeleteLabelTemplate(itemId));
       }
 
       if (method === 'PUT') {

@@ -45,9 +45,11 @@ type NativeLabelTemplate = {
   peptideCategories?: string[];
   tags?: string[];
   votes?: number;
-  moderationStatus?: 'pending' | 'approved' | 'rejected';
+  moderationStatus?: 'unreviewed' | 'approved' | 'rejected';
   reportCount?: number;
   reports?: NativeLabelReport[];
+  deletedAt?: string;
+  deletedReason?: 'admin' | 'rejected';
   createdAt?: string;
   updatedAt?: string;
   clearReports?: boolean;
@@ -302,6 +304,7 @@ const minExportDpi = 300;
 const maxExportDpi = 2400;
 const binaryWhiteThreshold = 235;
 const maxNativePreviewBytes = 3 * 1024 * 1024;
+const nativeReportHideThreshold = 5;
 const nativePreviewMimeTypes = ['image/png', 'image/jpeg', 'image/webp'];
 const nativeReportReasons: { value: NativeLabelReportReason; label: string }[] = [
   { value: 'offensive', label: 'Offensive' },
@@ -327,6 +330,7 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const [nativeTagFilter, setNativeTagFilter] = useState('');
   const [nativeSortKey, setNativeSortKey] = useState<NativeSortKey>('featured');
   const [isNativeSortReversed, setIsNativeSortReversed] = useState(false);
+  const [nativeAdminView, setNativeAdminView] = useState<'active' | 'trash'>('active');
   const [expandedNativeLabelId, setExpandedNativeLabelId] = useState<string | null>(null);
   const [nativeUploadForm, setNativeUploadForm] = useState<NativeLabelUploadForm>(emptyNativeLabelForm);
   const [nativeUploadStartedAt, setNativeUploadStartedAt] = useState(Date.now());
@@ -429,19 +433,24 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     .sort((first, second) => getTemplateVotes(second, localVotes) - getTemplateVotes(first, localVotes))
     .slice(0, 4);
   const nativeCategoryOptions = getUniqueSortedValues([...peptideCategoryOptions]);
+  const activeNativeLabelTemplates = nativeLabelTemplates.filter((template) => !isTrashedNativeLabel(template));
+  const trashedNativeLabelTemplates = nativeLabelTemplates.filter(isTrashedNativeLabel);
+  const visibleNativeLabelTemplates = isAdmin && nativeAdminView === 'trash'
+    ? trashedNativeLabelTemplates
+    : activeNativeLabelTemplates;
   const nativeLabelSizeOptions = getUniqueSortedValues([
     ...commonLabelSizes,
-    ...nativeLabelTemplates.map((template) => template.labelSize ?? ''),
+    ...visibleNativeLabelTemplates.map((template) => template.labelSize ?? ''),
   ]);
-  const nativeTagOptions = getUniqueSortedValues(nativeLabelTemplates.flatMap((template) => template.tags ?? []));
+  const nativeTagOptions = getUniqueSortedValues(visibleNativeLabelTemplates.flatMap((template) => template.tags ?? []));
   const nativeFavoriteIds = new Set(
-    [...nativeLabelTemplates]
+    [...activeNativeLabelTemplates]
       .filter((template) => getNativeLabelVotes(template) > 0)
       .sort((first, second) => getNativeLabelVotes(second) - getNativeLabelVotes(first))
       .slice(0, 3)
       .map((template) => template.id),
   );
-  const filteredNativeLabelTemplates = nativeLabelTemplates
+  const filteredNativeLabelTemplates = visibleNativeLabelTemplates
     .filter((template) =>
       matchesNativeLabelFilters(
         template,
@@ -803,7 +812,7 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     }
 
     const title = getNativeLabelTitle(editingNativeLabel);
-    const confirmed = window.confirm(`Delete "${title}" from the label library? This cannot be undone.`);
+    const confirmed = window.confirm(`Move "${title}" to trash? It can be recovered for 5 days.`);
 
     if (!confirmed) {
       return;
@@ -911,6 +920,38 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     } catch (error) {
       console.error(error);
       setNativeTemplateStatus('Could not update moderation. Check your admin session.');
+    }
+  };
+
+  const recoverNativeLabel = async (template: NativeLabelTemplate) => {
+    try {
+      const templates = await recoverNativeLabelTemplate(template.id);
+
+      setNativeLabelTemplates(templates);
+      setNativeAdminView('active');
+      setNativeTemplateStatus('');
+    } catch (error) {
+      console.error(error);
+      setNativeTemplateStatus('Could not recover this label. Check your admin session.');
+    }
+  };
+
+  const permanentlyDeleteNativeLabel = async (template: NativeLabelTemplate) => {
+    const title = getNativeLabelTitle(template);
+    const confirmed = window.confirm(`Permanently delete "${title}"? This cannot be undone.`);
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const templates = await permanentlyDeleteNativeLabelTemplate(template.id);
+
+      setNativeLabelTemplates(templates);
+      setNativeTemplateStatus('');
+    } catch (error) {
+      console.error(error);
+      setNativeTemplateStatus('Could not permanently delete this label. Check your admin session.');
     }
   };
 
@@ -1064,7 +1105,7 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                 </div>
                 <div className="native-label-library__tools">
                   <span>
-                    {filteredNativeLabelTemplates.length} of {nativeLabelTemplates.length} saved
+                    {filteredNativeLabelTemplates.length} of {visibleNativeLabelTemplates.length} saved
                   </span>
                   <div className="native-sort-controls" aria-label="Sort labels">
                     <DropdownSelect
@@ -1089,6 +1130,31 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
 
               {nativeTemplateStatus && <p className="native-label-status">{nativeTemplateStatus}</p>}
 
+              {isAdmin && (
+                <div className="native-admin-tabs" aria-label="Label moderation view">
+                  <button
+                    className={nativeAdminView === 'active' ? 'is-active' : ''}
+                    type="button"
+                    aria-pressed={nativeAdminView === 'active'}
+                    onClick={() => setNativeAdminView('active')}
+                  >
+                    Active
+                  </button>
+                  <button
+                    className={nativeAdminView === 'trash' ? 'is-active' : ''}
+                    type="button"
+                    aria-pressed={nativeAdminView === 'trash'}
+                    onClick={() => setNativeAdminView('trash')}
+                  >
+                    Trash
+                  </button>
+                </div>
+              )}
+
+              {isAdmin && nativeAdminView === 'trash' && (
+                <p className="native-label-status">Items are permanently deleted after 5 days.</p>
+              )}
+
               {filteredNativeLabelTemplates.length > 0 ? (
                 <div className="native-label-grid">
                   {filteredNativeLabelTemplates.map((template) => (
@@ -1098,6 +1164,7 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                       isTagListExpanded={expandedNativeLabelId === template.id}
                       isVoted={localVotes[template.id] ?? false}
                       isCommunityFavorite={nativeFavoriteIds.has(template.id)}
+                      isTrashView={isAdmin && nativeAdminView === 'trash'}
                       key={template.id}
                       votes={getNativeLabelVotes(template)}
                       onSelectLabel={() =>
@@ -1118,25 +1185,30 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                       onApprove={() => {
                         void updateNativeLabelModeration(template, 'approved', true);
                       }}
-                      onPend={() => {
-                        void updateNativeLabelModeration(template, 'pending');
-                      }}
                       onReject={() => {
                         void updateNativeLabelModeration(template, 'rejected');
                       }}
                       onClearReports={() => {
-                        void updateNativeLabelModeration(template, template.moderationStatus ?? 'pending', true);
+                        void updateNativeLabelModeration(template, template.moderationStatus ?? 'unreviewed', true);
+                      }}
+                      onRecover={() => {
+                        void recoverNativeLabel(template);
+                      }}
+                      onPermanentDelete={() => {
+                        void permanentlyDeleteNativeLabel(template);
                       }}
                     />
                   ))}
                 </div>
               ) : (
                 <div className="native-label-empty">
-                  <strong>{nativeLabelTemplates.length > 0 ? 'No matches' : 'No NIIMBOT templates yet'}</strong>
+                  <strong>{visibleNativeLabelTemplates.length > 0 ? 'No matches' : 'No NIIMBOT templates yet'}</strong>
                   <span>
-                    {nativeLabelTemplates.length > 0
+                    {visibleNativeLabelTemplates.length > 0
                       ? 'Adjust the filters or search text.'
-                      : 'Upload a screenshot preview and template code to start the library.'}
+                      : nativeAdminView === 'trash'
+                        ? 'Deleted and rejected labels will appear here.'
+                        : 'Upload a screenshot preview and template code to start the library.'}
                   </span>
                 </div>
               )}
@@ -1824,15 +1896,17 @@ function NativeLabelTemplateCard({
   isTagListExpanded,
   isVoted,
   isCommunityFavorite,
+  isTrashView,
   onSelectLabel,
   onToggleTagList,
   onVote,
   onReport,
   onEdit,
   onApprove,
-  onPend,
   onReject,
   onClearReports,
+  onRecover,
+  onPermanentDelete,
   votes,
 }: {
   template: NativeLabelTemplate;
@@ -1840,20 +1914,31 @@ function NativeLabelTemplateCard({
   isTagListExpanded: boolean;
   isVoted: boolean;
   isCommunityFavorite: boolean;
+  isTrashView: boolean;
   onSelectLabel: () => void;
   onToggleTagList: () => void;
   onVote: () => void;
   onReport: () => void;
   onEdit: () => void;
   onApprove: () => void;
-  onPend: () => void;
   onReject: () => void;
   onClearReports: () => void;
+  onRecover: () => void;
+  onPermanentDelete: () => void;
   votes: number;
 }) {
   const title = getNativeLabelTitle(template);
-  const moderationStatus = template.moderationStatus ?? 'approved';
+  const moderationStatus = template.moderationStatus ?? 'unreviewed';
   const reportCount = Math.max(0, Math.round(template.reportCount ?? 0));
+  const isHiddenByReports = !isTrashView && reportCount >= nativeReportHideThreshold;
+  const banner =
+    isTrashView
+      ? null
+      : isHiddenByReports
+        ? { tone: 'report', text: 'Hidden due to reports. Please review.' }
+        : moderationStatus === 'unreviewed'
+          ? { tone: 'review', text: 'Visible, needs review' }
+          : null;
   const metadata = [
     template.peptideName ?? '',
     template.massMg ? `${template.massMg} mg` : '',
@@ -1879,11 +1964,16 @@ function NativeLabelTemplateCard({
           !
         </button>
       )}
+      {isAdmin && banner && (
+        <div className={`native-label-card__notice native-label-card__notice--${banner.tone}`}>
+          {banner.text}
+        </div>
+      )}
       <div className="native-label-card__title">
         <h3>{title}</h3>
         <div className="native-label-card__badges">
           {isCommunityFavorite && <span>Community favorite</span>}
-          {isAdmin && <span>{moderationStatus}</span>}
+          {isAdmin && <span>{getModerationStatusLabel(moderationStatus)}</span>}
           {isAdmin && reportCount > 0 && <span>{reportCount} reports</span>}
           {isAdmin && (
             <button
@@ -1969,19 +2059,29 @@ function NativeLabelTemplateCard({
         </div>
         {isAdmin && (
           <div className="native-label-card__moderation">
-            <button type="button" onClick={(event) => { event.stopPropagation(); onApprove(); }}>
-              Approve
-            </button>
-            <button type="button" onClick={(event) => { event.stopPropagation(); onPend(); }}>
-              Pending
-            </button>
-            <button type="button" onClick={(event) => { event.stopPropagation(); onReject(); }}>
-              Reject
-            </button>
-            {reportCount > 0 && (
-              <button type="button" onClick={(event) => { event.stopPropagation(); onClearReports(); }}>
-                Clear reports
-              </button>
+            {isTrashView ? (
+              <>
+                <button className="native-label-card__action--approve" type="button" onClick={(event) => { event.stopPropagation(); onRecover(); }}>
+                  Recover
+                </button>
+                <button className="native-label-card__action--reject" type="button" onClick={(event) => { event.stopPropagation(); onPermanentDelete(); }}>
+                  Delete permanently
+                </button>
+              </>
+            ) : (
+              <>
+                <button className="native-label-card__action--approve" type="button" onClick={(event) => { event.stopPropagation(); onApprove(); }}>
+                  Approve
+                </button>
+                <button className="native-label-card__action--reject" type="button" onClick={(event) => { event.stopPropagation(); onReject(); }}>
+                  Reject
+                </button>
+                {reportCount > 0 && (
+                  <button type="button" onClick={(event) => { event.stopPropagation(); onClearReports(); }}>
+                    Clear reports
+                  </button>
+                )}
+              </>
             )}
           </div>
         )}
@@ -2072,6 +2172,22 @@ function getTemplateVotes(template: LabelTemplate, localVotes: Record<string, bo
 
 function getNativeLabelVotes(template: NativeLabelTemplate) {
   return Math.max(0, Math.round(template.votes ?? 0));
+}
+
+function isTrashedNativeLabel(template: NativeLabelTemplate) {
+  return Boolean(template.deletedAt) || template.moderationStatus === 'rejected';
+}
+
+function getModerationStatusLabel(status: NativeLabelTemplate['moderationStatus']) {
+  if (status === 'approved') {
+    return 'Approved';
+  }
+
+  if (status === 'rejected') {
+    return 'Rejected';
+  }
+
+  return 'Unreviewed';
 }
 
 function compareNativeLabels(
@@ -2387,6 +2503,44 @@ async function deleteNativeLabelTemplate(templateId: string) {
   return templates.filter(isNativeLabelTemplate);
 }
 
+async function recoverNativeLabelTemplate(templateId: string) {
+  const response = await fetch(`/api/admin/data/label-templates/${encodeURIComponent(templateId)}/recover`, {
+    method: 'POST',
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error('Label could not be recovered.');
+  }
+
+  const templates = (await response.json()) as unknown;
+
+  if (!Array.isArray(templates)) {
+    throw new Error('Stored label response was invalid.');
+  }
+
+  return templates.filter(isNativeLabelTemplate);
+}
+
+async function permanentlyDeleteNativeLabelTemplate(templateId: string) {
+  const response = await fetch(`/api/admin/data/label-templates/${encodeURIComponent(templateId)}/permanent`, {
+    method: 'DELETE',
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error('Label could not be permanently deleted.');
+  }
+
+  const templates = (await response.json()) as unknown;
+
+  if (!Array.isArray(templates)) {
+    throw new Error('Stored label response was invalid.');
+  }
+
+  return templates.filter(isNativeLabelTemplate);
+}
+
 function isNativeLabelTemplate(value: unknown): value is NativeLabelTemplate {
   if (!value || typeof value !== 'object') {
     return false;
@@ -2402,9 +2556,15 @@ function isNativeLabelTemplate(value: unknown): value is NativeLabelTemplate {
     (template.votes === undefined || typeof template.votes === 'number') &&
     (
       template.moderationStatus === undefined ||
-      template.moderationStatus === 'pending' ||
+      template.moderationStatus === 'unreviewed' ||
       template.moderationStatus === 'approved' ||
       template.moderationStatus === 'rejected'
+    ) &&
+    (template.deletedAt === undefined || typeof template.deletedAt === 'string') &&
+    (
+      template.deletedReason === undefined ||
+      template.deletedReason === 'admin' ||
+      template.deletedReason === 'rejected'
     ) &&
     (template.reportCount === undefined || typeof template.reportCount === 'number')
   );

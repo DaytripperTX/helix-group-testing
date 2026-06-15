@@ -2094,6 +2094,34 @@ h2 {
   line-height: 1.45;
 }
 
+.native-admin-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: -2px 0 14px;
+}
+
+.native-admin-tabs button {
+  min-height: 38px;
+  border: 1px solid #c9d8e2;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #344154;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 900;
+}
+
+.native-admin-tabs button:hover,
+.native-admin-tabs button:focus-visible,
+.native-admin-tabs button.is-active {
+  border-color: #0f7d83;
+  background: #eafbff;
+  color: #006f78;
+  outline: none;
+}
+
 .native-label-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -2147,6 +2175,24 @@ h2 {
   align-items: center;
   justify-content: space-between;
   padding: 8px 14px 7px;
+}
+
+.native-label-card__notice {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 7px 14px;
+  font-size: 0.76rem;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.native-label-card__notice--review {
+  background: #fff7cf;
+  color: #76530b;
+}
+
+.native-label-card__notice--report {
+  background: #fff0dc;
+  color: #934c00;
 }
 
 .native-label-card__title h3 {
@@ -2333,12 +2379,13 @@ h2 {
 }
 
 .native-label-card__moderation {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+  gap: 8px;
 }
 
 .native-label-card__moderation button {
+  width: 100%;
   min-height: 34px;
   border: 1px solid #c9d8e2;
   border-radius: 8px;
@@ -2351,12 +2398,38 @@ h2 {
   font-weight: 900;
 }
 
+.native-label-card__moderation .native-label-card__action--approve {
+  border-color: #7fbf91;
+  background: #eefaf1;
+  color: #236739;
+}
+
+.native-label-card__moderation .native-label-card__action--reject {
+  border-color: #d9a0a0;
+  background: #fff1f1;
+  color: #9d2424;
+}
+
 .native-label-card__moderation button:hover,
 .native-label-card__moderation button:focus-visible {
   border-color: #0f7d83;
   background: #eafbff;
   color: #0f7d83;
   outline: none;
+}
+
+.native-label-card__moderation .native-label-card__action--approve:hover,
+.native-label-card__moderation .native-label-card__action--approve:focus-visible {
+  border-color: #2c8a49;
+  background: #dff4e5;
+  color: #18552c;
+}
+
+.native-label-card__moderation .native-label-card__action--reject:hover,
+.native-label-card__moderation .native-label-card__action--reject:focus-visible {
+  border-color: #b63232;
+  background: #ffe1e1;
+  color: #7d1717;
 }
 
 .native-label-like {

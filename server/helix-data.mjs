@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,7 +14,8 @@ const legacyLabelsPath = path.join(rootDir, 'dist', 'stored-data', 'labels', 'te
 const storeName = 'helix-data';
 const maxLabelPreviewBytes = 3 * 1024 * 1024;
 const maxLabelCodeLength = 20 * 1024;
-const maxReportCountBeforeHide = 3;
+const maxReportCountBeforeHide = 5;
+const trashRetentionMs = 5 * 24 * 60 * 60 * 1000;
 const allowedPreviewMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const allowedReportReasons = new Set(['offensive', 'spam', 'unsafe', 'other']);
 const blockedTextFragments = [
@@ -46,6 +47,12 @@ export function getCollectionNames() {
 }
 
 export async function readCollection(collectionName) {
+  if (collectionName === 'label-templates') {
+    const document = await readLabelTemplateDocument();
+
+    return document.items;
+  }
+
   const document = await readCollectionDocument(collectionName);
 
   return getDocumentPayload(collectionName, document);
@@ -54,7 +61,7 @@ export async function readCollection(collectionName) {
 export async function readPublicLabelTemplates() {
   const templates = await readCollection('label-templates');
 
-  return templates.filter(isPubliclyVisibleLabelTemplate);
+  return templates.filter(isPubliclyVisibleLabelTemplate).map(toPublicLabelTemplate);
 }
 
 export async function upsertCollectionItem(collectionName, itemId, item) {
@@ -84,6 +91,10 @@ export async function upsertCollectionItem(collectionName, itemId, item) {
 }
 
 export async function deleteCollectionItem(collectionName, itemId) {
+  if (collectionName === 'label-templates') {
+    return softDeleteLabelTemplate(itemId, 'admin');
+  }
+
   const document = await readCollectionDocument(collectionName);
   const config = getCollectionConfig(collectionName);
 
@@ -139,7 +150,7 @@ export async function writeAsset(asset) {
 }
 
 export async function publicUpsertLabelTemplate(template) {
-  const document = await readCollectionDocument('label-templates');
+  const document = await readLabelTemplateDocument();
   const currentItems = Array.isArray(document.items) ? document.items : [];
   const nextTemplate = normalizePublicLabelTemplate(template, currentItems);
   const nextItems = [nextTemplate, ...currentItems];
@@ -150,7 +161,7 @@ export async function publicUpsertLabelTemplate(template) {
   return nextItems;
 }
 
-export async function publicReportLabelTemplate(report) {
+export async function publicReportLabelTemplate(report, headers = {}) {
   const labelId = typeof report?.id === 'string' ? report.id.trim() : '';
   const reason = normalizeReportReason(report?.reason);
   const details = sanitizeTextField(report?.details, {
@@ -163,7 +174,8 @@ export async function publicReportLabelTemplate(report) {
     throw createHttpError(400, 'Invalid label report.');
   }
 
-  const document = await readCollectionDocument('label-templates');
+  const fingerprint = createLabelActionFingerprint(headers, labelId, 'report');
+  const document = await readLabelTemplateDocument();
   const currentItems = Array.isArray(document.items) ? document.items : [];
   let wasUpdated = false;
   const nextItems = currentItems.map((item) => {
@@ -173,18 +185,28 @@ export async function publicReportLabelTemplate(report) {
 
     wasUpdated = true;
     const reports = Array.isArray(item.reports) ? item.reports.slice(-49) : [];
+    const reportFingerprints = normalizeFingerprintList(item.reportFingerprints);
+
+    if (reportFingerprints.includes(fingerprint)) {
+      return item;
+    }
+
+    const nextReports = [
+      ...reports,
+      {
+        reason,
+        details,
+        fingerprint,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    const nextReportFingerprints = [...reportFingerprints, fingerprint].slice(-50);
 
     return {
       ...item,
-      reports: [
-        ...reports,
-        {
-          reason,
-          details,
-          createdAt: new Date().toISOString(),
-        },
-      ],
-      reportCount: reports.length + 1,
+      reports: nextReports,
+      reportFingerprints: nextReportFingerprints,
+      reportCount: nextReportFingerprints.length,
       updatedAt: new Date().toISOString(),
     };
   });
@@ -198,7 +220,7 @@ export async function publicReportLabelTemplate(report) {
   return nextItems;
 }
 
-export async function publicVoteLabelTemplate(vote) {
+export async function publicVoteLabelTemplate(vote, headers = {}) {
   const labelId = typeof vote?.id === 'string' ? vote.id.trim() : '';
   const direction = Number(vote?.direction);
 
@@ -206,7 +228,8 @@ export async function publicVoteLabelTemplate(vote) {
     throw createHttpError(400, 'Invalid label vote.');
   }
 
-  const document = await readCollectionDocument('label-templates');
+  const fingerprint = createLabelActionFingerprint(headers, labelId, 'vote');
+  const document = await readLabelTemplateDocument();
   const currentItems = Array.isArray(document.items) ? document.items : [];
   let wasUpdated = false;
   const nextItems = currentItems.map((item) => {
@@ -215,10 +238,17 @@ export async function publicVoteLabelTemplate(vote) {
     }
 
     wasUpdated = true;
+    const voteFingerprints = normalizeFingerprintList(item.voteFingerprints);
+    const hasVoted = voteFingerprints.includes(fingerprint);
+    const nextVoteFingerprints =
+      direction === 1
+        ? hasVoted ? voteFingerprints : [...voteFingerprints, fingerprint]
+        : voteFingerprints.filter((currentFingerprint) => currentFingerprint !== fingerprint);
 
     return {
       ...item,
-      votes: Math.max(0, Math.round(Number(item.votes) || 0) + direction),
+      voteFingerprints: nextVoteFingerprints,
+      votes: nextVoteFingerprints.length,
       updatedAt: new Date().toISOString(),
     };
   });
@@ -237,7 +267,7 @@ export async function adminUpsertLabelTemplate(template) {
     throw createHttpError(400, 'Invalid label template.');
   }
 
-  const document = await readCollectionDocument('label-templates');
+  const document = await readLabelTemplateDocument();
   const currentItems = Array.isArray(document.items) ? document.items : [];
   const currentItem = currentItems.find((item) => item?.id === template.id);
   const nextTemplate = normalizeAdminLabelTemplate(template, currentItem);
@@ -247,6 +277,38 @@ export async function adminUpsertLabelTemplate(template) {
   await writeCollectionDocument('label-templates', nextDocument);
 
   return nextItems;
+}
+
+export async function recoverLabelTemplate(itemId) {
+  const document = await readLabelTemplateDocument();
+  const currentItems = Array.isArray(document.items) ? document.items : [];
+  let wasUpdated = false;
+  const nextItems = currentItems.map((item) => {
+    if (item?.id !== itemId) {
+      return item;
+    }
+
+    wasUpdated = true;
+    const { deletedAt, deletedReason, ...nextItem } = item;
+
+    return {
+      ...nextItem,
+      moderationStatus: 'unreviewed',
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  if (!wasUpdated) {
+    throw createHttpError(404, 'Label template not found.');
+  }
+
+  await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', nextItems));
+
+  return nextItems;
+}
+
+export async function permanentlyDeleteLabelTemplate(itemId) {
+  return hardDeleteLabelTemplate(itemId);
 }
 
 export function createHttpError(statusCode, message) {
@@ -414,6 +476,19 @@ function normalizeDocument(collectionName, value) {
   }
 
   return createCollectionDocument(collectionName, value && typeof value === 'object' ? value : {});
+}
+
+async function readLabelTemplateDocument() {
+  const document = await readCollectionDocument('label-templates');
+  const items = Array.isArray(document.items) ? document.items.map(normalizeStoredLabelTemplate) : [];
+  const activeItems = purgeExpiredTrash(items);
+  const nextDocument = createCollectionDocument('label-templates', activeItems);
+
+  if (activeItems.length !== items.length || JSON.stringify(items) !== JSON.stringify(document.items)) {
+    await writeCollectionDocument('label-templates', nextDocument);
+  }
+
+  return nextDocument;
 }
 
 function normalizeCollectionItem(collectionName, item) {
@@ -619,9 +694,11 @@ function normalizePublicLabelTemplate(value, currentItems) {
       fieldName: 'Tag',
     }),
     votes: 0,
-    moderationStatus: 'pending',
+    voteFingerprints: [],
+    moderationStatus: 'unreviewed',
     reportCount: 0,
     reports: [],
+    reportFingerprints: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -633,9 +710,25 @@ function normalizeAdminLabelTemplate(value, currentItem = {}) {
   const shouldClearReports = Boolean(value.clearReports);
   const currentReports = Array.isArray(currentItem?.reports) ? currentItem.reports : [];
   const reports = shouldClearReports || value.reportCount === 0 ? [] : currentReports;
+  const reportFingerprints = shouldClearReports || value.reportCount === 0
+    ? []
+    : normalizeFingerprintList(currentItem?.reportFingerprints);
+  const voteFingerprints = normalizeFingerprintList(currentItem?.voteFingerprints);
   const { clearReports, ...templateValue } = value;
+  const nextDeletedAt =
+    moderationStatus === 'rejected'
+      ? typeof value.deletedAt === 'string'
+        ? value.deletedAt
+        : typeof currentItem?.deletedAt === 'string'
+          ? currentItem.deletedAt
+          : now
+      : typeof value.deletedAt === 'string' ? value.deletedAt : undefined;
+  const nextDeletedReason =
+    moderationStatus === 'rejected'
+      ? 'rejected'
+      : value.deletedReason === 'admin' ? 'admin' : value.deletedReason === 'rejected' ? 'rejected' : undefined;
 
-  return {
+  const nextItem = {
     ...currentItem,
     ...templateValue,
     id: value.id,
@@ -676,13 +769,29 @@ function normalizeAdminLabelTemplate(value, currentItem = {}) {
       maxLength: 32,
       fieldName: 'Tag',
     }),
-    votes: Math.max(0, Math.round(Number(value.votes ?? currentItem?.votes) || 0)),
+    voteFingerprints,
+    votes: voteFingerprints.length || Math.max(0, Math.round(Number(value.votes ?? currentItem?.votes) || 0)),
     moderationStatus,
     reports,
-    reportCount: reports.length,
+    reportFingerprints,
+    reportCount: reportFingerprints.length || reports.length,
     createdAt: typeof currentItem?.createdAt === 'string' ? currentItem.createdAt : now,
     updatedAt: now,
   };
+
+  if (nextDeletedAt) {
+    nextItem.deletedAt = nextDeletedAt;
+  } else {
+    delete nextItem.deletedAt;
+  }
+
+  if (nextDeletedReason) {
+    nextItem.deletedReason = nextDeletedReason;
+  } else {
+    delete nextItem.deletedReason;
+  }
+
+  return normalizeStoredLabelTemplate(nextItem);
 }
 
 function createLabelTemplateId(currentItems) {
@@ -816,14 +925,196 @@ function normalizeReportReason(value) {
 }
 
 function normalizeModerationStatus(value) {
-  return ['pending', 'approved', 'rejected'].includes(value) ? value : 'pending';
+  if (value === 'pending') {
+    return 'unreviewed';
+  }
+
+  return ['unreviewed', 'approved', 'rejected'].includes(value) ? value : 'unreviewed';
 }
 
 function isPubliclyVisibleLabelTemplate(template) {
-  const status = normalizeModerationStatus(template?.moderationStatus ?? 'approved');
-  const reportCount = Math.max(0, Math.round(Number(template?.reportCount) || 0));
+  const status = normalizeModerationStatus(template?.moderationStatus ?? 'unreviewed');
+  const reportCount = getDistinctReportCount(template);
 
-  return status !== 'rejected' && reportCount < maxReportCountBeforeHide;
+  return !template?.deletedAt && status !== 'rejected' && reportCount < maxReportCountBeforeHide;
+}
+
+function softDeleteLabelTemplate(itemId, deletedReason) {
+  return updateDeletedLabelTemplate(itemId, {
+    moderationStatus: 'rejected',
+    deletedAt: new Date().toISOString(),
+    deletedReason,
+  });
+}
+
+async function updateDeletedLabelTemplate(itemId, fields) {
+  const document = await readLabelTemplateDocument();
+  const currentItems = Array.isArray(document.items) ? document.items : [];
+  let wasUpdated = false;
+  const nextItems = currentItems.map((item) => {
+    if (item?.id !== itemId) {
+      return item;
+    }
+
+    wasUpdated = true;
+
+    return normalizeStoredLabelTemplate({
+      ...item,
+      ...fields,
+      updatedAt: new Date().toISOString(),
+    });
+  });
+
+  if (!wasUpdated) {
+    throw createHttpError(404, 'Label template not found.');
+  }
+
+  await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', nextItems));
+
+  return nextItems;
+}
+
+async function hardDeleteLabelTemplate(itemId) {
+  const document = await readLabelTemplateDocument();
+  const currentItems = Array.isArray(document.items) ? document.items : [];
+  const nextItems = currentItems.filter((currentItem) => currentItem?.id !== itemId);
+
+  if (nextItems.length === currentItems.length) {
+    throw createHttpError(404, 'Label template not found.');
+  }
+
+  await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', nextItems));
+
+  return nextItems;
+}
+
+function normalizeStoredLabelTemplate(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return item;
+  }
+
+  const reports = Array.isArray(item.reports)
+    ? item.reports.map((report) => ({
+        reason: normalizeReportReason(report?.reason) || 'other',
+        details: typeof report?.details === 'string' ? report.details : '',
+        ...(typeof report?.fingerprint === 'string' ? { fingerprint: report.fingerprint } : {}),
+        createdAt: typeof report?.createdAt === 'string' ? report.createdAt : new Date().toISOString(),
+      }))
+    : [];
+  const reportFingerprints = normalizeFingerprintList(item.reportFingerprints);
+  const nextReportFingerprints = reportFingerprints.length
+    ? reportFingerprints
+    : normalizeFingerprintList(reports.map((report) => report.fingerprint).filter(Boolean));
+  const voteFingerprints = normalizeFingerprintList(item.voteFingerprints);
+  const moderationStatus = normalizeModerationStatus(item.moderationStatus);
+  const nextItem = {
+    ...item,
+    moderationStatus,
+    votes: voteFingerprints.length || Math.max(0, Math.round(Number(item.votes) || 0)),
+    voteFingerprints,
+    reports,
+    reportFingerprints: nextReportFingerprints,
+    reportCount: nextReportFingerprints.length || reports.length || Math.max(0, Math.round(Number(item.reportCount) || 0)),
+  };
+
+  if (moderationStatus === 'rejected' && !nextItem.deletedAt) {
+    nextItem.deletedAt = typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString();
+    nextItem.deletedReason = 'rejected';
+  }
+
+  if (typeof nextItem.deletedAt !== 'string') {
+    delete nextItem.deletedAt;
+    delete nextItem.deletedReason;
+  } else if (!['admin', 'rejected'].includes(nextItem.deletedReason)) {
+    nextItem.deletedReason = moderationStatus === 'rejected' ? 'rejected' : 'admin';
+  }
+
+  return nextItem;
+}
+
+function purgeExpiredTrash(items) {
+  const now = Date.now();
+
+  return items.filter((item) => {
+    if (!item?.deletedAt) {
+      return true;
+    }
+
+    const deletedAt = Date.parse(item.deletedAt);
+
+    return !Number.isFinite(deletedAt) || now - deletedAt < trashRetentionMs;
+  });
+}
+
+function toPublicLabelTemplate(template) {
+  const {
+    reportFingerprints,
+    voteFingerprints,
+    reports,
+    deletedAt,
+    deletedReason,
+    ...publicTemplate
+  } = template;
+
+  return publicTemplate;
+}
+
+function getDistinctReportCount(template) {
+  const reportFingerprints = normalizeFingerprintList(template?.reportFingerprints);
+
+  if (reportFingerprints.length) {
+    return reportFingerprints.length;
+  }
+
+  return Math.max(0, Math.round(Number(template?.reportCount) || 0));
+}
+
+function normalizeFingerprintList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [...new Set(value.filter((item) => typeof item === 'string' && item.trim()))];
+}
+
+function createLabelActionFingerprint(headers, labelId, action) {
+  const rawValue = [
+    action,
+    labelId,
+    getClientFingerprintSource(headers),
+  ].join(':');
+
+  return createHmac('sha256', getLabelFingerprintSecret()).update(rawValue).digest('base64url');
+}
+
+function getClientFingerprintSource(headers = {}) {
+  const forwardedFor = getHeaderValue(headers, 'x-forwarded-for')?.split(',')[0]?.trim();
+  const clientIp = forwardedFor || getHeaderValue(headers, 'cf-connecting-ip') || getHeaderValue(headers, 'x-real-ip') || 'local';
+  const userAgent = getHeaderValue(headers, 'user-agent') || 'unknown-agent';
+
+  return `${clientIp}:${userAgent.slice(0, 160)}`;
+}
+
+function getHeaderValue(headers, name) {
+  if (!headers || typeof headers !== 'object') {
+    return '';
+  }
+
+  const normalizedName = name.toLowerCase();
+
+  for (const [headerName, value] of Object.entries(headers)) {
+    if (headerName.toLowerCase() === normalizedName) {
+      return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '');
+    }
+  }
+
+  return '';
+}
+
+function getLabelFingerprintSecret() {
+  return process.env.HELIX_LABEL_FINGERPRINT_SECRET ||
+    process.env.HELIX_ADMIN_SESSION_SECRET ||
+    'helix-local-label-fingerprint-secret';
 }
 
 function containsBlockedText(value) {
