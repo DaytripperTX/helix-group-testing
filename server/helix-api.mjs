@@ -34,7 +34,11 @@ const rootDir = path.resolve(__dirname, '..');
 const pepPediaIndexPath = path.join(rootDir, 'data', 'pep-pedia-index.json');
 let cachedPepPediaIndex = null;
 const throttleBuckets = new Map();
+const loginAttemptBuckets = new Map();
 const throttleWindowMs = 60 * 60 * 1000;
+const maxFailedLoginAttempts = 5;
+const loginAttemptWindowMs = 15 * 60 * 1000;
+const loginLockoutMs = 15 * 60 * 1000;
 
 export { maxBodyBytes };
 
@@ -90,10 +94,18 @@ export async function handleHelixApiRequest(request) {
     if (pathname === '/api/admin/login' && method === 'POST') {
       const body = parseJsonBody(request.bodyText);
       const role = body?.role === 'owner' ? 'owner' : 'admin';
+      const lockoutResponse = getLoginLockoutResponse(request.headers, role);
+
+      if (lockoutResponse) {
+        return lockoutResponse;
+      }
 
       if (!validateRolePassword(body?.password, role)) {
+        recordFailedLoginAttempt(request.headers, role);
         return jsonResponse(401, { error: 'Invalid password' });
       }
+
+      clearLoginAttempts(request.headers, role);
 
       return jsonResponse(200, getPublicSession({ role }), {
         'Set-Cookie': createAdminSessionCookie(role),
@@ -294,6 +306,63 @@ function getClientThrottleKey(headers = {}) {
   const userAgent = getHeaderValue(headers, 'user-agent') || 'unknown-agent';
 
   return `${clientIp || 'local'}:${userAgent.slice(0, 80)}`;
+}
+
+function getLoginLockoutResponse(headers, role) {
+  const now = Date.now();
+  const bucket = loginAttemptBuckets.get(getLoginAttemptKey(headers, role));
+
+  if (!bucket) {
+    return null;
+  }
+
+  if (bucket.lockedUntil > now) {
+    return jsonResponse(429, { error: 'Too many login attempts. Try again later.' }, {
+      'Retry-After': String(Math.ceil((bucket.lockedUntil - now) / 1000)),
+    });
+  }
+
+  if (bucket.resetAt <= now) {
+    loginAttemptBuckets.delete(getLoginAttemptKey(headers, role));
+  }
+
+  return null;
+}
+
+function recordFailedLoginAttempt(headers, role) {
+  const key = getLoginAttemptKey(headers, role);
+  const now = Date.now();
+  const bucket = loginAttemptBuckets.get(key);
+
+  if (!bucket || bucket.resetAt <= now) {
+    loginAttemptBuckets.set(key, {
+      count: 1,
+      resetAt: now + loginAttemptWindowMs,
+      lockedUntil: 0,
+    });
+    return;
+  }
+
+  bucket.count += 1;
+
+  if (bucket.count >= maxFailedLoginAttempts) {
+    bucket.lockedUntil = now + loginLockoutMs;
+  }
+}
+
+function clearLoginAttempts(headers, role) {
+  loginAttemptBuckets.delete(getLoginAttemptKey(headers, role));
+}
+
+function getLoginAttemptKey(headers, role) {
+  return `${role}:${getClientIpKey(headers)}`;
+}
+
+function getClientIpKey(headers = {}) {
+  const forwardedFor = getHeaderValue(headers, 'x-forwarded-for')?.split(',')[0]?.trim();
+  const clientIp = forwardedFor || getHeaderValue(headers, 'cf-connecting-ip') || getHeaderValue(headers, 'x-real-ip');
+
+  return clientIp || 'local';
 }
 
 function getHeaderValue(headers, name) {
