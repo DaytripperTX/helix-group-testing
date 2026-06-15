@@ -5,6 +5,8 @@ import path from 'node:path';
 
 const testDataDir = path.resolve('.tmp', 'label-security-test-data');
 process.env.HELIX_LOCAL_DATA_DIR = testDataDir;
+process.env.HELIX_ADMIN_PASSWORD = 'test-admin-password';
+process.env.HELIX_ADMIN_SESSION_SECRET = 'test-admin-session-secret';
 
 const { handleHelixApiRequest } = await import('../server/helix-api.mjs');
 const {
@@ -18,6 +20,50 @@ const {
 
 const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzX7cgAAAABJRU5ErkJggg==';
 const validPreviewDataUrl = `data:image/png;base64,${pngBase64}`;
+
+test('generic collection reads enforce public and admin access policy', async () => {
+  await resetData();
+
+  for (const collectionName of [
+    'peptides',
+    'peptide-categories',
+    'current-round',
+    'vendors',
+    'vendor-price-lists',
+  ]) {
+    const response = await apiRequest(`/api/data/${collectionName}`, 'GET');
+
+    assert.equal(response.statusCode, 200, `${collectionName} should be public readable`);
+  }
+
+  for (const collectionName of ['admin-notes', 'reports']) {
+    const response = await apiRequest(`/api/data/${collectionName}`, 'GET');
+
+    assert.equal(response.statusCode, 401, `${collectionName} should require admin auth`);
+  }
+
+  const adminCookie = await loginAdmin();
+
+  for (const collectionName of ['admin-notes', 'reports']) {
+    const response = await apiRequest(`/api/data/${collectionName}`, 'GET', undefined, { cookie: adminCookie });
+
+    assert.equal(response.statusCode, 200, `${collectionName} should be admin readable`);
+  }
+});
+
+test('public generic label-template reads keep the public label shape', async () => {
+  await resetData();
+  await postLabel();
+
+  const response = await apiRequest('/api/data/label-templates', 'GET');
+  const [label] = JSON.parse(response.body);
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(label.moderationStatus, 'unreviewed');
+  assert.equal(label.reports, undefined);
+  assert.equal(label.reportFingerprints, undefined);
+  assert.equal(label.voteFingerprints, undefined);
+});
 
 test('public label upload normalizes ids and rejects caller overwrite control', async () => {
   await resetData();
@@ -282,6 +328,18 @@ async function assertRejectsUpload(overrides = {}) {
   assert.equal(response.statusCode, 400);
 }
 
+async function loginAdmin() {
+  const response = await apiRequest('/api/admin/login', 'POST', {
+    role: 'admin',
+    password: process.env.HELIX_ADMIN_PASSWORD,
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(typeof response.headers['Set-Cookie'], 'string');
+
+  return response.headers['Set-Cookie'];
+}
+
 async function apiRequest(pathname, method, body, client = {}) {
   return handleHelixApiRequest({
     method,
@@ -290,6 +348,7 @@ async function apiRequest(pathname, method, body, client = {}) {
     headers: {
       'user-agent': client.userAgent ?? `label-security-test-${Math.random()}`,
       'x-forwarded-for': client.ip ?? `127.0.0.${Math.floor(Math.random() * 200) + 1}`,
+      ...(client.cookie ? { cookie: client.cookie } : {}),
     },
     bodyText: JSON.stringify(body),
   });

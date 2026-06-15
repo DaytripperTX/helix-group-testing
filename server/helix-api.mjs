@@ -7,6 +7,7 @@ import {
   deleteCollectionItem,
   adminUpsertLabelTemplate,
   getCollectionNames,
+  isPublicCollectionRead,
   publicReportLabelTemplate,
   publicUpsertLabelTemplate,
   publicVoteLabelTemplate,
@@ -44,12 +45,13 @@ export async function handleHelixApiRequest(request) {
   try {
     if (method === 'GET' && pathname.startsWith('/api/data/')) {
       const collectionName = getPathPart(pathname, 3);
+      const session = getAdminSession(request.headers);
 
-      if (collectionName === 'admin-notes' && !getAdminSession(request.headers)) {
+      if (!session && !isPublicCollectionRead(collectionName)) {
         return jsonResponse(401, { error: 'Admin login required' });
       }
 
-      if (collectionName === 'label-templates' && !getAdminSession(request.headers)) {
+      if (collectionName === 'label-templates' && !session) {
         return jsonResponse(200, await readPublicLabelTemplates());
       }
 

@@ -32,18 +32,22 @@ const blockedTextFragments = [
 ];
 
 const collections = new Map([
-  ['peptides', { fileName: 'peptides.json', kind: 'items' }],
-  ['peptide-categories', { fileName: 'peptide-categories.json', kind: 'items' }],
-  ['label-templates', { fileName: 'label-templates.json', kind: 'items' }],
-  ['vendors', { fileName: 'vendors.json', kind: 'items' }],
-  ['vendor-price-lists', { fileName: 'vendor-price-lists.json', kind: 'items' }],
-  ['admin-notes', { fileName: 'admin-notes.json', kind: 'items' }],
-  ['current-round', { fileName: 'current-round.json', kind: 'data' }],
-  ['reports', { fileName: 'reports.json', kind: 'items' }],
+  ['peptides', { fileName: 'peptides.json', kind: 'items', readAccess: 'public' }],
+  ['peptide-categories', { fileName: 'peptide-categories.json', kind: 'items', readAccess: 'public' }],
+  ['label-templates', { fileName: 'label-templates.json', kind: 'items', readAccess: 'public' }],
+  ['vendors', { fileName: 'vendors.json', kind: 'items', readAccess: 'public' }],
+  ['vendor-price-lists', { fileName: 'vendor-price-lists.json', kind: 'items', readAccess: 'public' }],
+  ['admin-notes', { fileName: 'admin-notes.json', kind: 'items', readAccess: 'admin' }],
+  ['current-round', { fileName: 'current-round.json', kind: 'data', readAccess: 'public' }],
+  ['reports', { fileName: 'reports.json', kind: 'items', readAccess: 'admin' }],
 ]);
 
 export function getCollectionNames() {
   return [...collections.keys()];
+}
+
+export function isPublicCollectionRead(collectionName) {
+  return getCollectionConfig(collectionName).readAccess === 'public';
 }
 
 export async function readCollection(collectionName) {
