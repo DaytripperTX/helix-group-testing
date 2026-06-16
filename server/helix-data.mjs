@@ -2,10 +2,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = path.resolve(__dirname, '..');
+const rootDir = process.env.HELIX_ROOT_DIR
+  ? path.resolve(process.env.HELIX_ROOT_DIR)
+  : process.cwd();
 const seedDir = path.join(rootDir, 'data');
 const localDataDir = process.env.HELIX_LOCAL_DATA_DIR
   ? path.resolve(process.env.HELIX_LOCAL_DATA_DIR)

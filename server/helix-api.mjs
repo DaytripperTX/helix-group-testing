@@ -2,7 +2,6 @@ import {
   readFile,
 } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   deleteCollectionItem,
   adminUpsertLabelTemplate,
@@ -29,8 +28,9 @@ import { parsePeptideBatch } from './peptide-batch-parser.mjs';
 import { parseVendorPriceList } from './vendor-price-list-parser.mjs';
 
 const maxBodyBytes = 24 * 1024 * 1024;
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = path.resolve(__dirname, '..');
+const rootDir = process.env.HELIX_ROOT_DIR
+  ? path.resolve(process.env.HELIX_ROOT_DIR)
+  : process.cwd();
 const pepPediaIndexPath = path.join(rootDir, 'data', 'pep-pedia-index.json');
 let cachedPepPediaIndex = null;
 const throttleBuckets = new Map();

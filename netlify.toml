@@ -2,6 +2,9 @@
   command = "npm run build"
   publish = "dist"
 
+[functions]
+  included_files = ["data/**"]
+
 [[redirects]]
   from = "/api/data/*"
   to = "/.netlify/functions/data/:splat"
