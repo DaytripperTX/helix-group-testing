@@ -417,6 +417,15 @@ async function writeBlobDocument(config, document) {
 
 async function getBlobStore() {
   const { getStore } = await import('@netlify/blobs');
+
+  if (process.env.NETLIFY_SITE_ID && process.env.NETLIFY_BLOBS_TOKEN) {
+    return getStore({
+      name: storeName,
+      siteID: process.env.NETLIFY_SITE_ID,
+      token: process.env.NETLIFY_BLOBS_TOKEN,
+    });
+  }
+
   return getStore(storeName);
 }
 

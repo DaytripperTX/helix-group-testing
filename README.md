@@ -84,6 +84,15 @@ The beta is intended to be shared with site admins only. Public pages may still
 be reachable by anyone with the URL, so do not treat the Netlify URL itself as a
 secret security boundary.
 
+## Data storage
+
+- `data/*.json` files are committed seed/default data.
+- Local development writes runtime data to `.local-data`.
+- Netlify production writes runtime data to the `helix-data` Netlify Blobs store.
+- After a production Blob document has been initialized, editing the matching
+  `data/*.json` file changes only the seed/default version, not the existing
+  production Blob copy.
+
 To deploy later:
 
 1. Push this repo to GitHub.

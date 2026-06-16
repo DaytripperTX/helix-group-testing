@@ -1,6 +1,9 @@
 import { handleHelixApiRequest } from '../../server/helix-api.mjs';
+import { connectHelixNetlifyRuntime } from './helix-netlify-runtime.mjs';
 
 export async function handler(event) {
+  connectHelixNetlifyRuntime(event);
+
   return handleHelixApiRequest({
     method: event.httpMethod ?? 'GET',
     pathname: event.path ?? '/api/data',

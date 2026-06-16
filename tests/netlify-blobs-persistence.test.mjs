@@ -1,0 +1,135 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzX7cgAAAABJRU5ErkJggg==';
+
+test('Netlify data function seeds missing Blob documents and persists writes', async () => {
+  const previousEnv = {
+    HELIX_DATA_ADAPTER: process.env.HELIX_DATA_ADAPTER,
+    NETLIFY: process.env.NETLIFY,
+  };
+  const previousFetch = globalThis.fetch;
+  const blobs = new Map();
+  const requests = [];
+
+  delete process.env.HELIX_DATA_ADAPTER;
+  process.env.NETLIFY = 'true';
+  globalThis.fetch = async (url, options = {}) => {
+    const method = String(options.method ?? 'GET').toUpperCase();
+    const key = new URL(url).pathname;
+
+    requests.push({ method, key });
+
+    if (method === 'GET') {
+      if (!blobs.has(key)) {
+        return new Response('', { status: 404 });
+      }
+
+      return new Response(blobs.get(key), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+
+    if (method === 'PUT') {
+      blobs.set(key, String(options.body ?? ''));
+      return new Response('', {
+        status: 200,
+        headers: { etag: `"${blobs.size}"` },
+      });
+    }
+
+    return new Response('', { status: 405 });
+  };
+
+  try {
+    const { handler } = await import(`../netlify/functions/data.mjs?blobs=${Date.now()}`);
+    const eventBase = createNetlifyBlobsEvent();
+    const peptidesResponse = await handler({
+      ...eventBase,
+      httpMethod: 'GET',
+      path: '/api/data/peptides',
+      rawUrl: 'https://example.netlify.app/api/data/peptides',
+    });
+
+    assert.equal(peptidesResponse.statusCode, 200);
+    assert.ok(JSON.parse(peptidesResponse.body).length > 0);
+    assert.ok(requests.some((request) =>
+      request.method === 'PUT' && request.key.endsWith('/site:helix-data/peptides.json'),
+    ));
+
+    const uploadResponse = await handler({
+      ...eventBase,
+      httpMethod: 'POST',
+      path: '/api/labels',
+      rawUrl: 'https://example.netlify.app/api/labels',
+      headers: {
+        ...eventBase.headers,
+        'content-type': 'application/json',
+        'user-agent': 'netlify-blobs-test',
+        'x-forwarded-for': '203.0.113.12',
+      },
+      body: JSON.stringify(createLabelBody()),
+      isBase64Encoded: false,
+    });
+
+    assert.equal(uploadResponse.statusCode, 200);
+    assert.equal(JSON.parse(uploadResponse.body).length, 1);
+
+    const labelsResponse = await handler({
+      ...eventBase,
+      httpMethod: 'GET',
+      path: '/api/labels',
+      rawUrl: 'https://example.netlify.app/api/labels',
+    });
+    const labels = JSON.parse(labelsResponse.body);
+
+    assert.equal(labelsResponse.statusCode, 200);
+    assert.equal(labels.length, 1);
+    assert.equal(labels[0].templateName, 'Persistent Netlify Label');
+    assert.ok(requests.some((request) =>
+      request.method === 'PUT' && request.key.endsWith('/site:helix-data/label-templates.json'),
+    ));
+  } finally {
+    globalThis.fetch = previousFetch;
+
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+function createNetlifyBlobsEvent() {
+  return {
+    blobs: Buffer.from(JSON.stringify({
+      token: 'test-token',
+      url: 'https://blobs.example.test',
+    })).toString('base64'),
+    headers: {
+      'x-nf-deploy-id': 'deploy123',
+      'x-nf-site-id': 'site123',
+    },
+    body: null,
+    isBase64Encoded: false,
+  };
+}
+
+function createLabelBody() {
+  return {
+    previewDataUrl: `data:image/png;base64,${pngBase64}`,
+    previewFileName: 'preview.png',
+    niimbotCode: 'NIIMBOT-CODE',
+    templateName: 'Persistent Netlify Label',
+    peptideName: 'BPC-157',
+    massMg: '10',
+    labelSize: '40x20 mm',
+    peptideCategories: ['Recovery'],
+    tags: ['minimal', 'clean'],
+    formStartedAt: Date.now() - 3000,
+    honeypot: '',
+  };
+}
