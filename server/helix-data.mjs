@@ -420,8 +420,17 @@ async function getBlobStore() {
   return getStore(storeName);
 }
 
-function shouldUseNetlifyBlobs() {
-  return process.env.HELIX_DATA_ADAPTER === 'netlify-blobs' || process.env.NETLIFY === 'true';
+export function shouldUseNetlifyBlobs() {
+  if (process.env.HELIX_DATA_ADAPTER === 'local') {
+    return false;
+  }
+
+  return (
+    process.env.HELIX_DATA_ADAPTER === 'netlify-blobs' ||
+    process.env.NETLIFY === 'true' ||
+    Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) ||
+    Boolean(process.env.LAMBDA_TASK_ROOT)
+  );
 }
 
 async function readSeedDocument(collectionName, config) {
