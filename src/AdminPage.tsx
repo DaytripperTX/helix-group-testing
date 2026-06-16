@@ -90,6 +90,13 @@ type BatchPeptideRow = Peptide & {
   errors: string[];
 };
 
+type PeptideTransfer = {
+  version: number;
+  collection: 'peptides';
+  exportedAt: string;
+  items: Peptide[];
+};
+
 type AdminNote = {
   id: string;
   sender: string;
@@ -170,6 +177,7 @@ function AdminPage({
   const [priceListUrl, setPriceListUrl] = useState('');
   const [priceListStatus, setPriceListStatus] = useState('');
   const priceListFileInputRef = useRef<HTMLInputElement | null>(null);
+  const peptideImportInputRef = useRef<HTMLInputElement | null>(null);
   const [savedPriceListVendorId, setSavedPriceListVendorId] = useState('');
   const vendorGoogleSheetUrlError =
     vendorForm.priceSheetMode === 'google-sheet' ? validateGoogleSheetSourceInput(vendorForm.priceSheetUrl) : '';
@@ -871,6 +879,64 @@ function AdminPage({
     }
   };
 
+  const exportPeptides = async (fileName = createPeptideExportFileName()) => {
+    setIsSubmitting(true);
+
+    try {
+      const transfer = await exportPeptideTransfer();
+
+      downloadJson(transfer, fileName);
+      setStatus(`${transfer.items.length} peptides exported.`);
+      return transfer;
+    } catch (error) {
+      console.error(error);
+      setStatus('Peptide export failed.');
+      return null;
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const beginPeptideImport = () => {
+    peptideImportInputRef.current?.click();
+  };
+
+  const importPeptides = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = '';
+
+    if (!file) {
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const transfer = normalizePeptideTransfer(JSON.parse(await file.text()));
+      const shouldImport = window.confirm(
+        `Import ${transfer.items.length} peptides and replace the current peptide collection? A backup will download first.`,
+      );
+
+      if (!shouldImport) {
+        setStatus('Peptide import cancelled.');
+        return;
+      }
+
+      const backup = await exportPeptideTransfer();
+      downloadJson(backup, createPeptideExportFileName('backup'));
+
+      const nextPeptides = await importPeptideTransfer(transfer);
+
+      setPeptides(nextPeptides);
+      setStatus(`${nextPeptides.length} peptides imported.`);
+    } catch (error) {
+      console.error(error);
+      setStatus('Peptide import failed.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   if (!session.isAuthenticated) {
     return (
       <section className="admin-page admin-page--login" aria-labelledby="admin-title">
@@ -1004,6 +1070,23 @@ function AdminPage({
               }}
               onTertiaryAction={() => void fillMissingWikiLinksForPeptides()}
             />
+            {session.role === 'owner' && (
+              <div className="admin-owner-tools" aria-label="Owner peptide transfer tools">
+                <button type="button" disabled={isSubmitting} onClick={() => void exportPeptides()}>
+                  Export Peptides
+                </button>
+                <button type="button" disabled={isSubmitting} onClick={beginPeptideImport}>
+                  Import Peptides
+                </button>
+                <input
+                  ref={peptideImportInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="admin-hidden-file-input"
+                  onChange={(event) => void importPeptides(event)}
+                />
+              </div>
+            )}
             <div className="admin-table">
               {sortedPeptides.map((peptide) => (
                 <article className="admin-row" key={peptide.id}>
@@ -1594,6 +1677,36 @@ async function deleteCollectionItem<T>(collectionName: string, itemId: string): 
 
   const records = (await response.json()) as unknown;
   return Array.isArray(records) ? (records as T[]) : [];
+}
+
+async function exportPeptideTransfer(): Promise<PeptideTransfer> {
+  const response = await fetch('/api/admin/data/peptides/export', {
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error('Peptide export failed.');
+  }
+
+  return normalizePeptideTransfer(await response.json());
+}
+
+async function importPeptideTransfer(transfer: PeptideTransfer): Promise<Peptide[]> {
+  const response = await fetch('/api/admin/data/peptides/import', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(transfer),
+  });
+
+  if (!response.ok) {
+    throw new Error('Peptide import failed.');
+  }
+
+  const records = (await response.json()) as unknown;
+  return Array.isArray(records) ? (records as Peptide[]) : [];
 }
 
 async function resolveVendorPriceSheet(
@@ -2283,6 +2396,42 @@ function formatDateTime(value: string) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
+}
+
+function normalizePeptideTransfer(value: unknown): PeptideTransfer {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid peptide transfer file.');
+  }
+
+  const transfer = value as Partial<PeptideTransfer>;
+
+  if (transfer.collection !== 'peptides' || !Array.isArray(transfer.items)) {
+    throw new Error('Invalid peptide transfer file.');
+  }
+
+  return {
+    version: Number(transfer.version) || 1,
+    collection: 'peptides',
+    exportedAt: typeof transfer.exportedAt === 'string' ? transfer.exportedAt : new Date().toISOString(),
+    items: transfer.items,
+  };
+}
+
+function createPeptideExportFileName(label = 'export') {
+  return `helix-peptides-${label}-${new Date().toISOString().slice(0, 10)}.json`;
+}
+
+function downloadJson(value: unknown, fileName: string) {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function parseNullableNumber(value: string) {

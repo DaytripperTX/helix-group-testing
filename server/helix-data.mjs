@@ -94,6 +94,42 @@ export async function upsertCollectionItem(collectionName, itemId, item) {
   return nextItems;
 }
 
+export async function exportPeptideCollectionTransfer() {
+  return {
+    version: 1,
+    collection: 'peptides',
+    exportedAt: new Date().toISOString(),
+    items: await readCollection('peptides'),
+  };
+}
+
+export async function importPeptideCollectionTransfer(transfer) {
+  if (!transfer || typeof transfer !== 'object' || Array.isArray(transfer)) {
+    throw createHttpError(400, 'Invalid peptide import file.');
+  }
+
+  if (transfer.collection !== 'peptides' || !Array.isArray(transfer.items)) {
+    throw createHttpError(400, 'Invalid peptide import file.');
+  }
+
+  const seenIds = new Set();
+  const items = transfer.items.map((item) => normalizePeptideImportItem(item));
+
+  for (const item of items) {
+    if (seenIds.has(item.id)) {
+      throw createHttpError(400, 'Peptide import contains duplicate ids.');
+    }
+
+    seenIds.add(item.id);
+  }
+
+  const nextDocument = createCollectionDocument('peptides', items);
+
+  await writeCollectionDocument('peptides', nextDocument);
+
+  return nextDocument.items;
+}
+
 export async function deleteCollectionItem(collectionName, itemId) {
   if (collectionName === 'label-templates') {
     return softDeleteLabelTemplate(itemId, 'admin');
@@ -515,6 +551,33 @@ async function readLabelTemplateDocument() {
 
 function normalizeCollectionItem(collectionName, item) {
   return collectionName === 'peptides' ? normalizePeptideItem(item) : item;
+}
+
+function normalizePeptideImportItem(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    throw createHttpError(400, 'Peptide import contains invalid records.');
+  }
+
+  const id = typeof item.id === 'string' ? item.id.trim() : '';
+  const name = typeof item.name === 'string' ? item.name.trim() : '';
+  const categories = Array.isArray(item.categories)
+    ? item.categories
+      .map((category) => String(category ?? '').trim())
+      .filter(Boolean)
+      .filter((category, index, categoryList) => categoryList.indexOf(category) === index)
+    : [];
+
+  if (!id || !name || categories.length === 0) {
+    throw createHttpError(400, 'Peptide import contains invalid records.');
+  }
+
+  return normalizePeptideItem({
+    ...item,
+    id,
+    name,
+    categories,
+    description: typeof item.description === 'string' ? item.description.trim() : '',
+  });
 }
 
 async function enrichDocumentFromSeed(collectionName, config, document) {

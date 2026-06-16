@@ -231,6 +231,7 @@ main {
 
 .admin-shell__header button,
 .admin-panel__actions button,
+.admin-owner-tools button,
 .admin-row__actions button,
 .admin-modal__actions button,
 .admin-field--with-action button,
@@ -308,6 +309,18 @@ main {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.admin-owner-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: -4px 0 16px;
+}
+
+.admin-hidden-file-input {
+  display: none;
 }
 
 .admin-table {

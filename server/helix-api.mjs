@@ -5,7 +5,9 @@ import path from 'node:path';
 import {
   deleteCollectionItem,
   adminUpsertLabelTemplate,
+  exportPeptideCollectionTransfer,
   getCollectionNames,
+  importPeptideCollectionTransfer,
   isPublicCollectionRead,
   publicReportLabelTemplate,
   publicUpsertLabelTemplate,
@@ -189,6 +191,22 @@ export async function handleHelixApiRequest(request) {
 
       if (!collectionName || !itemId) {
         return jsonResponse(404, { error: 'Unknown admin endpoint' });
+      }
+
+      if (collectionName === 'peptides' && itemId === 'export' && method === 'GET') {
+        if (session.role !== 'owner') {
+          return jsonResponse(403, { error: 'Owner login required' });
+        }
+
+        return jsonResponse(200, await exportPeptideCollectionTransfer());
+      }
+
+      if (collectionName === 'peptides' && itemId === 'import' && method === 'POST') {
+        if (session.role !== 'owner') {
+          return jsonResponse(403, { error: 'Owner login required' });
+        }
+
+        return jsonResponse(200, await importPeptideCollectionTransfer(parseJsonBody(request.bodyText)));
       }
 
       if (collectionName === 'label-templates' && method === 'POST' && labelAction === 'recover') {

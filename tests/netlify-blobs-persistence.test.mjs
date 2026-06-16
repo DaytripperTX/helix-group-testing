@@ -5,7 +5,9 @@ const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z
 
 test('Netlify data function seeds missing Blob documents and persists writes', async () => {
   const previousEnv = {
+    HELIX_ADMIN_SESSION_SECRET: process.env.HELIX_ADMIN_SESSION_SECRET,
     HELIX_DATA_ADAPTER: process.env.HELIX_DATA_ADAPTER,
+    HELIX_OWNER_PASSWORD: process.env.HELIX_OWNER_PASSWORD,
     NETLIFY: process.env.NETLIFY,
   };
   const previousFetch = globalThis.fetch;
@@ -13,6 +15,8 @@ test('Netlify data function seeds missing Blob documents and persists writes', a
   const requests = [];
 
   delete process.env.HELIX_DATA_ADAPTER;
+  process.env.HELIX_ADMIN_SESSION_SECRET = 'test-admin-session-secret';
+  process.env.HELIX_OWNER_PASSWORD = 'test-owner-password';
   process.env.NETLIFY = 'true';
   globalThis.fetch = async (url, options = {}) => {
     const method = String(options.method ?? 'GET').toUpperCase();
@@ -43,7 +47,10 @@ test('Netlify data function seeds missing Blob documents and persists writes', a
   };
 
   try {
-    const { handler } = await import(`../netlify/functions/data.mjs?blobs=${Date.now()}`);
+    const importId = Date.now();
+    const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?blobs=${importId}`);
+    const { handler } = await import(`../netlify/functions/data.mjs?blobs=${importId}`);
+    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?blobs=${importId}`);
     const eventBase = createNetlifyBlobsEvent();
     const peptidesResponse = await handler({
       ...eventBase,
@@ -90,6 +97,47 @@ test('Netlify data function seeds missing Blob documents and persists writes', a
     assert.ok(requests.some((request) =>
       request.method === 'PUT' && request.key.endsWith('/site:helix-data/label-templates.json'),
     ));
+
+    const importResponse = await adminHandler({
+      ...eventBase,
+      httpMethod: 'POST',
+      path: '/api/admin/data/peptides/import',
+      rawUrl: 'https://example.netlify.app/api/admin/data/peptides/import',
+      headers: {
+        ...eventBase.headers,
+        cookie: createAdminSessionCookie('owner'),
+        'content-type': 'application/json',
+        'user-agent': 'netlify-blobs-test',
+      },
+      body: JSON.stringify({
+        version: 1,
+        collection: 'peptides',
+        exportedAt: new Date().toISOString(),
+        items: [
+          {
+            id: 'blob-transfer-peptide',
+            name: 'Blob Transfer Peptide',
+            categories: ['Recovery'],
+            description: 'Imported through the owner transfer endpoint.',
+            wikiLinks: [],
+          },
+        ],
+      }),
+      isBase64Encoded: false,
+    });
+
+    assert.equal(importResponse.statusCode, 200);
+    assert.deepEqual(JSON.parse(importResponse.body).map((item) => item.id), ['blob-transfer-peptide']);
+
+    const replacedPeptidesResponse = await handler({
+      ...eventBase,
+      httpMethod: 'GET',
+      path: '/api/data/peptides',
+      rawUrl: 'https://example.netlify.app/api/data/peptides',
+    });
+
+    assert.equal(replacedPeptidesResponse.statusCode, 200);
+    assert.deepEqual(JSON.parse(replacedPeptidesResponse.body).map((item) => item.id), ['blob-transfer-peptide']);
   } finally {
     globalThis.fetch = previousFetch;
 
