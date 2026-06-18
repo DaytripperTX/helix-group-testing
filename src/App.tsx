@@ -7,9 +7,9 @@ import DisclaimerSection from './Helpers/DisclaimerSection';
 import PageHero from './Helpers/PageHero';
 
 const coordinationPoints = [
-  'Members coordinate interest for group purchasing rounds and pooled third-party lab testing.',
+  'Members coordinate current testing rounds, selected peptides, and shared third-party lab testing scope.',
   'Vendor payment and delivery happen directly between each member and the vendor, outside this site.',
-  'The site is intended to organize communication, not to sell, collect funds, or fulfill products.',
+  'Testing-only funds may be coordinated for lab costs; this site does not sell or fulfill products.',
 ];
 
 const missionBenefits = [
@@ -435,11 +435,11 @@ function HomePage() {
         <div className="section__content">
           <div className="section__header">
             <p className="eyebrow">Workflow</p>
-            <h2 id="coordination-title">What this site should coordinate</h2>
+            <h2 id="coordination-title">What this site coordinates</h2>
             <p>
-              The current group workflow lives in a Google Sheet/Form. This site
-              prepares a clearer public-facing structure before any automated
-              order-interest submission is added.
+              Helix Group Testing is primarily used to coordinate third-party
+              testing details, round status, and communication around selected
+              peptides.
             </p>
           </div>
 

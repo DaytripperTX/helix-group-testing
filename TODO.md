@@ -12,12 +12,12 @@
   - ✅ Landing page with basic information and a concise project summary.
   - ✅ Clear disclaimers and scope boundaries.
 - Order form:
-  - ✅ Future page where users enter order-interest data for vendor coordination.
+  - ✅ Private workflow where coordinators can organize round interest and testing needs.
   - ✅ May use a familiar product/cart-style layout with images, while keeping the workflow informational and non-commercial.
   - clicking on a peptide will expand a description of the peptide
-  - ✅ Include multiple clear disclaimers that Helix Group Testing does not sell products, handle money, or fulfill orders.
+  - ✅ Include multiple clear disclaimers that Helix Group Testing does not sell products or fulfill orders, while testing-only funds may be coordinated for lab costs.
   - Possible future feature: after a user submits the form, automatically email them a waiver to review and sign.
-  - ✅ Add disclaimers / info section for testing upgrade donations.
+  - ✅ Add disclaimers / info section for testing costs and testing upgrade donations.
 - Testing:
   - ✅ Explain testing levels and what each level includes.
   - Show testing statistics for current and past rounds.
@@ -35,10 +35,10 @@
 - FAQs:
   - ✅ Add common questions and answers about participation, vendor-direct payment, delivery, testing coordination, disclaimers, and site workflow.
 
-## Planned order-interest form
+## Private round-interest workflow
 
-- ✅ Add an order-interest form after the landing page is stable.
-- ✅ Match the current Google Sheet columns:
+- ✅ Keep order-interest details out of the public home-page workflow.
+- ✅ Preserve the private round-interest fields:
   - ✅ Supplier Code / Name
   - ✅ Street name
   - ✅ MG
@@ -50,11 +50,11 @@
   - ✅ Order cost
 - ✅ Exclude testing cost for now.
 
-## Google Sheet integration
+## Data coordination
 
-- Replace or supplement the current Google Sheet/Form workflow.
-- Submit form entries into the Google Sheet automatically.
-- Do not require users to manually copy and paste entries into the Google Sheet.
+- Keep round and testing coordination inside the app-managed workflow.
+- Do not describe a public Google Sheet/Form workflow on the home page.
+- Avoid making the order-interest flow public unless that product decision changes.
 
 ## Explicitly out of scope for now
 
@@ -76,6 +76,6 @@
 ## Required disclaimer
 
 - ✅ Helix Group Testing does not sell products.
-- ✅ Helix Group Testing does not handle money.
+- ✅ Helix Group Testing may coordinate testing-only funds for shared third-party lab costs.
 - ✅ Helix Group Testing does not fulfill orders.
-- ✅ The site is only for formatting communication and organizing third-party lab testing interest.
+- ✅ The site organizes testing information, round status, and related communication.

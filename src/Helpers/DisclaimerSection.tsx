@@ -8,11 +8,15 @@ function DisclaimerSection() {
         </div>
         <ul>
           <li>Helix Group Testing does not sell products.</li>
-          <li>Helix Group Testing does not handle money.</li>
-          <li>Helix Group Testing does not fulfill orders.</li>
           <li>
-            The site is only for formatting communication and organizing
-            third-party lab testing interest.
+            Helix Group Testing may coordinate testing-only funds for shared
+            third-party lab costs.
+          </li>
+          <li>Helix Group Testing does not fulfill orders.</li>
+          <li>Vendor payments and product delivery remain separate from testing coordination.</li>
+          <li>
+            The site is for organizing testing information, round status, and
+            related communication.
           </li>
           <li>
             Products discussed by the group are research chemicals not approved

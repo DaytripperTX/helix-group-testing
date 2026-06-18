@@ -1,6 +1,6 @@
 # Helix Group Testing
 
-Helix Group Testing is a Vite + React + TypeScript site for coordinating group testing information, labels, admin-managed data, and order-interest workflows.
+Helix Group Testing is a Vite + React + TypeScript site for coordinating group testing information, labels, admin-managed data, and testing-round workflows.
 
 This is a proprietary project. The repository is not open source, and the code,
 assets, data files, and designs are not licensed for reproduction, redistribution,
@@ -43,11 +43,11 @@ Preview the production build locally:
 npm run preview
 ```
 
-## Planned order-interest workflow
+## Testing coordination workflow
 
-The group currently tracks order interest with a Google Sheet/Form. A future version of this app should replace or supplement that workflow by submitting entries into the Google Sheet automatically, so users are not expected to manually copy and paste entries.
+The site is primarily used to coordinate testing rounds, selected peptides, shared third-party lab scope, and related member communication. Public order-form behavior is not part of the current public workflow.
 
-The future order-interest form should include these fields:
+Any future private order-interest workflow should include these fields:
 
 - Supplier Code / Name
 - Street name

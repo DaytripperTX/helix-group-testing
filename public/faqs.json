@@ -1,7 +1,7 @@
 [
   {
     "question": "Who do participants pay?",
-    "answer": "Participants pay the vendor directly. Helix Group Testing does not collect vendor payments, process payments, or hold funds for product orders."
+    "answer": "Participants pay the vendor directly for product orders. Helix Group Testing may coordinate testing-only funds for shared third-party lab costs, but vendor payments and product delivery remain separate."
   },
   {
     "question": "Where are orders delivered?",
