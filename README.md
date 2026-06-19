@@ -19,6 +19,16 @@ cp .env.example .env.local
 Then set local admin values in `.env.local`. This file is ignored by Git and should
 not be committed.
 
+Optional page toggles can also be set there:
+
+```bash
+DISABLED_PAGES=order-form,coas
+```
+
+Allowed values are `order-form`, `testing`, `coas`, `labels`, and `faqs`.
+Values may be comma or whitespace separated, and may use ids or paths such as
+`/order-form`. This is build-time config, so changes require rebuilding the app.
+
 Install dependencies:
 
 ```bash
@@ -77,8 +87,12 @@ Set these environment variables in the Netlify site UI before sharing a deploy:
 - `HELIX_ADMIN_PASSWORD`
 - `HELIX_OWNER_PASSWORD`
 - `HELIX_ADMIN_SESSION_SECRET`
+- `DISABLED_PAGES` if any public pages should be hidden
 
 Do not set `HELIX_ALLOW_LOCAL_DEFAULTS=true` in Netlify.
+
+`DISABLED_PAGES` is read during the Netlify build. Updating it in Netlify does
+not affect an already-built deploy; rebuild/redeploy manually when changing it.
 
 The beta is intended to be shared with site admins only. Public pages may still
 be reachable by anyone with the URL, so do not treat the Netlify URL itself as a

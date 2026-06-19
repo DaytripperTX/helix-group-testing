@@ -5,6 +5,7 @@ import LabelsPage from './LabelsPage';
 import OrderFormPage from './OrderFormPage';
 import DisclaimerSection from './Helpers/DisclaimerSection';
 import PageHero from './Helpers/PageHero';
+import { publicPageItems, type PublicPageId } from './page-disables';
 
 const coordinationPoints = [
   'Members coordinate current testing rounds, selected peptides, and shared third-party lab testing scope.',
@@ -229,16 +230,10 @@ const testingTiers = [
   },
 ] as const;
 
-const navItems = [
-  { id: 'home', label: 'Home', path: '/' },
-  { id: 'order-form', label: 'Order Form', path: '/order-form' },
-  { id: 'testing', label: 'Testing', path: '/testing' },
-  { id: 'coas', label: 'COAs', path: '/coas' },
-  { id: 'labels', label: 'Labels', path: '/labels' },
-  { id: 'faqs', label: 'FAQs', path: '/faqs' },
-] as const;
+const navItems = publicPageItems;
+const disabledPages = new Set<string>(__HELIX_DISABLED_PAGES__);
 
-type PageId = (typeof navItems)[number]['id'] | 'hxadmin' | 'hxowner';
+type PageId = PublicPageId | 'hxadmin' | 'hxowner';
 type TestingTier = (typeof testingTiers)[number];
 type TestingIconType = TestingTier['panel'][number]['icon'];
 type AdminSession = {
@@ -254,7 +249,7 @@ function getPageFromPath(): PageId {
   }
 
   const match = navItems.find((item) => item.path === currentPath);
-  return match?.id ?? 'home';
+  return match && !disabledPages.has(match.id) ? match.id : 'home';
 }
 
 function App() {
@@ -262,9 +257,19 @@ function App() {
   const [adminSession, setAdminSession] = useState<AdminSession>({ isAuthenticated: false });
 
   useEffect(() => {
-    const handleNavigation = () => setActivePage(getPageFromPath());
+    const handleNavigation = () => {
+      const nextPage = getPageFromPath();
+
+      if (nextPage === 'home' && isDisabledPublicPath(window.location.pathname)) {
+        window.history.replaceState({}, '', '/');
+      }
+
+      setActivePage(nextPage);
+    };
 
     window.addEventListener('popstate', handleNavigation);
+    handleNavigation();
+
     return () => window.removeEventListener('popstate', handleNavigation);
   }, []);
 
@@ -289,7 +294,9 @@ function App() {
   }, []);
 
   const navigateTo = (path: string) => {
-    window.history.pushState({}, '', path);
+    const targetPath = isDisabledPublicPath(path) ? '/' : path;
+
+    window.history.pushState({}, '', targetPath);
     setActivePage(getPageFromPath());
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -326,9 +333,10 @@ function SiteHeader({
   isAdmin: boolean;
   onNavigate: (path: string) => void;
 }) {
+  const enabledNavItems = navItems.filter((item) => !disabledPages.has(item.id));
   const visibleNavItems = isAdmin
-    ? [...navItems, { id: 'hxadmin', label: 'Admin', path: '/hxadmin' } as const]
-    : navItems;
+    ? [...enabledNavItems, { id: 'hxadmin', label: 'Admin', path: '/hxadmin' } as const]
+    : enabledNavItems;
 
   return (
     <header className="brand-band">
@@ -371,6 +379,13 @@ function SiteHeader({
       </div>
     </header>
   );
+}
+
+function isDisabledPublicPath(path: string) {
+  const normalizedPath = path.replace(/\/$/, '') || '/';
+  const match = navItems.find((item) => item.path === normalizedPath);
+
+  return Boolean(match && disabledPages.has(match.id));
 }
 
 function HomePage() {
