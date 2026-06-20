@@ -332,6 +332,8 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const [isNativeSortReversed, setIsNativeSortReversed] = useState(false);
   const [nativeAdminView, setNativeAdminView] = useState<'active' | 'trash'>('active');
   const [expandedNativeLabelId, setExpandedNativeLabelId] = useState<string | null>(null);
+  const [areNativeFiltersExpanded, setAreNativeFiltersExpanded] = useState(false);
+  const [isNativeUploadExpanded, setIsNativeUploadExpanded] = useState(false);
   const [nativeUploadForm, setNativeUploadForm] = useState<NativeLabelUploadForm>(emptyNativeLabelForm);
   const [nativeUploadStartedAt, setNativeUploadStartedAt] = useState(Date.now());
   const [nativeUploadTrap, setNativeUploadTrap] = useState('');
@@ -1005,96 +1007,110 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
 
         <section className="label-page label-page--native" aria-labelledby="native-label-library-title">
           <div className="native-label-layout">
-            <aside className="native-label-filters" aria-label="Filter NIIMBOT templates">
-              <div>
-                <p className="eyebrow">Filters</p>
-                <h2>Find labels</h2>
-              </div>
+            <aside
+              className={areNativeFiltersExpanded ? 'native-label-filters is-mobile-expanded' : 'native-label-filters'}
+              aria-label="Filter NIIMBOT templates"
+            >
+              <button
+                className="native-mobile-panel-header"
+                type="button"
+                aria-expanded={areNativeFiltersExpanded}
+                aria-controls="native-label-filter-panel"
+                onClick={() => setAreNativeFiltersExpanded((currentValue) => !currentValue)}
+              >
+                <span>
+                  <span className="eyebrow">Filters</span>
+                  <strong>Find labels</strong>
+                </span>
+                <span className="native-mobile-panel-arrow" aria-hidden="true">^</span>
+              </button>
 
-              <label className="filter-search">
-                <span>Search</span>
-                <input
-                  type="search"
-                  value={nativeSearchQuery}
-                  placeholder="Peptide, template, tag..."
-                  onChange={(event) => setNativeSearchQuery(event.target.value)}
-                />
-              </label>
+              <div className="native-mobile-panel-content" id="native-label-filter-panel">
+                <label className="filter-search">
+                  <span>Search</span>
+                  <input
+                    type="search"
+                    value={nativeSearchQuery}
+                    placeholder="Peptide, template, tag..."
+                    onChange={(event) => setNativeSearchQuery(event.target.value)}
+                  />
+                </label>
 
-              <fieldset className="filter-group">
-                <legend>Peptide category</legend>
-                <DropdownSelect
-                  value="category-dropdown"
-                  options={[
-                    { value: 'category-dropdown', label: 'Select category' },
-                    ...nativeCategoryOptions
-                      .filter((category) => !nativeCategoryFilters.includes(category))
-                      .map((category) => ({
-                        value: category,
-                        label: category,
+                <fieldset className="filter-group">
+                  <legend>Peptide category</legend>
+                  <DropdownSelect
+                    value="category-dropdown"
+                    options={[
+                      { value: 'category-dropdown', label: 'Select category' },
+                      ...nativeCategoryOptions
+                        .filter((category) => !nativeCategoryFilters.includes(category))
+                        .map((category) => ({
+                          value: category,
+                          label: category,
+                        })),
+                    ]}
+                    onChange={(value) => {
+                      if (value !== 'category-dropdown') {
+                        toggleNativeCategoryFilter(value);
+                      }
+                    }}
+                  />
+                  <div className="native-filter-chips">
+                    {nativeCategoryFilters.length > 0 ? (
+                      <>
+                        {nativeCategoryFilters.map((category) => (
+                          <button type="button" key={category} onClick={() => toggleNativeCategoryFilter(category)}>
+                            {category}
+                            <span className="native-filter-chips__remove" aria-hidden="true" />
+                          </button>
+                        ))}
+                        {nativeCategoryFilters.length >= 2 && (
+                          <button
+                            className="native-filter-chips__clear"
+                            type="button"
+                            onClick={() => setNativeCategoryFilters([])}
+                          >
+                            Clear all
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <span>All categories</span>
+                    )}
+                  </div>
+                </fieldset>
+
+                <label className="label-field">
+                  <span>Label size</span>
+                  <DropdownSelect
+                    value={nativeLabelSizeFilter}
+                    options={[
+                      { value: 'all', label: 'All sizes' },
+                      ...nativeLabelSizeOptions.map((labelSize) => ({
+                        value: labelSize,
+                        label: labelSize,
                       })),
-                  ]}
-                  onChange={(value) => {
-                    if (value !== 'category-dropdown') {
-                      toggleNativeCategoryFilter(value);
-                    }
-                  }}
-                />
-                <div className="native-filter-chips">
-                  {nativeCategoryFilters.length > 0 ? (
-                    <>
-                      {nativeCategoryFilters.map((category) => (
-                        <button type="button" key={category} onClick={() => toggleNativeCategoryFilter(category)}>
-                          {category}
-                          <span className="native-filter-chips__remove" aria-hidden="true" />
-                        </button>
-                      ))}
-                      {nativeCategoryFilters.length >= 2 && (
-                        <button
-                          className="native-filter-chips__clear"
-                          type="button"
-                          onClick={() => setNativeCategoryFilters([])}
-                        >
-                          Clear all
-                        </button>
-                      )}
-                    </>
-                  ) : (
-                    <span>All categories</span>
-                  )}
-                </div>
-              </fieldset>
+                    ]}
+                    onChange={setNativeLabelSizeFilter}
+                  />
+                </label>
 
-              <label className="label-field">
-                <span>Label size</span>
-                <DropdownSelect
-                  value={nativeLabelSizeFilter}
-                  options={[
-                    { value: 'all', label: 'All sizes' },
-                    ...nativeLabelSizeOptions.map((labelSize) => ({
-                      value: labelSize,
-                      label: labelSize,
-                    })),
-                  ]}
-                  onChange={setNativeLabelSizeFilter}
-                />
-              </label>
-
-              <label className="filter-search">
-                <span>Tags</span>
-                <input
-                  type="search"
-                  list="native-tag-filter-options"
-                  value={nativeTagFilter}
-                  placeholder="Style, color, label type..."
-                  onChange={(event) => setNativeTagFilter(event.target.value)}
-                />
-                <datalist id="native-tag-filter-options">
-                  {nativeTagOptions.map((tag) => (
-                    <option value={tag} key={tag} />
-                  ))}
-                </datalist>
-              </label>
+                <label className="filter-search">
+                  <span>Tags</span>
+                  <input
+                    type="search"
+                    list="native-tag-filter-options"
+                    value={nativeTagFilter}
+                    placeholder="Style, color, label type..."
+                    onChange={(event) => setNativeTagFilter(event.target.value)}
+                  />
+                  <datalist id="native-tag-filter-options">
+                    {nativeTagOptions.map((tag) => (
+                      <option value={tag} key={tag} />
+                    ))}
+                  </datalist>
+                </label>
+              </div>
             </aside>
 
             <section className="native-label-library" aria-label="NIIMBOT label templates">
@@ -1214,115 +1230,129 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
               )}
             </section>
 
-            <aside className="label-panel native-label-upload" aria-label="Upload NIIMBOT template">
-              <form className="label-upload" onPaste={pasteNativePreview} onSubmit={uploadNativeTemplate}>
-                <div>
-                  <p className="eyebrow">Upload</p>
-                  <h2>Add template</h2>
-                </div>
+            <aside
+              className={isNativeUploadExpanded ? 'label-panel native-label-upload is-mobile-expanded' : 'label-panel native-label-upload'}
+              aria-label="Upload NIIMBOT template"
+            >
+              <button
+                className="native-mobile-panel-header"
+                type="button"
+                aria-expanded={isNativeUploadExpanded}
+                aria-controls="native-label-upload-panel"
+                onClick={() => setIsNativeUploadExpanded((currentValue) => !currentValue)}
+              >
+                <span>
+                  <span className="eyebrow">Upload</span>
+                  <strong>Add template</strong>
+                </span>
+                <span className="native-mobile-panel-arrow" aria-hidden="true">^</span>
+              </button>
 
-                <label className="label-field">
-                  <span>Template name</span>
+              <div className="native-mobile-panel-content" id="native-label-upload-panel">
+                <form className="label-upload" onPaste={pasteNativePreview} onSubmit={uploadNativeTemplate}>
+                  <label className="label-field">
+                    <span>Template name</span>
+                    <input
+                      type="text"
+                      value={nativeUploadForm.templateName}
+                      onChange={(event) => updateNativeUploadField('templateName', event.target.value)}
+                    />
+                  </label>
+
+                  <label className="label-field">
+                    <span>Screenshot preview *</span>
+                    <input
+                      type="file"
+                      accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                      aria-required="true"
+                      onChange={updateNativePreview}
+                    />
+                  </label>
+
                   <input
+                    className="label-honeypot"
                     type="text"
-                    value={nativeUploadForm.templateName}
-                    onChange={(event) => updateNativeUploadField('templateName', event.target.value)}
+                    tabIndex={-1}
+                    autoComplete="off"
+                    value={nativeUploadTrap}
+                    onChange={(event) => setNativeUploadTrap(event.target.value)}
                   />
-                </label>
 
-                <label className="label-field">
-                  <span>Screenshot preview *</span>
-                  <input
-                    type="file"
-                    accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                    aria-required="true"
-                    onChange={updateNativePreview}
-                  />
-                </label>
+                  {nativeUploadForm.previewDataUrl && (
+                    <div className="native-upload-preview">
+                      <img src={nativeUploadForm.previewDataUrl} alt="" />
+                      <span>{nativeUploadForm.previewFileName}</span>
+                    </div>
+                  )}
 
-                <input
-                  className="label-honeypot"
-                  type="text"
-                  tabIndex={-1}
-                  autoComplete="off"
-                  value={nativeUploadTrap}
-                  onChange={(event) => setNativeUploadTrap(event.target.value)}
-                />
+                  <label className="label-field">
+                    <span>NIIMBOT share code *</span>
+                    <textarea
+                      required
+                      value={nativeUploadForm.niimbotCode}
+                      rows={3}
+                      onChange={(event) => updateNativeCode(event.target.value)}
+                    />
+                  </label>
 
-                {nativeUploadForm.previewDataUrl && (
-                  <div className="native-upload-preview">
-                    <img src={nativeUploadForm.previewDataUrl} alt="" />
-                    <span>{nativeUploadForm.previewFileName}</span>
-                  </div>
-                )}
+                  <label className="label-field">
+                    <span>Peptide name</span>
+                    <input
+                      type="text"
+                      list="common-peptide-names"
+                      required
+                      value={nativeUploadForm.peptideName}
+                      onChange={(event) => updateNativeUploadField('peptideName', event.target.value)}
+                    />
+                    <datalist id="common-peptide-names">
+                      {commonPeptideNames.map((peptideName) => (
+                        <option value={peptideName} key={peptideName} />
+                      ))}
+                    </datalist>
+                  </label>
 
-                <label className="label-field">
-                  <span>NIIMBOT share code *</span>
-                  <textarea
-                    required
-                    value={nativeUploadForm.niimbotCode}
-                    rows={3}
-                    onChange={(event) => updateNativeCode(event.target.value)}
-                  />
-                </label>
+                  <label className="label-field">
+                    <span>Mass (mg)</span>
+                    <input
+                      type="text"
+                      required
+                      value={nativeUploadForm.massMg}
+                      onChange={(event) => updateNativeUploadField('massMg', event.target.value)}
+                    />
+                  </label>
 
-                <label className="label-field">
-                  <span>Peptide name</span>
-                  <input
-                    type="text"
-                    list="common-peptide-names"
-                    required
-                    value={nativeUploadForm.peptideName}
-                    onChange={(event) => updateNativeUploadField('peptideName', event.target.value)}
-                  />
-                  <datalist id="common-peptide-names">
-                    {commonPeptideNames.map((peptideName) => (
-                      <option value={peptideName} key={peptideName} />
-                    ))}
-                  </datalist>
-                </label>
+                  <label className="label-field">
+                    <span>Label size *</span>
+                    <input
+                      type="text"
+                      list="native-label-sizes"
+                      required
+                      placeholder="40x20 mm"
+                      value={nativeUploadForm.labelSize}
+                      onChange={(event) => updateNativeUploadField('labelSize', event.target.value)}
+                    />
+                    <datalist id="native-label-sizes">
+                      {nativeLabelSizeOptions.map((labelSize) => (
+                        <option value={labelSize} key={labelSize} />
+                      ))}
+                    </datalist>
+                  </label>
 
-                <label className="label-field">
-                  <span>Mass (mg)</span>
-                  <input
-                    type="text"
-                    required
-                    value={nativeUploadForm.massMg}
-                    onChange={(event) => updateNativeUploadField('massMg', event.target.value)}
-                  />
-                </label>
+                  <label className="label-field">
+                    <span>Tags</span>
+                    <input
+                      type="text"
+                      value={nativeUploadForm.tags}
+                      placeholder="black print, vial wrap, minimal"
+                      onChange={(event) => updateNativeUploadField('tags', event.target.value)}
+                    />
+                  </label>
 
-                <label className="label-field">
-                  <span>Label size *</span>
-                  <input
-                    type="text"
-                    list="native-label-sizes"
-                    required
-                    placeholder="40x20 mm"
-                    value={nativeUploadForm.labelSize}
-                    onChange={(event) => updateNativeUploadField('labelSize', event.target.value)}
-                  />
-                  <datalist id="native-label-sizes">
-                    {nativeLabelSizeOptions.map((labelSize) => (
-                      <option value={labelSize} key={labelSize} />
-                    ))}
-                  </datalist>
-                </label>
-
-                <label className="label-field">
-                  <span>Tags</span>
-                  <input
-                    type="text"
-                    value={nativeUploadForm.tags}
-                    placeholder="black print, vial wrap, minimal"
-                    onChange={(event) => updateNativeUploadField('tags', event.target.value)}
-                  />
-                </label>
-
-                <button className="label-primary-action" type="submit">
-                  Add to Library
-                </button>
-              </form>
+                  <button className="label-primary-action" type="submit">
+                    Add to Library
+                  </button>
+                </form>
+              </div>
             </aside>
           </div>
         </section>

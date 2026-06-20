@@ -2008,6 +2008,45 @@ h2 {
   line-height: 1;
 }
 
+.native-mobile-panel-header {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.native-mobile-panel-content {
+  display: grid;
+  gap: 18px;
+}
+
+.native-mobile-panel-header .eyebrow,
+.native-mobile-panel-header strong {
+  display: block;
+}
+
+.native-mobile-panel-header strong {
+  margin: 0;
+  color: #07101f;
+  font-size: 1.7rem;
+  line-height: 1;
+}
+
+.native-label-upload .native-mobile-panel-header strong {
+  font-size: 2rem;
+}
+
+.native-mobile-panel-arrow {
+  display: none;
+}
+
 .native-label-library__header {
   display: flex;
   gap: 14px;
@@ -4027,11 +4066,67 @@ h2 {
   }
 
   .native-label-filters {
+    order: 1;
     position: static;
   }
 
+  .native-label-library {
+    order: 3;
+  }
+
   .native-label-upload {
+    order: 2;
     position: static;
+  }
+
+  .native-label-filters,
+  .native-label-upload {
+    width: 100%;
+    padding: 20px;
+  }
+
+  .native-mobile-panel-header {
+    align-items: flex-start;
+    cursor: pointer;
+  }
+
+  .native-mobile-panel-header strong,
+  .native-label-upload .native-mobile-panel-header strong {
+    font-size: 1.7rem;
+  }
+
+  .native-mobile-panel-header:focus-visible {
+    outline: 3px solid rgba(19, 244, 255, 0.2);
+    outline-offset: 5px;
+  }
+
+  .native-mobile-panel-arrow {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 auto;
+    margin-left: auto;
+    place-items: center;
+    color: #006f78;
+    font-size: 1.15rem;
+    font-weight: 950;
+    line-height: 1;
+    transform: rotate(180deg);
+    transition: transform 160ms ease;
+  }
+
+  .native-label-filters.is-mobile-expanded .native-mobile-panel-arrow,
+  .native-label-upload.is-mobile-expanded .native-mobile-panel-arrow {
+    transform: rotate(0deg);
+  }
+
+  .native-mobile-panel-content {
+    display: none;
+  }
+
+  .native-label-filters.is-mobile-expanded .native-mobile-panel-content,
+  .native-label-upload.is-mobile-expanded .native-mobile-panel-content {
+    display: grid;
   }
 
   .label-page__layout {
@@ -4254,6 +4349,11 @@ h2 {
   .label-panel,
   .label-generator {
     padding: 16px;
+  }
+
+  .native-label-filters,
+  .native-label-upload {
+    padding: 20px;
   }
 
   .label-library,
