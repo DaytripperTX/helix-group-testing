@@ -2736,10 +2736,21 @@ h2 {
   white-space: nowrap;
 }
 
-.label-primary-action:hover,
 .label-primary-action:focus-visible {
   background: #006f78;
   outline: none;
+}
+
+@media (hover: hover) {
+  .label-primary-action:hover {
+    background: #006f78;
+  }
+}
+
+.label-primary-action--copied,
+.label-primary-action--copied:hover,
+.label-primary-action--copied:focus-visible {
+  background: #006f78;
 }
 
 .label-primary-action:disabled {

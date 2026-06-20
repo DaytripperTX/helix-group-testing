@@ -1,4 +1,4 @@
-import { type ChangeEvent, type ClipboardEvent, type FormEvent, useEffect, useState } from 'react';
+import { type ChangeEvent, type ClipboardEvent, type FormEvent, useEffect, useRef, useState } from 'react';
 import { ChevronsDown } from 'lucide-react';
 import printerCatalogData from './Assets/Printers.json';
 import PageHero from './Helpers/PageHero';
@@ -1962,6 +1962,8 @@ function NativeLabelTemplateCard({
   onPermanentDelete: () => void;
   votes: number;
 }) {
+  const [isCodeCopied, setIsCodeCopied] = useState(false);
+  const copyStatusTimerRef = useRef<number | undefined>(undefined);
   const title = getNativeLabelTitle(template);
   const moderationStatus = template.moderationStatus ?? 'unreviewed';
   const reportCount = Math.max(0, Math.round(template.reportCount ?? 0));
@@ -1983,6 +1985,14 @@ function NativeLabelTemplateCard({
   ].filter(Boolean);
   const canExpandTags = metadata.length > 6;
   const visibleMetadata = canExpandTags && !isTagListExpanded ? metadata.slice(0, 5) : metadata;
+
+  useEffect(() => {
+    return () => {
+      if (copyStatusTimerRef.current !== undefined) {
+        window.clearTimeout(copyStatusTimerRef.current);
+      }
+    };
+  }, []);
 
   return (
     <article className="native-label-card" onClick={onSelectLabel}>
@@ -2067,14 +2077,24 @@ function NativeLabelTemplateCard({
 
         <div className="native-label-card__actions">
           <button
-            className="label-primary-action"
+            className={isCodeCopied ? 'label-primary-action label-primary-action--copied' : 'label-primary-action'}
             type="button"
             onClick={(event) => {
               event.stopPropagation();
               void navigator.clipboard?.writeText(template.niimbotCode);
+              setIsCodeCopied(true);
+
+              if (copyStatusTimerRef.current !== undefined) {
+                window.clearTimeout(copyStatusTimerRef.current);
+              }
+
+              copyStatusTimerRef.current = window.setTimeout(() => {
+                setIsCodeCopied(false);
+                copyStatusTimerRef.current = undefined;
+              }, 2000);
             }}
           >
-            Copy Code
+            {isCodeCopied ? 'Copied!' : 'Copy Code'}
           </button>
           <button
             className={isVoted ? 'native-label-like is-voted' : 'native-label-like'}
