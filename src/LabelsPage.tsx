@@ -1,4 +1,5 @@
 import { type ChangeEvent, type ClipboardEvent, type FormEvent, useEffect, useState } from 'react';
+import { ChevronsDown } from 'lucide-react';
 import printerCatalogData from './Assets/Printers.json';
 import PageHero from './Helpers/PageHero';
 
@@ -1022,7 +1023,9 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                   <span className="eyebrow">Filters</span>
                   <strong>Find labels</strong>
                 </span>
-                <span className="native-mobile-panel-arrow" aria-hidden="true">^</span>
+                <span className="native-mobile-panel-arrow" aria-hidden="true">
+                  <ChevronsDown size={34} strokeWidth={2.4} />
+                </span>
               </button>
 
               <div className="native-mobile-panel-content" id="native-label-filter-panel">
@@ -1245,7 +1248,9 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                   <span className="eyebrow">Upload</span>
                   <strong>Add template</strong>
                 </span>
-                <span className="native-mobile-panel-arrow" aria-hidden="true">^</span>
+                <span className="native-mobile-panel-arrow" aria-hidden="true">
+                  <ChevronsDown size={34} strokeWidth={2.4} />
+                </span>
               </button>
 
               <div className="native-mobile-panel-content" id="native-label-upload-panel">

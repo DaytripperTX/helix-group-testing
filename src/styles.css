@@ -4086,7 +4086,7 @@ h2 {
   }
 
   .native-mobile-panel-header {
-    align-items: flex-start;
+    align-items: center;
     cursor: pointer;
   }
 
@@ -4102,22 +4102,28 @@ h2 {
 
   .native-mobile-panel-arrow {
     display: grid;
-    width: 30px;
-    height: 30px;
+    width: 42px;
+    height: 42px;
+    align-self: center;
     flex: 0 0 auto;
     margin-left: auto;
     place-items: center;
     color: #006f78;
-    font-size: 1.15rem;
-    font-weight: 950;
     line-height: 1;
-    transform: rotate(180deg);
+    transform: rotate(0deg);
     transition: transform 160ms ease;
+  }
+
+  .native-mobile-panel-arrow svg {
+    display: block;
+    width: 34px;
+    height: 34px;
+    stroke: currentColor;
   }
 
   .native-label-filters.is-mobile-expanded .native-mobile-panel-arrow,
   .native-label-upload.is-mobile-expanded .native-mobile-panel-arrow {
-    transform: rotate(0deg);
+    transform: rotate(180deg);
   }
 
   .native-mobile-panel-content {
