@@ -1118,15 +1118,15 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
 
             <section className="native-label-library" aria-label="NIIMBOT label templates">
               <div className="native-label-library__header">
-                <div>
+                <div className="native-label-library__title">
                   <p className="eyebrow">Library</p>
                   <h2 id="native-label-library-title">NIIMBOT templates</h2>
                 </div>
-                <div className="native-label-library__tools">
-                  <span>
-                    {filteredNativeLabelTemplates.length} of {visibleNativeLabelTemplates.length} saved
+                <div className="native-label-library__side">
+                  <span className="native-label-library__saved">
+                    {filteredNativeLabelTemplates.length} of {visibleNativeLabelTemplates.length}
                   </span>
-                  <div className="native-sort-controls" aria-label="Sort labels">
+                  <div className="native-label-library__tools native-sort-controls" aria-label="Sort labels">
                     <DropdownSelect
                       value={nativeSortKey}
                       options={nativeSortOptions}
