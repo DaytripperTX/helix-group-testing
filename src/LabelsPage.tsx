@@ -1,5 +1,5 @@
 import { type ChangeEvent, type ClipboardEvent, type FormEvent, useEffect, useRef, useState } from 'react';
-import { ChevronsDown } from 'lucide-react';
+import { ChevronsDown, CircleQuestionMark, CircleX } from 'lucide-react';
 import printerCatalogData from './Assets/Printers.json';
 import PageHero from './Helpers/PageHero';
 
@@ -83,6 +83,17 @@ type ExportType = 'svg' | 'png' | 'pdf';
 type NativeSortKey = 'featured' | 'popular' | 'az' | 'latest';
 
 type NativeLabelReportReason = 'offensive' | 'spam' | 'unsafe' | 'other';
+
+type FieldTitleProps = {
+  children: string;
+  help: string;
+  htmlFor: string;
+  isOpen: boolean;
+  isPinned: boolean;
+  onClose: () => void;
+  onOpen: () => void;
+  onTogglePinned: () => void;
+};
 
 type PrinterColor = {
   id: string;
@@ -314,6 +325,54 @@ const nativeReportReasons: { value: NativeLabelReportReason; label: string }[] =
   { value: 'other', label: 'Other' },
 ];
 
+function FieldTitle({
+  children,
+  help,
+  htmlFor,
+  isOpen,
+  isPinned,
+  onClose,
+  onOpen,
+  onTogglePinned,
+}: FieldTitleProps) {
+  const helpId = `${htmlFor}-help`;
+
+  return (
+    <div className="label-field__title">
+      <label htmlFor={htmlFor}>{children}</label>
+      <span
+        className={`${isOpen ? 'field-help is-open' : 'field-help'}${isPinned ? ' is-pinned' : ''}`}
+        onMouseEnter={onOpen}
+        onMouseLeave={() => {
+          if (!isPinned) {
+            onClose();
+          }
+        }}
+      >
+        <button
+          className="field-help__trigger"
+          type="button"
+          aria-label={`${children} help`}
+          aria-describedby={helpId}
+          aria-expanded={isOpen}
+          onClick={onTogglePinned}
+          onFocus={onOpen}
+          onBlur={() => {
+            if (!isPinned) {
+              onClose();
+            }
+          }}
+        >
+          <CircleQuestionMark size={14} strokeWidth={2.4} />
+        </button>
+        <span className="field-help__panel" id={helpId} role="tooltip">
+          {help}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const defaultPrinter = printerCatalog[0];
   const [selectedTemplateId, setSelectedTemplateId] = useState(labelTemplates[0].id);
@@ -345,6 +404,8 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const [nativeReportReason, setNativeReportReason] = useState<NativeLabelReportReason>('offensive');
   const [nativeReportDetails, setNativeReportDetails] = useState('');
   const [nativeReportStatus, setNativeReportStatus] = useState('');
+  const [openFieldHelpId, setOpenFieldHelpId] = useState<string | null>(null);
+  const [pinnedFieldHelpId, setPinnedFieldHelpId] = useState<string | null>(null);
   const [localVotes, setLocalVotes] = useState<Record<string, boolean>>({});
   const [selectedPrinterId, setSelectedPrinterId] = useState(defaultPrinter.id);
   const [availablePrintColorIds, setAvailablePrintColorIds] = useState<string[]>(
@@ -391,8 +452,56 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     };
   }, []);
 
+  useEffect(() => {
+    const closeOpenHelp = (event: PointerEvent) => {
+      const target = event.target;
+
+      if (target instanceof Element && target.closest('.field-help')) {
+        return;
+      }
+
+      setOpenFieldHelpId(null);
+      setPinnedFieldHelpId(null);
+    };
+
+    const closeOpenHelpWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      setOpenFieldHelpId(null);
+      setPinnedFieldHelpId(null);
+    };
+
+    document.addEventListener('pointerdown', closeOpenHelp);
+    document.addEventListener('keydown', closeOpenHelpWithKeyboard);
+
+    return () => {
+      document.removeEventListener('pointerdown', closeOpenHelp);
+      document.removeEventListener('keydown', closeOpenHelpWithKeyboard);
+    };
+  }, []);
+
   const selectedPrinter =
     printerCatalog.find((printer) => printer.id === selectedPrinterId) ?? defaultPrinter;
+
+  const getFieldHelpProps = (htmlFor: string) => ({
+    isOpen: openFieldHelpId === htmlFor,
+    isPinned: pinnedFieldHelpId === htmlFor,
+    onClose: () => {
+      if (pinnedFieldHelpId !== htmlFor) {
+        setOpenFieldHelpId((currentId) => (currentId === htmlFor ? null : currentId));
+      }
+    },
+    onOpen: () => {
+      setOpenFieldHelpId(htmlFor);
+    },
+    onTogglePinned: () => {
+      const nextId = pinnedFieldHelpId === htmlFor ? null : htmlFor;
+      setPinnedFieldHelpId(nextId);
+      setOpenFieldHelpId(nextId);
+    },
+  });
   const supportedLabelMediaOptions = selectedPrinter.labelMediaSupported.filter((media) =>
     supportedLabelMediaIds.includes(media.id as (typeof supportedLabelMediaIds)[number]),
   );
@@ -581,6 +690,10 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
         currentForm.templateName.trim() || !parsedShare.templateName
           ? currentForm.templateName
           : parsedShare.templateName,
+      labelSize:
+        currentForm.labelSize.trim() || !parsedShare.labelSize
+          ? currentForm.labelSize
+          : parsedShare.labelSize,
     }));
   };
 
@@ -736,6 +849,10 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
         currentForm.templateName.trim() || !parsedShare.templateName
           ? currentForm.templateName
           : parsedShare.templateName,
+      labelSize:
+        currentForm.labelSize.trim() || !parsedShare.labelSize
+          ? currentForm.labelSize
+          : parsedShare.labelSize,
     }));
   };
 
@@ -1064,7 +1181,9 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                         {nativeCategoryFilters.map((category) => (
                           <button type="button" key={category} onClick={() => toggleNativeCategoryFilter(category)}>
                             {category}
-                            <span className="native-filter-chips__remove" aria-hidden="true" />
+                            <span className="native-filter-chips__remove" aria-hidden="true">
+                              <CircleX size={13} strokeWidth={2.4} />
+                            </span>
                           </button>
                         ))}
                         {nativeCategoryFilters.length >= 2 && (
@@ -1255,24 +1374,38 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
 
               <div className="native-mobile-panel-content" id="native-label-upload-panel">
                 <form className="label-upload" onPaste={pasteNativePreview} onSubmit={uploadNativeTemplate}>
-                  <label className="label-field">
-                    <span>Template name</span>
+                  <div className="label-field">
+                    <FieldTitle
+                      htmlFor="native-upload-template-name"
+                      help="Give this template a simple, memorable name."
+                      {...getFieldHelpProps('native-upload-template-name')}
+                    >
+                      Template name
+                    </FieldTitle>
                     <input
+                      id="native-upload-template-name"
                       type="text"
                       value={nativeUploadForm.templateName}
                       onChange={(event) => updateNativeUploadField('templateName', event.target.value)}
                     />
-                  </label>
+                  </div>
 
-                  <label className="label-field">
-                    <span>Screenshot preview *</span>
+                  <div className="label-field">
+                    <FieldTitle
+                      htmlFor="native-upload-preview"
+                      help="Upload or paste a screenshot from NIIMBOT so people can see the label layout."
+                      {...getFieldHelpProps('native-upload-preview')}
+                    >
+                      Screenshot preview *
+                    </FieldTitle>
                     <input
+                      id="native-upload-preview"
                       type="file"
                       accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
                       aria-required="true"
                       onChange={updateNativePreview}
                     />
-                  </label>
+                  </div>
 
                   <input
                     className="label-honeypot"
@@ -1290,19 +1423,33 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                     </div>
                   )}
 
-                  <label className="label-field">
-                    <span>NIIMBOT share code *</span>
+                  <div className="label-field">
+                    <FieldTitle
+                      htmlFor="native-upload-niimbot-code"
+                      help="Copy the share text from NIIMBOT; the code and label size are pulled from it automatically."
+                      {...getFieldHelpProps('native-upload-niimbot-code')}
+                    >
+                      NIIMBOT share code *
+                    </FieldTitle>
                     <textarea
+                      id="native-upload-niimbot-code"
                       required
                       value={nativeUploadForm.niimbotCode}
                       rows={3}
                       onChange={(event) => updateNativeCode(event.target.value)}
                     />
-                  </label>
+                  </div>
 
-                  <label className="label-field">
-                    <span>Peptide name</span>
+                  <div className="label-field">
+                    <FieldTitle
+                      htmlFor="native-upload-peptide-name"
+                      help="Enter the peptide this label was made for so people can search and filter."
+                      {...getFieldHelpProps('native-upload-peptide-name')}
+                    >
+                      Peptide name
+                    </FieldTitle>
                     <input
+                      id="native-upload-peptide-name"
                       type="text"
                       list="common-peptide-names"
                       required
@@ -1314,21 +1461,35 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                         <option value={peptideName} key={peptideName} />
                       ))}
                     </datalist>
-                  </label>
+                  </div>
 
-                  <label className="label-field">
-                    <span>Mass (mg)</span>
+                  <div className="label-field">
+                    <FieldTitle
+                      htmlFor="native-upload-mass-mg"
+                      help="Enter the vial amount shown on the label, such as 10 or 30."
+                      {...getFieldHelpProps('native-upload-mass-mg')}
+                    >
+                      Mass (mg)
+                    </FieldTitle>
                     <input
+                      id="native-upload-mass-mg"
                       type="text"
                       required
                       value={nativeUploadForm.massMg}
                       onChange={(event) => updateNativeUploadField('massMg', event.target.value)}
                     />
-                  </label>
+                  </div>
 
-                  <label className="label-field">
-                    <span>Label size *</span>
+                  <div className="label-field">
+                    <FieldTitle
+                      htmlFor="native-upload-label-size"
+                      help="Autofills from the NIIMBOT share code when available; edit it if needed."
+                      {...getFieldHelpProps('native-upload-label-size')}
+                    >
+                      Label size *
+                    </FieldTitle>
                     <input
+                      id="native-upload-label-size"
                       type="text"
                       list="native-label-sizes"
                       required
@@ -1341,17 +1502,24 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                         <option value={labelSize} key={labelSize} />
                       ))}
                     </datalist>
-                  </label>
+                  </div>
 
-                  <label className="label-field">
-                    <span>Tags</span>
+                  <div className="label-field">
+                    <FieldTitle
+                      htmlFor="native-upload-tags"
+                      help="Add a few comma-separated notes like black print, vial wrap, or minimal."
+                      {...getFieldHelpProps('native-upload-tags')}
+                    >
+                      Tags
+                    </FieldTitle>
                     <input
+                      id="native-upload-tags"
                       type="text"
                       value={nativeUploadForm.tags}
                       placeholder="black print, vial wrap, minimal"
                       onChange={(event) => updateNativeUploadField('tags', event.target.value)}
                     />
-                  </label>
+                  </div>
 
                   <button className="label-primary-action" type="submit">
                     Add to Library
@@ -1386,23 +1554,37 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                   </button>
                 </div>
 
-                <label className="label-field">
-                  <span>Template name</span>
+                <div className="label-field">
+                  <FieldTitle
+                    htmlFor="native-edit-template-name"
+                    help="Give this template a simple, memorable name."
+                    {...getFieldHelpProps('native-edit-template-name')}
+                  >
+                    Template name
+                  </FieldTitle>
                   <input
+                    id="native-edit-template-name"
                     type="text"
                     value={nativeEditForm.templateName}
                     onChange={(event) => updateNativeEditField('templateName', event.target.value)}
                   />
-                </label>
+                </div>
 
-                <label className="label-field">
-                  <span>Screenshot preview</span>
+                <div className="label-field">
+                  <FieldTitle
+                    htmlFor="native-edit-preview"
+                    help="Upload or paste a screenshot from NIIMBOT so people can see the label layout."
+                    {...getFieldHelpProps('native-edit-preview')}
+                  >
+                    Screenshot preview
+                  </FieldTitle>
                   <input
+                    id="native-edit-preview"
                     type="file"
                     accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
                     onChange={updateNativeEditPreview}
                   />
-                </label>
+                </div>
 
                 {nativeEditForm.previewDataUrl && (
                   <div className="native-upload-preview">
@@ -1411,56 +1593,91 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
                   </div>
                 )}
 
-                <label className="label-field">
-                  <span>NIIMBOT share code *</span>
+                <div className="label-field">
+                  <FieldTitle
+                    htmlFor="native-edit-niimbot-code"
+                    help="Copy the share text from NIIMBOT; the code and label size are pulled from it automatically."
+                    {...getFieldHelpProps('native-edit-niimbot-code')}
+                  >
+                    NIIMBOT share code *
+                  </FieldTitle>
                   <textarea
+                    id="native-edit-niimbot-code"
                     required
                     value={nativeEditForm.niimbotCode}
                     rows={3}
                     onChange={(event) => updateNativeEditCode(event.target.value)}
                   />
-                </label>
+                </div>
 
-                <label className="label-field">
-                  <span>Peptide name *</span>
+                <div className="label-field">
+                  <FieldTitle
+                    htmlFor="native-edit-peptide-name"
+                    help="Enter the peptide this label was made for so people can search and filter."
+                    {...getFieldHelpProps('native-edit-peptide-name')}
+                  >
+                    Peptide name *
+                  </FieldTitle>
                   <input
+                    id="native-edit-peptide-name"
                     type="text"
                     list="common-peptide-names"
                     required
                     value={nativeEditForm.peptideName}
                     onChange={(event) => updateNativeEditField('peptideName', event.target.value)}
                   />
-                </label>
+                </div>
 
-                <label className="label-field">
-                  <span>Mass (mg) *</span>
+                <div className="label-field">
+                  <FieldTitle
+                    htmlFor="native-edit-mass-mg"
+                    help="Enter the vial amount shown on the label, such as 10 or 30."
+                    {...getFieldHelpProps('native-edit-mass-mg')}
+                  >
+                    Mass (mg) *
+                  </FieldTitle>
                   <input
+                    id="native-edit-mass-mg"
                     type="text"
                     required
                     value={nativeEditForm.massMg}
                     onChange={(event) => updateNativeEditField('massMg', event.target.value)}
                   />
-                </label>
+                </div>
 
-                <label className="label-field">
-                  <span>Label size *</span>
+                <div className="label-field">
+                  <FieldTitle
+                    htmlFor="native-edit-label-size"
+                    help="Autofills from the NIIMBOT share code when available; edit it if needed."
+                    {...getFieldHelpProps('native-edit-label-size')}
+                  >
+                    Label size *
+                  </FieldTitle>
                   <input
+                    id="native-edit-label-size"
                     type="text"
                     list="native-label-sizes"
                     required
                     value={nativeEditForm.labelSize}
                     onChange={(event) => updateNativeEditField('labelSize', event.target.value)}
                   />
-                </label>
+                </div>
 
-                <label className="label-field">
-                  <span>Tags</span>
+                <div className="label-field">
+                  <FieldTitle
+                    htmlFor="native-edit-tags"
+                    help="Add a few comma-separated notes like black print, vial wrap, or minimal."
+                    {...getFieldHelpProps('native-edit-tags')}
+                  >
+                    Tags
+                  </FieldTitle>
                   <input
+                    id="native-edit-tags"
                     type="text"
                     value={nativeEditForm.tags}
                     onChange={(event) => updateNativeEditField('tags', event.target.value)}
                   />
-                </label>
+                </div>
 
                 {nativeEditStatus && <p className="admin-status">{nativeEditStatus}</p>}
 
@@ -2309,6 +2526,7 @@ function getLabelFileName(data: LabelFormData, template: LabelTemplate) {
 function parseNiimbotShareText(value: string) {
   const codeMatch = value.match(/⊙([^⊙]+)⊙/u);
   const rawTemplateName = value.match(/^【([^】]+)】/u)?.[1]?.trim();
+  const sizeMatch = rawTemplateName?.match(/[（(]\s*(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*[）)]\s*$/iu);
   const templateName = rawTemplateName
     ?.replace(/\s*[（(]\s*\d+(?:\.\d+)?\s*x\s*\d+(?:\.\d+)?\s*[）)]\s*$/iu, '')
     .trim();
@@ -2316,6 +2534,7 @@ function parseNiimbotShareText(value: string) {
   return {
     codeWithDelimiters: codeMatch ? `⊙${codeMatch[1].trim()}⊙` : null,
     templateName: templateName || null,
+    labelSize: sizeMatch ? normalizeLabelSize(`${sizeMatch[1]}x${sizeMatch[2]}`) : null,
   };
 }
 
@@ -2361,7 +2580,17 @@ function normalizeLabelSize(value: string) {
     return trimmedValue;
   }
 
-  return `${match[1]}x${match[2]} mm`;
+  return `${formatLabelSizeDimension(match[1])}x${formatLabelSizeDimension(match[2])} mm`;
+}
+
+function formatLabelSizeDimension(value: string) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return value;
+  }
+
+  return String(numericValue);
 }
 
 function matchesNativeLabelFilters(
