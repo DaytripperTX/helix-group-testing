@@ -2181,29 +2181,30 @@ h2 {
 
 .native-label-report-button {
   position: absolute;
-  top: 48px;
   right: 10px;
+  bottom: 10px;
   z-index: 2;
   display: grid;
   width: 22px;
   height: 22px;
   place-items: center;
-  border: 1px solid rgba(137, 154, 169, 0.42);
-  border-radius: 999px;
-  background: rgba(251, 253, 254, 0.86);
+  border: 0;
+  padding: 0;
+  background: transparent;
   color: #8b6870;
   cursor: pointer;
-  font: inherit;
-  font-size: 0.72rem;
-  font-weight: 950;
   line-height: 1;
   opacity: 0.82;
 }
 
+.native-label-report-button svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
 .native-label-report-button:hover,
 .native-label-report-button:focus-visible {
-  border-color: #c58d96;
-  background: #fff7f7;
   color: #9d2424;
   opacity: 1;
   outline: none;
@@ -2302,6 +2303,7 @@ h2 {
 }
 
 .native-label-card__preview {
+  position: relative;
   display: grid;
   aspect-ratio: 16 / 10;
   place-items: center;
@@ -2495,7 +2497,7 @@ h2 {
 .native-label-like svg {
   width: 18px;
   height: 18px;
-  fill: currentColor;
+  fill: none;
 }
 
 .native-label-like span {

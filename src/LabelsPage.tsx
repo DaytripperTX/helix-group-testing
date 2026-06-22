@@ -1,5 +1,5 @@
 import { type ChangeEvent, type ClipboardEvent, type FormEvent, useEffect, useRef, useState } from 'react';
-import { ChevronsDown, CircleQuestionMark, CircleX } from 'lucide-react';
+import { ChevronsDown, CircleQuestionMark, CircleX, ThumbsUp, TriangleAlert } from 'lucide-react';
 import printerCatalogData from './Assets/Printers.json';
 import PageHero from './Helpers/PageHero';
 
@@ -2213,19 +2213,6 @@ function NativeLabelTemplateCard({
 
   return (
     <article className="native-label-card" onClick={onSelectLabel}>
-      {!isAdmin && (
-        <button
-          className="native-label-report-button"
-          type="button"
-          aria-label={`Report ${title}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onReport();
-          }}
-        >
-          !
-        </button>
-      )}
       {isAdmin && banner && (
         <div className={`native-label-card__notice native-label-card__notice--${banner.tone}`}>
           {banner.text}
@@ -2256,6 +2243,19 @@ function NativeLabelTemplateCard({
       </div>
       <div className="native-label-card__preview">
         <img src={template.previewDataUrl} alt={`${title} preview`} />
+        {!isAdmin && (
+          <button
+            className="native-label-report-button"
+            type="button"
+            aria-label={`Report ${title}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onReport();
+            }}
+          >
+            <TriangleAlert size={14} strokeWidth={2.4} />
+          </button>
+        )}
       </div>
       <div className="native-label-card__body">
         <div className="native-label-card__metadata">
@@ -2323,9 +2323,7 @@ function NativeLabelTemplateCard({
               onVote();
             }}
           >
-            <svg aria-hidden="true" viewBox="0 0 24 24">
-              <path d="M7 21H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3v11Zm4.8-18.3a1.3 1.3 0 0 1 1.5 1.1l.2 1.2a6.9 6.9 0 0 1-.6 3.8L12.4 10H19a2.5 2.5 0 0 1 2.4 3.1l-1.4 5.6A3 3 0 0 1 17.1 21H9V10.7l1.6-1.8a5.3 5.3 0 0 0 1.2-3.4l-.1-1.2a1.3 1.3 0 0 1 1.1-1.6Z" />
-            </svg>
+            <ThumbsUp size={16} strokeWidth={2.4} />
             <span>{Math.min(votes, 999)}</span>
           </button>
         </div>
