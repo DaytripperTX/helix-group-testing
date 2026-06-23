@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import path from 'node:path';
 
@@ -60,6 +60,8 @@ test('public generic label-template reads keep the public label shape', async ()
 
   assert.equal(response.statusCode, 200);
   assert.equal(label.moderationStatus, 'unreviewed');
+  assert.equal(typeof label.previewUrl, 'string');
+  assert.equal(label.previewDataUrl, undefined);
   assert.equal(label.reports, undefined);
   assert.equal(label.reportFingerprints, undefined);
   assert.equal(label.voteFingerprints, undefined);
@@ -85,11 +87,83 @@ test('public label upload normalizes ids and rejects caller overwrite control', 
   assert.deepEqual(labels[0].reports, []);
   assert.deepEqual(labels[0].voteFingerprints, []);
   assert.deepEqual(labels[0].reportFingerprints, []);
+  assert.equal(labels[0].previewDataUrl, undefined);
+  assert.match(labels[0].previewAssetKey, /^label-previews\/niimbot-.+\.png$/);
+  assert.equal(labels[0].previewMimeType, 'image/png');
 
   const publicLabels = await readPublicLabelTemplates();
 
   assert.equal(publicLabels.length, 2);
   assert.equal(publicLabels[0].moderationStatus, 'unreviewed');
+});
+
+test('label preview endpoint serves image bytes with public and admin visibility rules', async () => {
+  await resetData();
+  await postLabel({ templateName: 'Preview Endpoint' });
+
+  const [label] = await readCollection('label-templates');
+  const publicPreview = await apiRequest(`/api/labels/${encodeURIComponent(label.id)}/preview`, 'GET');
+
+  assert.equal(publicPreview.statusCode, 200);
+  assert.equal(publicPreview.headers['Content-Type'], 'image/png');
+  assert.equal(Buffer.from(publicPreview.body, 'base64').equals(Buffer.from(pngBase64, 'base64')), true);
+  assert.equal(publicPreview.isBase64Encoded, true);
+
+  await adminUpsertLabelTemplate({
+    ...label,
+    moderationStatus: 'rejected',
+  });
+
+  const blockedPreview = await apiRequest(`/api/labels/${encodeURIComponent(label.id)}/preview`, 'GET');
+
+  assert.equal(blockedPreview.statusCode, 404);
+
+  const adminCookie = await loginAdmin();
+  const adminPreview = await apiRequest(`/api/labels/${encodeURIComponent(label.id)}/preview`, 'GET', undefined, {
+    cookie: adminCookie,
+  });
+
+  assert.equal(adminPreview.statusCode, 200);
+  assert.equal(adminPreview.headers['Content-Type'], 'image/png');
+});
+
+test('legacy embedded label previews migrate to asset metadata on read', async () => {
+  await resetData();
+  await mkdir(testDataDir, { recursive: true });
+  await writeFile(path.join(testDataDir, 'label-templates.json'), `${JSON.stringify({
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'legacy-preview-label',
+        previewDataUrl: validPreviewDataUrl,
+        previewFileName: 'legacy.png',
+        niimbotCode: 'NIIMBOT-CODE',
+        templateName: 'Legacy Preview',
+        peptideName: 'BPC-157',
+        massMg: '10',
+        labelSize: '40x20 mm',
+        moderationStatus: 'unreviewed',
+        votes: 0,
+        voteFingerprints: [],
+        reportCount: 0,
+        reports: [],
+        reportFingerprints: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  }, null, 2)}\n`);
+
+  const [label] = await readCollection('label-templates');
+  const storedDocument = JSON.parse(await readFile(path.join(testDataDir, 'label-templates.json'), 'utf8'));
+  const storedLabel = storedDocument.items[0];
+
+  assert.equal(label.previewDataUrl, undefined);
+  assert.equal(label.previewUrl, '/api/labels/legacy-preview-label/preview');
+  assert.equal(storedLabel.previewDataUrl, undefined);
+  assert.equal(storedLabel.previewAssetKey, 'label-previews/legacy-preview-label.png');
+  assert.equal(JSON.stringify(storedDocument).includes('data:image/'), false);
 });
 
 test('public label upload rejects unsafe preview data and blocked text', async () => {
@@ -211,7 +285,8 @@ test('vote endpoint dedupes fingerprints and changes only votes', async () => {
   assert.equal(updatedLabel.votes, 1);
   assert.equal(updatedLabel.voteFingerprints.length, 1);
   assert.equal(updatedLabel.templateName, 'Original Template');
-  assert.equal(updatedLabel.previewDataUrl, validPreviewDataUrl);
+  assert.equal(updatedLabel.previewDataUrl, undefined);
+  assert.equal(updatedLabel.previewMimeType, 'image/png');
 
   const removeVote = await apiRequest('/api/labels/vote', 'POST', {
     id: label.id,
