@@ -36,7 +36,11 @@ type UploadedLabelForm = {
 
 type NativeLabelTemplate = {
   id: string;
-  previewDataUrl: string;
+  previewDataUrl?: string;
+  previewUrl?: string;
+  previewAssetKey?: string;
+  previewMimeType?: string;
+  previewByteLength?: number;
   previewFileName: string;
   niimbotCode: string;
   templateName?: string;
@@ -316,6 +320,9 @@ const minExportDpi = 300;
 const maxExportDpi = 2400;
 const binaryWhiteThreshold = 235;
 const maxNativePreviewBytes = 3 * 1024 * 1024;
+const maxCompressedNativePreviewBytes = 512 * 1024;
+const maxNativePreviewWidth = 960;
+const maxNativePreviewHeight = 600;
 const nativeReportHideThreshold = 5;
 const nativePreviewMimeTypes = ['image/png', 'image/jpeg', 'image/webp'];
 const nativeReportReasons: { value: NativeLabelReportReason; label: string }[] = [
@@ -705,15 +712,13 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
       return;
     }
 
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      onLoad(String(reader.result ?? ''), file.name || `clipboard-preview-${Date.now()}.png`);
-    };
-    reader.onerror = () => {
-      setNativeTemplateStatus('Could not read that preview image.');
-    };
-    reader.readAsDataURL(file);
+    compressNativePreviewFile(file)
+      .then((preview) => {
+        onLoad(preview.dataUrl, preview.fileName);
+      })
+      .catch(() => {
+        setNativeTemplateStatus('Could not prepare that preview image.');
+      });
   };
 
   const updateNativePreview = (event: ChangeEvent<HTMLInputElement>) => {
@@ -814,7 +819,7 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const openNativeLabelEditor = (template: NativeLabelTemplate) => {
     setEditingNativeLabel(template);
     setNativeEditForm({
-      previewDataUrl: template.previewDataUrl,
+      previewDataUrl: template.previewDataUrl ?? '',
       previewFileName: template.previewFileName,
       niimbotCode: template.niimbotCode,
       templateName: template.templateName ?? '',
@@ -870,19 +875,18 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
       return;
     }
 
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      setNativeEditForm((currentForm) => ({
-        ...currentForm,
-        previewDataUrl: String(reader.result ?? ''),
-        previewFileName: file.name || `edited-preview-${Date.now()}.png`,
-      }));
-    };
-    reader.onerror = () => {
-      setNativeEditStatus('Could not read that preview image.');
-    };
-    reader.readAsDataURL(file);
+    compressNativePreviewFile(file)
+      .then((preview) => {
+        setNativeEditForm((currentForm) => ({
+          ...currentForm,
+          previewDataUrl: preview.dataUrl,
+          previewFileName: preview.fileName,
+        }));
+        setNativeEditStatus('');
+      })
+      .catch(() => {
+        setNativeEditStatus('Could not prepare that preview image.');
+      });
   };
 
   const saveNativeLabelEdit = async (event: FormEvent<HTMLFormElement>) => {
@@ -897,14 +901,18 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     const massMg = nativeEditForm.massMg.trim();
     const niimbotCode = nativeEditForm.niimbotCode.trim();
 
-    if (!nativeEditForm.previewDataUrl || !niimbotCode || !peptideName || !massMg || !labelSize) {
+    if (!getNativePreviewSrc(editingNativeLabel) && !nativeEditForm.previewDataUrl) {
+      setNativeEditStatus('Choose a preview image before saving.');
+      return;
+    }
+
+    if (!niimbotCode || !peptideName || !massMg || !labelSize) {
       setNativeEditStatus('Complete the required fields before saving.');
       return;
     }
 
     const nextTemplate: NativeLabelTemplate = {
       ...editingNativeLabel,
-      previewDataUrl: nativeEditForm.previewDataUrl,
       previewFileName: nativeEditForm.previewFileName,
       niimbotCode,
       templateName: nativeEditForm.templateName.trim() || undefined,
@@ -914,6 +922,14 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
       peptideCategories: getPeptideCategories(peptideName).slice(0, 3),
       tags: parseNativeTags(nativeEditForm.tags),
     };
+
+    if (nativeEditForm.previewDataUrl) {
+      nextTemplate.previewDataUrl = nativeEditForm.previewDataUrl;
+      delete nextTemplate.previewUrl;
+      delete nextTemplate.previewAssetKey;
+      delete nextTemplate.previewMimeType;
+      delete nextTemplate.previewByteLength;
+    }
 
     try {
       const templates = await updateNativeLabelTemplate(nextTemplate);
@@ -2242,7 +2258,7 @@ function NativeLabelTemplateCard({
         </div>
       </div>
       <div className="native-label-card__preview">
-        <img src={template.previewDataUrl} alt={`${title} preview`} />
+        <img src={getNativePreviewSrc(template)} alt={`${title} preview`} />
         {!isAdmin && (
           <button
             className="native-label-report-button"
@@ -2829,10 +2845,13 @@ function isNativeLabelTemplate(value: unknown): value is NativeLabelTemplate {
   }
 
   const template = value as Partial<NativeLabelTemplate>;
+  const hasPreview =
+    typeof template.previewUrl === 'string' ||
+    typeof template.previewDataUrl === 'string';
 
   return (
     typeof template.id === 'string' &&
-    typeof template.previewDataUrl === 'string' &&
+    hasPreview &&
     typeof template.previewFileName === 'string' &&
     typeof template.niimbotCode === 'string' &&
     (template.votes === undefined || typeof template.votes === 'number') &&
@@ -2850,6 +2869,82 @@ function isNativeLabelTemplate(value: unknown): value is NativeLabelTemplate {
     ) &&
     (template.reportCount === undefined || typeof template.reportCount === 'number')
   );
+}
+
+function getNativePreviewSrc(template: NativeLabelTemplate) {
+  return template.previewUrl ?? template.previewDataUrl ?? '';
+}
+
+async function compressNativePreviewFile(file: File) {
+  const image = await loadBitmapImage(file);
+  const scale = Math.min(
+    1,
+    maxNativePreviewWidth / image.width,
+    maxNativePreviewHeight / image.height,
+  );
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+
+  if (!context) {
+    throw new Error('Canvas rendering is not available.');
+  }
+
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  const blob =
+    await canvasToBlobWithQuality(canvas, 'image/webp', 0.78).catch(() => null) ??
+    await canvasToBlobWithQuality(canvas, 'image/jpeg', 0.82);
+
+  if (blob.size > maxCompressedNativePreviewBytes) {
+    throw new Error('Compressed preview is too large.');
+  }
+
+  return {
+    dataUrl: await blobToDataUrl(blob),
+    fileName: replacePreviewExtension(
+      file.name || `label-preview-${Date.now()}`,
+      blob.type === 'image/webp' ? 'webp' : 'jpg',
+    ),
+  };
+}
+
+function loadBitmapImage(file: File) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Preview image could not be loaded.'));
+    };
+    image.src = url;
+  });
+}
+
+function canvasToBlobWithQuality(canvas: HTMLCanvasElement, type: string, quality: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob && blob.type === type) {
+        resolve(blob);
+        return;
+      }
+
+      reject(new Error('Canvas export failed.'));
+    }, type, quality);
+  });
+}
+
+function replacePreviewExtension(fileName: string, extension: string) {
+  const safeName = fileName.trim() || 'label-preview';
+  const withoutExtension = safeName.replace(/\.[a-z0-9]+$/i, '');
+
+  return `${withoutExtension}.${extension}`;
 }
 
 function downloadBlob(blob: Blob, fileName: string) {

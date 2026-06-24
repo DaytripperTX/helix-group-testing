@@ -44,5 +44,5 @@ function writeNodeResponse(response, result) {
   }
 
   response.writeHead(result.statusCode);
-  response.end(result.body);
+  response.end(result.isBase64Encoded ? Buffer.from(result.body, 'base64') : result.body);
 }

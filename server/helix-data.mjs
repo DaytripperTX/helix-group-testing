@@ -68,6 +68,39 @@ export async function readPublicLabelTemplates() {
   return templates.filter(isPubliclyVisibleLabelTemplate).map(toPublicLabelTemplate);
 }
 
+export async function readLabelTemplatePreviewAsset(itemId, { isAdmin = false } = {}) {
+  const document = await readLabelTemplateDocument();
+  const template = document.items.find((item) => item?.id === itemId);
+
+  if (!template) {
+    throw createHttpError(404, 'Label preview not found.');
+  }
+
+  if (!isAdmin && !isPubliclyVisibleLabelTemplate(template)) {
+    throw createHttpError(404, 'Label preview not found.');
+  }
+
+  if (typeof template.previewDataUrl === 'string') {
+    const preview = sanitizePreviewDataUrl(template.previewDataUrl);
+
+    return {
+      buffer: preview.buffer,
+      mimeType: preview.mimeType,
+      fileName: sanitizePreviewFileName(template.previewFileName, preview.mimeType),
+    };
+  }
+
+  if (typeof template.previewAssetKey !== 'string' || typeof template.previewMimeType !== 'string') {
+    throw createHttpError(404, 'Label preview not found.');
+  }
+
+  return {
+    buffer: await readLabelPreviewAsset(template.previewAssetKey),
+    mimeType: template.previewMimeType,
+    fileName: sanitizePreviewFileName(template.previewFileName, template.previewMimeType),
+  };
+}
+
 export async function upsertCollectionItem(collectionName, itemId, item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     throw createHttpError(400, 'Expected an object item.');
@@ -192,7 +225,7 @@ export async function writeAsset(asset) {
 export async function publicUpsertLabelTemplate(template) {
   const document = await readLabelTemplateDocument();
   const currentItems = Array.isArray(document.items) ? document.items : [];
-  const nextTemplate = normalizePublicLabelTemplate(template, currentItems);
+  const nextTemplate = await normalizePublicLabelTemplate(template, currentItems);
   const nextItems = [nextTemplate, ...currentItems];
   const nextDocument = createCollectionDocument('label-templates', nextItems);
 
@@ -310,7 +343,7 @@ export async function adminUpsertLabelTemplate(template) {
   const document = await readLabelTemplateDocument();
   const currentItems = Array.isArray(document.items) ? document.items : [];
   const currentItem = currentItems.find((item) => item?.id === template.id);
-  const nextTemplate = normalizeAdminLabelTemplate(template, currentItem);
+  const nextTemplate = await normalizeAdminLabelTemplate(template, currentItem);
   const nextItems = [nextTemplate, ...currentItems.filter((item) => item?.id !== template.id)];
   const nextDocument = createCollectionDocument('label-templates', nextItems);
 
@@ -451,6 +484,38 @@ async function writeBlobDocument(config, document) {
   await store.setJSON(config.fileName, document);
 }
 
+async function writeLabelPreviewAsset(assetKey, buffer, metadata) {
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    await store.set(assetKey, buffer, { metadata });
+    return;
+  }
+
+  const localAssetPath = path.join(localDataDir, assetKey);
+
+  await mkdir(path.dirname(localAssetPath), { recursive: true });
+  await writeFile(localAssetPath, buffer);
+}
+
+async function readLabelPreviewAsset(assetKey) {
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    const asset = await store.get(assetKey, { type: 'arrayBuffer' });
+
+    if (!asset) {
+      throw createHttpError(404, 'Label preview not found.');
+    }
+
+    return Buffer.from(asset);
+  }
+
+  try {
+    return await readFile(path.join(localDataDir, assetKey));
+  } catch {
+    throw createHttpError(404, 'Label preview not found.');
+  }
+}
+
 async function getBlobStore() {
   const { getStore } = await import('@netlify/blobs');
 
@@ -540,9 +605,14 @@ async function readLabelTemplateDocument() {
   const document = await readCollectionDocument('label-templates');
   const items = Array.isArray(document.items) ? document.items.map(normalizeStoredLabelTemplate) : [];
   const activeItems = purgeExpiredTrash(items);
-  const nextDocument = createCollectionDocument('label-templates', activeItems);
+  const migration = await migrateLegacyLabelPreviews(activeItems);
+  const nextDocument = createCollectionDocument('label-templates', migration.items);
 
-  if (activeItems.length !== items.length || JSON.stringify(items) !== JSON.stringify(document.items)) {
+  if (
+    migration.wasChanged ||
+    activeItems.length !== items.length ||
+    JSON.stringify(items) !== JSON.stringify(document.items)
+  ) {
     await writeCollectionDocument('label-templates', nextDocument);
   }
 
@@ -714,13 +784,13 @@ function isNativeLabelTemplate(value) {
     typeof value === 'object' &&
     !Array.isArray(value) &&
     typeof value.id === 'string' &&
-    typeof value.previewDataUrl === 'string' &&
+    (typeof value.previewDataUrl === 'string' || typeof value.previewAssetKey === 'string') &&
     typeof value.previewFileName === 'string' &&
     typeof value.niimbotCode === 'string'
   );
 }
 
-function normalizePublicLabelTemplate(value, currentItems) {
+async function normalizePublicLabelTemplate(value, currentItems) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw createHttpError(400, 'Invalid label template.');
   }
@@ -737,6 +807,7 @@ function normalizePublicLabelTemplate(value, currentItems) {
   const now = new Date().toISOString();
   const id = createLabelTemplateId(currentItems);
   const preview = sanitizePreviewDataUrl(value.previewDataUrl);
+  const previewFields = await storeLabelPreview(id, preview, value.previewFileName);
   const peptideName = sanitizeTextField(value.peptideName, {
     maxLength: 80,
     fieldName: 'Peptide name',
@@ -745,8 +816,7 @@ function normalizePublicLabelTemplate(value, currentItems) {
 
   return {
     id,
-    previewDataUrl: preview.dataUrl,
-    previewFileName: sanitizePreviewFileName(value.previewFileName, preview.mimeType),
+    ...previewFields,
     niimbotCode: sanitizeTextField(value.niimbotCode, {
       maxLength: maxLabelCodeLength,
       fieldName: 'NIIMBOT code',
@@ -789,7 +859,7 @@ function normalizePublicLabelTemplate(value, currentItems) {
   };
 }
 
-function normalizeAdminLabelTemplate(value, currentItem = {}) {
+async function normalizeAdminLabelTemplate(value, currentItem = {}) {
   const now = new Date().toISOString();
   const moderationStatus = normalizeModerationStatus(value.moderationStatus ?? currentItem?.moderationStatus);
   const shouldClearReports = Boolean(value.clearReports);
@@ -799,7 +869,16 @@ function normalizeAdminLabelTemplate(value, currentItem = {}) {
     ? []
     : normalizeFingerprintList(currentItem?.reportFingerprints);
   const voteFingerprints = normalizeFingerprintList(currentItem?.voteFingerprints);
-  const { clearReports, ...templateValue } = value;
+  const {
+    clearReports,
+    previewDataUrl,
+    previewUrl,
+    previewAssetKey,
+    previewMimeType,
+    previewByteLength,
+    ...templateValue
+  } = value;
+  const previewFields = await normalizeAdminPreviewFields(value, currentItem);
   const nextDeletedAt =
     moderationStatus === 'rejected'
       ? typeof value.deletedAt === 'string'
@@ -817,8 +896,7 @@ function normalizeAdminLabelTemplate(value, currentItem = {}) {
     ...currentItem,
     ...templateValue,
     id: value.id,
-    previewDataUrl: sanitizePreviewDataUrl(value.previewDataUrl).dataUrl,
-    previewFileName: sanitizePreviewFileName(value.previewFileName, value.previewDataUrl.split(';')[0]?.slice(5)),
+    ...previewFields,
     niimbotCode: sanitizeTextField(value.niimbotCode, {
       maxLength: maxLabelCodeLength,
       fieldName: 'NIIMBOT code',
@@ -879,6 +957,118 @@ function normalizeAdminLabelTemplate(value, currentItem = {}) {
   return normalizeStoredLabelTemplate(nextItem);
 }
 
+async function normalizeAdminPreviewFields(value, currentItem = {}) {
+  if (typeof value.previewDataUrl === 'string' && value.previewDataUrl.startsWith('data:')) {
+    const preview = sanitizePreviewDataUrl(value.previewDataUrl);
+    return storeLabelPreview(value.id, preview, value.previewFileName);
+  }
+
+  if (typeof currentItem.previewAssetKey === 'string' && typeof currentItem.previewMimeType === 'string') {
+    return {
+      previewAssetKey: currentItem.previewAssetKey,
+      previewMimeType: currentItem.previewMimeType,
+      previewFileName: sanitizePreviewFileName(value.previewFileName, currentItem.previewMimeType),
+      previewByteLength: Math.max(0, Math.round(Number(currentItem.previewByteLength) || 0)),
+      previewUrl: createLabelPreviewUrl(value.id),
+    };
+  }
+
+  if (typeof value.previewAssetKey === 'string' && typeof value.previewMimeType === 'string') {
+    return {
+      previewAssetKey: value.previewAssetKey,
+      previewMimeType: value.previewMimeType,
+      previewFileName: sanitizePreviewFileName(value.previewFileName, value.previewMimeType),
+      previewByteLength: Math.max(0, Math.round(Number(value.previewByteLength) || 0)),
+      previewUrl: createLabelPreviewUrl(value.id),
+    };
+  }
+
+  throw createHttpError(400, 'Preview image must be PNG, JPEG, or WebP.');
+}
+
+async function migrateLegacyLabelPreviews(items) {
+  let wasChanged = false;
+  const nextItems = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      nextItems.push(item);
+      continue;
+    }
+
+    if (typeof item.previewDataUrl === 'string' && item.previewDataUrl.startsWith('data:')) {
+      const preview = sanitizePreviewDataUrl(item.previewDataUrl);
+      const previewFields = await storeLabelPreview(item.id, preview, item.previewFileName);
+      const { previewDataUrl, ...itemWithoutInlinePreview } = item;
+
+      nextItems.push({
+        ...itemWithoutInlinePreview,
+        ...previewFields,
+      });
+      wasChanged = true;
+      continue;
+    }
+
+    if (typeof item.previewAssetKey === 'string') {
+      const nextItem = {
+        ...item,
+        previewUrl: createLabelPreviewUrl(item.id),
+      };
+
+      if (typeof item.previewUrl !== nextItem.previewUrl) {
+        wasChanged = true;
+      }
+
+      nextItems.push(nextItem);
+      continue;
+    }
+
+    nextItems.push(item);
+  }
+
+  return { items: nextItems, wasChanged };
+}
+
+async function storeLabelPreview(labelId, preview, previewFileName) {
+  const previewAssetKey = createLabelPreviewAssetKey(labelId, preview.mimeType);
+  const previewFileNameValue = sanitizePreviewFileName(previewFileName, preview.mimeType);
+
+  await writeLabelPreviewAsset(previewAssetKey, preview.buffer, {
+    fileName: previewFileNameValue,
+    mimeType: preview.mimeType,
+    byteLength: String(preview.byteLength),
+  });
+
+  return {
+    previewAssetKey,
+    previewMimeType: preview.mimeType,
+    previewFileName: previewFileNameValue,
+    previewByteLength: preview.byteLength,
+    previewUrl: createLabelPreviewUrl(labelId),
+  };
+}
+
+function createLabelPreviewAssetKey(labelId, mimeType) {
+  const safeLabelId = String(labelId || randomUUID()).replace(/[^a-zA-Z0-9._-]/g, '-');
+  return `label-previews/${safeLabelId}.${getPreviewExtension(mimeType)}`;
+}
+
+function createLabelPreviewUrl(labelId) {
+  return `/api/labels/${encodeURIComponent(labelId)}/preview`;
+}
+
+function getPreviewExtension(mimeType) {
+  if (mimeType === 'image/jpeg') {
+    return 'jpg';
+  }
+
+  if (mimeType === 'image/webp') {
+    return 'webp';
+  }
+
+  return 'png';
+}
+
 function createLabelTemplateId(currentItems) {
   const currentIds = new Set(currentItems.map((item) => item?.id).filter(Boolean));
 
@@ -928,6 +1118,9 @@ function sanitizePreviewDataUrl(value) {
   return {
     dataUrl: `data:${mimeType};base64,${base64}`,
     mimeType,
+    base64,
+    buffer,
+    byteLength: buffer.byteLength,
   };
 }
 

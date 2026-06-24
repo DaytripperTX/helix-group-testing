@@ -13,6 +13,7 @@ import {
   publicUpsertLabelTemplate,
   publicVoteLabelTemplate,
   readCollection,
+  readLabelTemplatePreviewAsset,
   readPublicLabelTemplates,
   recoverLabelTemplate,
   permanentlyDeleteLabelTemplate,
@@ -74,6 +75,19 @@ export async function handleHelixApiRequest(request) {
       enforceThrottle(request.headers, 'label-vote', 60);
       await publicVoteLabelTemplate(parseJsonBody(request.bodyText), request.headers);
       return jsonResponse(200, await readPublicLabelTemplates());
+    }
+
+    if (method === 'GET' && pathname.startsWith('/api/labels/') && getPathPart(pathname, 4) === 'preview') {
+      const labelId = decodeURIComponent(getPathPart(pathname, 3));
+      const preview = await readLabelTemplatePreviewAsset(labelId, {
+        isAdmin: Boolean(getAdminSession(request.headers)),
+      });
+
+      return binaryResponse(200, preview.buffer, {
+        'Content-Type': preview.mimeType,
+        'Cache-Control': 'public, max-age=3600',
+        'Content-Disposition': `inline; filename="${preview.fileName.replace(/["\\]/g, '')}"`,
+      });
     }
 
     if (pathname === '/api/labels') {
@@ -267,6 +281,15 @@ export function jsonResponse(statusCode, body, headers = {}) {
   };
 }
 
+export function binaryResponse(statusCode, buffer, headers = {}) {
+  return {
+    statusCode,
+    headers,
+    body: Buffer.from(buffer).toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
 function parseJsonBody(bodyText) {
   if (!bodyText) {
     return {};
@@ -284,7 +307,12 @@ function parseJsonBody(bodyText) {
 function normalizeApiPath(pathname) {
   if (pathname.startsWith('/.netlify/functions/data')) {
     const nextPathname = pathname.replace('/.netlify/functions/data', '/api/data');
-    return nextPathname === '/api/data/labels' ? '/api/labels' : nextPathname;
+
+    if (nextPathname === '/api/data/labels' || nextPathname.startsWith('/api/data/labels/')) {
+      return nextPathname.replace('/api/data/labels', '/api/labels');
+    }
+
+    return nextPathname;
   }
 
   if (pathname.startsWith('/.netlify/functions/admin')) {

@@ -94,8 +94,13 @@ test('Netlify data function seeds missing Blob documents and persists writes', a
     assert.equal(labelsResponse.statusCode, 200);
     assert.equal(labels.length, 1);
     assert.equal(labels[0].templateName, 'Persistent Netlify Label');
+    assert.equal(labels[0].previewDataUrl, undefined);
+    assert.match(labels[0].previewAssetKey, /^label-previews\/niimbot-.+\.png$/);
     assert.ok(requests.some((request) =>
       request.method === 'PUT' && request.key.endsWith('/site:helix-data/label-templates.json'),
+    ));
+    assert.ok(requests.some((request) =>
+      request.method === 'PUT' && request.key.includes('/site:helix-data/label-previews/'),
     ));
 
     const importResponse = await adminHandler({
