@@ -9,8 +9,10 @@ test('Netlify data function seeds missing Blob documents and persists writes', a
     HELIX_DATA_ADAPTER: process.env.HELIX_DATA_ADAPTER,
     HELIX_OWNER_PASSWORD: process.env.HELIX_OWNER_PASSWORD,
     NETLIFY: process.env.NETLIFY,
+    NETLIFY_BLOBS_CONTEXT: process.env.NETLIFY_BLOBS_CONTEXT,
   };
   const previousFetch = globalThis.fetch;
+  const previousBlobsContext = globalThis.netlifyBlobsContext;
   const blobs = new Map();
   const requests = [];
 
@@ -20,9 +22,10 @@ test('Netlify data function seeds missing Blob documents and persists writes', a
   process.env.NETLIFY = 'true';
   globalThis.fetch = async (url, options = {}) => {
     const method = String(options.method ?? 'GET').toUpperCase();
-    const key = new URL(url).pathname;
+    const requestUrl = new URL(url);
+    const key = requestUrl.pathname;
 
-    requests.push({ method, key });
+    requests.push({ method, key, host: requestUrl.host });
 
     if (method === 'GET') {
       if (!blobs.has(key)) {
@@ -64,6 +67,7 @@ test('Netlify data function seeds missing Blob documents and persists writes', a
     assert.ok(requests.some((request) =>
       request.method === 'PUT' && request.key.endsWith('/site:helix-data/peptides.json'),
     ));
+    assert.ok(requests.some((request) => request.host === 'uncached.blobs.example.test'));
 
     const uploadResponse = await handler({
       ...eventBase,
@@ -145,6 +149,7 @@ test('Netlify data function seeds missing Blob documents and persists writes', a
     assert.deepEqual(JSON.parse(replacedPeptidesResponse.body).map((item) => item.id), ['blob-transfer-peptide']);
   } finally {
     globalThis.fetch = previousFetch;
+    globalThis.netlifyBlobsContext = previousBlobsContext;
 
     for (const [key, value] of Object.entries(previousEnv)) {
       if (value === undefined) {
@@ -161,6 +166,7 @@ function createNetlifyBlobsEvent() {
     blobs: Buffer.from(JSON.stringify({
       token: 'test-token',
       url: 'https://blobs.example.test',
+      uncached_url: 'https://uncached.blobs.example.test',
     })).toString('base64'),
     headers: {
       'x-nf-deploy-id': 'deploy123',

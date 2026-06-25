@@ -524,10 +524,33 @@ async function getBlobStore() {
       name: storeName,
       siteID: process.env.NETLIFY_SITE_ID,
       token: process.env.NETLIFY_BLOBS_TOKEN,
+      consistency: 'strong',
     });
   }
 
+  if (hasUncachedBlobContext()) {
+    return getStore(storeName, { consistency: 'strong' });
+  }
+
   return getStore(storeName);
+}
+
+function hasUncachedBlobContext() {
+  const context = globalThis.netlifyBlobsContext ?? readNetlifyBlobsContext();
+
+  return Boolean(context && typeof context === 'object' && context.uncachedEdgeURL);
+}
+
+function readNetlifyBlobsContext() {
+  if (!process.env.NETLIFY_BLOBS_CONTEXT) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(Buffer.from(process.env.NETLIFY_BLOBS_CONTEXT, 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
 }
 
 export function shouldUseNetlifyBlobs() {
@@ -864,10 +887,9 @@ async function normalizeAdminLabelTemplate(value, currentItem = {}) {
   const moderationStatus = normalizeModerationStatus(value.moderationStatus ?? currentItem?.moderationStatus);
   const shouldClearReports = Boolean(value.clearReports);
   const currentReports = Array.isArray(currentItem?.reports) ? currentItem.reports : [];
-  const reports = shouldClearReports || value.reportCount === 0 ? [] : currentReports;
-  const reportFingerprints = shouldClearReports || value.reportCount === 0
-    ? []
-    : normalizeFingerprintList(currentItem?.reportFingerprints);
+  const currentReportFingerprints = normalizeFingerprintList(currentItem?.reportFingerprints);
+  const reports = shouldClearReports ? [] : currentReports;
+  const reportFingerprints = shouldClearReports ? [] : currentReportFingerprints;
   const voteFingerprints = normalizeFingerprintList(currentItem?.voteFingerprints);
   const {
     clearReports,
@@ -933,7 +955,7 @@ async function normalizeAdminLabelTemplate(value, currentItem = {}) {
       fieldName: 'Tag',
     }),
     voteFingerprints,
-    votes: voteFingerprints.length || Math.max(0, Math.round(Number(value.votes ?? currentItem?.votes) || 0)),
+    votes: voteFingerprints.length || Math.max(0, Math.round(Number(currentItem?.votes ?? value.votes) || 0)),
     moderationStatus,
     reports,
     reportFingerprints,
