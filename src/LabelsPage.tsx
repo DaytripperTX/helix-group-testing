@@ -60,6 +60,13 @@ type NativeLabelTemplate = {
   clearReports?: boolean;
 };
 
+type NativeLabelTombstone = {
+  id: string;
+  permanentlyDeleted: true;
+};
+
+type NativeLabelMutationResult = NativeLabelTemplate | NativeLabelTemplate[] | NativeLabelTombstone;
+
 type NativeLabelReport = {
   reason: NativeLabelReportReason;
   details?: string;
@@ -932,9 +939,9 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     }
 
     try {
-      const templates = await updateNativeLabelTemplate(nextTemplate);
+      const mutation = await updateNativeLabelTemplate(nextTemplate);
 
-      setNativeLabelTemplates(templates);
+      setNativeLabelTemplates((currentTemplates) => applyNativeLabelMutation(currentTemplates, mutation));
       closeNativeLabelEditor();
     } catch (error) {
       console.error(error);
@@ -955,9 +962,9 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     }
 
     try {
-      const templates = await deleteNativeLabelTemplate(editingNativeLabel.id);
+      const mutation = await deleteNativeLabelTemplate(editingNativeLabel.id);
 
-      setNativeLabelTemplates(templates);
+      setNativeLabelTemplates((currentTemplates) => applyNativeLabelMutation(currentTemplates, mutation));
       closeNativeLabelEditor();
     } catch (error) {
       console.error(error);
@@ -984,9 +991,9 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     );
 
     try {
-      const templates = await voteNativeLabelTemplate(template.id, direction);
+      const mutation = await voteNativeLabelTemplate(template.id, direction);
 
-      setNativeLabelTemplates(templates);
+      setNativeLabelTemplates((currentTemplates) => applyNativeLabelMutation(currentTemplates, mutation));
       setNativeTemplateStatus('');
     } catch (error) {
       console.error(error);
@@ -1024,13 +1031,13 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     }
 
     try {
-      const templates = await reportNativeLabelTemplate(
+      const mutation = await reportNativeLabelTemplate(
         reportingNativeLabel.id,
         nativeReportReason,
         nativeReportDetails,
       );
 
-      setNativeLabelTemplates(templates);
+      setNativeLabelTemplates((currentTemplates) => applyNativeLabelMutation(currentTemplates, mutation));
       closeNativeLabelReport();
       setNativeTemplateStatus('Thanks for the report. Admins will review it.');
     } catch (error) {
@@ -1045,13 +1052,13 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     clearReports = false,
   ) => {
     try {
-      const templates = await updateNativeLabelTemplate({
+      const mutation = await updateNativeLabelTemplate({
         ...template,
         moderationStatus,
         clearReports,
       });
 
-      setNativeLabelTemplates(templates);
+      setNativeLabelTemplates((currentTemplates) => applyNativeLabelMutation(currentTemplates, mutation));
       setNativeTemplateStatus('');
     } catch (error) {
       console.error(error);
@@ -1061,9 +1068,9 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
 
   const recoverNativeLabel = async (template: NativeLabelTemplate) => {
     try {
-      const templates = await recoverNativeLabelTemplate(template.id);
+      const mutation = await recoverNativeLabelTemplate(template.id);
 
-      setNativeLabelTemplates(templates);
+      setNativeLabelTemplates((currentTemplates) => applyNativeLabelMutation(currentTemplates, mutation));
       setNativeAdminView('active');
       setNativeTemplateStatus('');
     } catch (error) {
@@ -1081,9 +1088,9 @@ function LabelsPage({ isAdmin = false }: { isAdmin?: boolean }) {
     }
 
     try {
-      const templates = await permanentlyDeleteNativeLabelTemplate(template.id);
+      const mutation = await permanentlyDeleteNativeLabelTemplate(template.id);
 
-      setNativeLabelTemplates(templates);
+      setNativeLabelTemplates((currentTemplates) => applyNativeLabelMutation(currentTemplates, mutation));
       setNativeTemplateStatus('');
     } catch (error) {
       console.error(error);
@@ -2724,13 +2731,7 @@ async function voteNativeLabelTemplate(templateId: string, direction: 1 | -1) {
     throw new Error('Vote could not be saved.');
   }
 
-  const templates = (await response.json()) as unknown;
-
-  if (!Array.isArray(templates)) {
-    throw new Error('Stored label response was invalid.');
-  }
-
-  return templates.filter(isNativeLabelTemplate);
+  return parseNativeLabelMutationResponse(await response.json());
 }
 
 async function reportNativeLabelTemplate(
@@ -2750,13 +2751,7 @@ async function reportNativeLabelTemplate(
     throw new Error('Label report could not be saved.');
   }
 
-  const templates = (await response.json()) as unknown;
-
-  if (!Array.isArray(templates)) {
-    throw new Error('Stored label response was invalid.');
-  }
-
-  return templates.filter(isNativeLabelTemplate);
+  return parseNativeLabelMutationResponse(await response.json());
 }
 
 async function updateNativeLabelTemplate(template: NativeLabelTemplate) {
@@ -2773,13 +2768,7 @@ async function updateNativeLabelTemplate(template: NativeLabelTemplate) {
     throw new Error('Label could not be updated.');
   }
 
-  const templates = (await response.json()) as unknown;
-
-  if (!Array.isArray(templates)) {
-    throw new Error('Stored label response was invalid.');
-  }
-
-  return templates.filter(isNativeLabelTemplate);
+  return parseNativeLabelMutationResponse(await response.json());
 }
 
 async function deleteNativeLabelTemplate(templateId: string) {
@@ -2792,13 +2781,7 @@ async function deleteNativeLabelTemplate(templateId: string) {
     throw new Error('Label could not be deleted.');
   }
 
-  const templates = (await response.json()) as unknown;
-
-  if (!Array.isArray(templates)) {
-    throw new Error('Stored label response was invalid.');
-  }
-
-  return templates.filter(isNativeLabelTemplate);
+  return parseNativeLabelMutationResponse(await response.json());
 }
 
 async function recoverNativeLabelTemplate(templateId: string) {
@@ -2811,13 +2794,7 @@ async function recoverNativeLabelTemplate(templateId: string) {
     throw new Error('Label could not be recovered.');
   }
 
-  const templates = (await response.json()) as unknown;
-
-  if (!Array.isArray(templates)) {
-    throw new Error('Stored label response was invalid.');
-  }
-
-  return templates.filter(isNativeLabelTemplate);
+  return parseNativeLabelMutationResponse(await response.json());
 }
 
 async function permanentlyDeleteNativeLabelTemplate(templateId: string) {
@@ -2830,13 +2807,40 @@ async function permanentlyDeleteNativeLabelTemplate(templateId: string) {
     throw new Error('Label could not be permanently deleted.');
   }
 
-  const templates = (await response.json()) as unknown;
+  return parseNativeLabelMutationResponse(await response.json());
+}
 
-  if (!Array.isArray(templates)) {
-    throw new Error('Stored label response was invalid.');
+function parseNativeLabelMutationResponse(value: unknown): NativeLabelMutationResult {
+  if (Array.isArray(value)) {
+    return value.filter(isNativeLabelTemplate);
   }
 
-  return templates.filter(isNativeLabelTemplate);
+  if (isNativeLabelTemplate(value) || isNativeLabelTombstone(value)) {
+    return value;
+  }
+
+  throw new Error('Stored label response was invalid.');
+}
+
+function applyNativeLabelMutation(
+  currentTemplates: NativeLabelTemplate[],
+  mutation: NativeLabelMutationResult,
+) {
+  if (Array.isArray(mutation)) {
+    return mutation;
+  }
+
+  if (isNativeLabelTombstone(mutation)) {
+    return currentTemplates.filter((template) => template.id !== mutation.id);
+  }
+
+  if (!currentTemplates.some((template) => template.id === mutation.id)) {
+    return [mutation, ...currentTemplates];
+  }
+
+  return currentTemplates.map((template) =>
+    template.id === mutation.id ? mutation : template,
+  );
 }
 
 function isNativeLabelTemplate(value: unknown): value is NativeLabelTemplate {
@@ -2869,6 +2873,16 @@ function isNativeLabelTemplate(value: unknown): value is NativeLabelTemplate {
     ) &&
     (template.reportCount === undefined || typeof template.reportCount === 'number')
   );
+}
+
+function isNativeLabelTombstone(value: unknown): value is NativeLabelTombstone {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const tombstone = value as Partial<NativeLabelTombstone>;
+
+  return tombstone.permanentlyDeleted === true && typeof tombstone.id === 'string';
 }
 
 function getNativePreviewSrc(template: NativeLabelTemplate) {

@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -12,6 +12,7 @@ const localDataDir = process.env.HELIX_LOCAL_DATA_DIR
   : path.join(rootDir, '.local-data');
 const legacyLabelsPath = path.join(rootDir, 'dist', 'stored-data', 'labels', 'templates.json');
 const storeName = 'helix-data';
+const labelTemplateOverridePrefix = 'label-template-overrides/';
 const maxLabelPreviewBytes = 3 * 1024 * 1024;
 const maxLabelCodeLength = 20 * 1024;
 const maxReportCountBeforeHide = 5;
@@ -223,15 +224,16 @@ export async function writeAsset(asset) {
 }
 
 export async function publicUpsertLabelTemplate(template) {
-  const document = await readLabelTemplateDocument();
-  const currentItems = Array.isArray(document.items) ? document.items : [];
+  const currentItems = await readCollection('label-templates');
+  const baseDocument = await readCollectionDocument('label-templates');
+  const baseItems = Array.isArray(baseDocument.items) ? baseDocument.items.map(normalizeStoredLabelTemplate) : [];
   const nextTemplate = await normalizePublicLabelTemplate(template, currentItems);
-  const nextItems = [nextTemplate, ...currentItems];
+  const nextItems = [nextTemplate, ...baseItems];
   const nextDocument = createCollectionDocument('label-templates', nextItems);
 
   await writeCollectionDocument('label-templates', nextDocument);
 
-  return nextItems;
+  return [nextTemplate, ...currentItems];
 }
 
 export async function publicReportLabelTemplate(report, headers = {}) {
@@ -248,49 +250,40 @@ export async function publicReportLabelTemplate(report, headers = {}) {
   }
 
   const fingerprint = createLabelActionFingerprint(headers, labelId, 'report');
-  const document = await readLabelTemplateDocument();
-  const currentItems = Array.isArray(document.items) ? document.items : [];
-  let wasUpdated = false;
-  const nextItems = currentItems.map((item) => {
-    if (item?.id !== labelId) {
-      return item;
-    }
+  const item = await findLabelTemplate(labelId);
 
-    wasUpdated = true;
-    const reports = Array.isArray(item.reports) ? item.reports.slice(-49) : [];
-    const reportFingerprints = normalizeFingerprintList(item.reportFingerprints);
-
-    if (reportFingerprints.includes(fingerprint)) {
-      return item;
-    }
-
-    const nextReports = [
-      ...reports,
-      {
-        reason,
-        details,
-        fingerprint,
-        createdAt: new Date().toISOString(),
-      },
-    ];
-    const nextReportFingerprints = [...reportFingerprints, fingerprint].slice(-50);
-
-    return {
-      ...item,
-      reports: nextReports,
-      reportFingerprints: nextReportFingerprints,
-      reportCount: nextReportFingerprints.length,
-      updatedAt: new Date().toISOString(),
-    };
-  });
-
-  if (!wasUpdated) {
+  if (!item) {
     throw createHttpError(404, 'Label template not found.');
   }
 
-  await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', nextItems));
+  const reports = Array.isArray(item.reports) ? item.reports.slice(-49) : [];
+  const reportFingerprints = normalizeFingerprintList(item.reportFingerprints);
 
-  return nextItems;
+  if (reportFingerprints.includes(fingerprint)) {
+    return await readCollection('label-templates');
+  }
+
+  const nextReports = [
+    ...reports,
+    {
+      reason,
+      details,
+      fingerprint,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+  const nextReportFingerprints = [...reportFingerprints, fingerprint].slice(-50);
+  const nextItem = normalizeStoredLabelTemplate({
+    ...item,
+    reports: nextReports,
+    reportFingerprints: nextReportFingerprints,
+    reportCount: nextReportFingerprints.length,
+    updatedAt: new Date().toISOString(),
+  });
+
+  await writeLabelTemplateOverride(nextItem);
+
+  return [nextItem, ...(await readCollection('label-templates')).filter((currentItem) => currentItem?.id !== labelId)];
 }
 
 export async function publicVoteLabelTemplate(vote, headers = {}) {
@@ -302,37 +295,28 @@ export async function publicVoteLabelTemplate(vote, headers = {}) {
   }
 
   const fingerprint = createLabelActionFingerprint(headers, labelId, 'vote');
-  const document = await readLabelTemplateDocument();
-  const currentItems = Array.isArray(document.items) ? document.items : [];
-  let wasUpdated = false;
-  const nextItems = currentItems.map((item) => {
-    if (item?.id !== labelId) {
-      return item;
-    }
+  const item = await findLabelTemplate(labelId);
 
-    wasUpdated = true;
-    const voteFingerprints = normalizeFingerprintList(item.voteFingerprints);
-    const hasVoted = voteFingerprints.includes(fingerprint);
-    const nextVoteFingerprints =
-      direction === 1
-        ? hasVoted ? voteFingerprints : [...voteFingerprints, fingerprint]
-        : voteFingerprints.filter((currentFingerprint) => currentFingerprint !== fingerprint);
-
-    return {
-      ...item,
-      voteFingerprints: nextVoteFingerprints,
-      votes: nextVoteFingerprints.length,
-      updatedAt: new Date().toISOString(),
-    };
-  });
-
-  if (!wasUpdated) {
+  if (!item) {
     throw createHttpError(404, 'Label template not found.');
   }
 
-  await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', nextItems));
+  const voteFingerprints = normalizeFingerprintList(item.voteFingerprints);
+  const hasVoted = voteFingerprints.includes(fingerprint);
+  const nextVoteFingerprints =
+    direction === 1
+      ? hasVoted ? voteFingerprints : [...voteFingerprints, fingerprint]
+      : voteFingerprints.filter((currentFingerprint) => currentFingerprint !== fingerprint);
+  const nextItem = normalizeStoredLabelTemplate({
+    ...item,
+    voteFingerprints: nextVoteFingerprints,
+    votes: nextVoteFingerprints.length,
+    updatedAt: new Date().toISOString(),
+  });
 
-  return nextItems;
+  await writeLabelTemplateOverride(nextItem);
+
+  return [nextItem, ...(await readCollection('label-templates')).filter((currentItem) => currentItem?.id !== labelId)];
 }
 
 export async function adminUpsertLabelTemplate(template) {
@@ -340,44 +324,36 @@ export async function adminUpsertLabelTemplate(template) {
     throw createHttpError(400, 'Invalid label template.');
   }
 
-  const document = await readLabelTemplateDocument();
-  const currentItems = Array.isArray(document.items) ? document.items : [];
-  const currentItem = currentItems.find((item) => item?.id === template.id);
-  const nextTemplate = await normalizeAdminLabelTemplate(template, currentItem);
-  const nextItems = [nextTemplate, ...currentItems.filter((item) => item?.id !== template.id)];
-  const nextDocument = createCollectionDocument('label-templates', nextItems);
+  const currentItem = await findLabelTemplate(template.id);
 
-  await writeCollectionDocument('label-templates', nextDocument);
-
-  return nextItems;
-}
-
-export async function recoverLabelTemplate(itemId) {
-  const document = await readLabelTemplateDocument();
-  const currentItems = Array.isArray(document.items) ? document.items : [];
-  let wasUpdated = false;
-  const nextItems = currentItems.map((item) => {
-    if (item?.id !== itemId) {
-      return item;
-    }
-
-    wasUpdated = true;
-    const { deletedAt, deletedReason, ...nextItem } = item;
-
-    return {
-      ...nextItem,
-      moderationStatus: 'unreviewed',
-      updatedAt: new Date().toISOString(),
-    };
-  });
-
-  if (!wasUpdated) {
+  if (!currentItem) {
     throw createHttpError(404, 'Label template not found.');
   }
 
-  await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', nextItems));
+  const nextTemplate = await normalizeAdminLabelTemplate(template, currentItem);
 
-  return nextItems;
+  await writeLabelTemplateOverride(nextTemplate);
+
+  return nextTemplate;
+}
+
+export async function recoverLabelTemplate(itemId) {
+  const item = await findLabelTemplate(itemId);
+
+  if (!item) {
+    throw createHttpError(404, 'Label template not found.');
+  }
+
+  const { deletedAt, deletedReason, ...nextItem } = item;
+  const recoveredItem = normalizeStoredLabelTemplate({
+    ...nextItem,
+    moderationStatus: 'unreviewed',
+    updatedAt: new Date().toISOString(),
+  });
+
+  await writeLabelTemplateOverride(recoveredItem);
+
+  return recoveredItem;
 }
 
 export async function permanentlyDeleteLabelTemplate(itemId) {
@@ -482,6 +458,80 @@ async function readBlobDocument(collectionName, config) {
 async function writeBlobDocument(config, document) {
   const store = await getBlobStore();
   await store.setJSON(config.fileName, document);
+}
+
+async function readLabelTemplateOverrides() {
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    const result = await store.list({ prefix: labelTemplateOverridePrefix });
+    const overrides = [];
+
+    for (const blob of result.blobs ?? []) {
+      const override = await store.get(blob.key, { type: 'json' });
+
+      if (override && typeof override === 'object' && !Array.isArray(override)) {
+        overrides.push(override);
+      }
+    }
+
+    return overrides;
+  }
+
+  const overrideDir = path.join(localDataDir, labelTemplateOverridePrefix);
+
+  try {
+    const entries = await readdir(overrideDir, { withFileTypes: true });
+    const overrides = [];
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) {
+        continue;
+      }
+
+      try {
+        const override = JSON.parse(await readFile(path.join(overrideDir, entry.name), 'utf8'));
+
+        if (override && typeof override === 'object' && !Array.isArray(override)) {
+          overrides.push(override);
+        }
+      } catch {
+        // Ignore corrupt override records and keep the base collection readable.
+      }
+    }
+
+    return overrides;
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+async function writeLabelTemplateOverride(item) {
+  if (!item?.id || typeof item.id !== 'string') {
+    throw createHttpError(400, 'Invalid label template override.');
+  }
+
+  const key = createLabelTemplateOverrideKey(item.id);
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    await store.setJSON(key, item);
+    return item;
+  }
+
+  const localPath = path.join(localDataDir, key);
+
+  await mkdir(path.dirname(localPath), { recursive: true });
+  await writeFile(localPath, `${JSON.stringify(item, null, 2)}\n`, 'utf8');
+
+  return item;
+}
+
+function createLabelTemplateOverrideKey(itemId) {
+  return `${labelTemplateOverridePrefix}${encodeURIComponent(itemId)}.json`;
 }
 
 async function writeLabelPreviewAsset(assetKey, buffer, metadata) {
@@ -629,17 +679,71 @@ async function readLabelTemplateDocument() {
   const items = Array.isArray(document.items) ? document.items.map(normalizeStoredLabelTemplate) : [];
   const activeItems = purgeExpiredTrash(items);
   const migration = await migrateLegacyLabelPreviews(activeItems);
-  const nextDocument = createCollectionDocument('label-templates', migration.items);
+  const overrides = await readLabelTemplateOverrides();
+  const mergedItems = mergeLabelTemplateOverrides(migration.items, overrides);
+  const activeMergedItems = purgeExpiredTrash(mergedItems);
+  const expiredMergedItems = mergedItems.filter((item) =>
+    item?.id && !activeMergedItems.some((activeItem) => activeItem?.id === item.id),
+  );
+  const nextDocument = createCollectionDocument('label-templates', activeMergedItems);
 
   if (
     migration.wasChanged ||
     activeItems.length !== items.length ||
     JSON.stringify(items) !== JSON.stringify(document.items)
   ) {
-    await writeCollectionDocument('label-templates', nextDocument);
+    await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', migration.items));
+  }
+
+  for (const expiredItem of expiredMergedItems) {
+    await writeLabelTemplateOverride(createLabelTemplateTombstone(expiredItem.id));
   }
 
   return nextDocument;
+}
+
+async function findLabelTemplate(itemId) {
+  const document = await readLabelTemplateDocument();
+
+  return document.items.find((item) => item?.id === itemId);
+}
+
+function mergeLabelTemplateOverrides(baseItems, overrides) {
+  const activeOverrides = [];
+  const tombstoneIds = new Set();
+
+  for (const override of overrides) {
+    if (isLabelTemplateTombstone(override)) {
+      tombstoneIds.add(override.id);
+      continue;
+    }
+
+    if (override?.id) {
+      activeOverrides.push(normalizeStoredLabelTemplate(override));
+    }
+  }
+
+  const overridesById = new Map(activeOverrides.map((item) => [item.id, item]));
+  const mergedItems = [];
+  const seenIds = new Set();
+
+  for (const item of baseItems) {
+    if (!item?.id || tombstoneIds.has(item.id)) {
+      continue;
+    }
+
+    const nextItem = overridesById.get(item.id) ?? item;
+    mergedItems.push(nextItem);
+    seenIds.add(item.id);
+  }
+
+  for (const override of activeOverrides) {
+    if (!seenIds.has(override.id) && !tombstoneIds.has(override.id)) {
+      mergedItems.push(override);
+    }
+  }
+
+  return mergedItems;
 }
 
 function normalizeCollectionItem(collectionName, item) {
@@ -1248,44 +1352,35 @@ function softDeleteLabelTemplate(itemId, deletedReason) {
 }
 
 async function updateDeletedLabelTemplate(itemId, fields) {
-  const document = await readLabelTemplateDocument();
-  const currentItems = Array.isArray(document.items) ? document.items : [];
-  let wasUpdated = false;
-  const nextItems = currentItems.map((item) => {
-    if (item?.id !== itemId) {
-      return item;
-    }
+  const item = await findLabelTemplate(itemId);
 
-    wasUpdated = true;
-
-    return normalizeStoredLabelTemplate({
-      ...item,
-      ...fields,
-      updatedAt: new Date().toISOString(),
-    });
-  });
-
-  if (!wasUpdated) {
+  if (!item) {
     throw createHttpError(404, 'Label template not found.');
   }
 
-  await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', nextItems));
+  const nextItem = normalizeStoredLabelTemplate({
+    ...item,
+    ...fields,
+    updatedAt: new Date().toISOString(),
+  });
 
-  return nextItems;
+  await writeLabelTemplateOverride(nextItem);
+
+  return nextItem;
 }
 
 async function hardDeleteLabelTemplate(itemId) {
-  const document = await readLabelTemplateDocument();
-  const currentItems = Array.isArray(document.items) ? document.items : [];
-  const nextItems = currentItems.filter((currentItem) => currentItem?.id !== itemId);
+  const item = await findLabelTemplate(itemId);
 
-  if (nextItems.length === currentItems.length) {
+  if (!item) {
     throw createHttpError(404, 'Label template not found.');
   }
 
-  await writeCollectionDocument('label-templates', createCollectionDocument('label-templates', nextItems));
+  const tombstone = createLabelTemplateTombstone(itemId);
 
-  return nextItems;
+  await writeLabelTemplateOverride(tombstone);
+
+  return tombstone;
 }
 
 function normalizeStoredLabelTemplate(item) {
@@ -1330,6 +1425,28 @@ function normalizeStoredLabelTemplate(item) {
   }
 
   return nextItem;
+}
+
+function createLabelTemplateTombstone(itemId) {
+  const now = new Date().toISOString();
+
+  return {
+    id: itemId,
+    permanentlyDeleted: true,
+    deletedAt: now,
+    deletedReason: 'permanent',
+    updatedAt: now,
+  };
+}
+
+function isLabelTemplateTombstone(item) {
+  return Boolean(
+    item &&
+    typeof item === 'object' &&
+    !Array.isArray(item) &&
+    typeof item.id === 'string' &&
+    item.permanentlyDeleted === true,
+  );
 }
 
 function purgeExpiredTrash(items) {
