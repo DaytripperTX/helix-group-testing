@@ -48,7 +48,7 @@ const testingFocus = [
   'Heavy Metals (ICP-MS)',
   'Rapid Sterility Screen',
   'Fentanyl Testing',
-  'Batch Conformity Testing',
+  'Batch Conformity Add-on',
 ];
 
 const currentTestingRound = {
@@ -65,7 +65,7 @@ const testingTiers = [
     id: 'platinum',
     name: 'Platinum',
     label: '7x Testing',
-    description: 'The most comprehensive QC panel with identity, purity, safety screening, and conformity checks.',
+    description: 'The most comprehensive QC panel with identity, purity, and safety screening.',
     qualifiedCount: 7,
     turnaround: '3-5 business days',
     turnaroundNote: 'Rush service available for time-sensitive projects',
@@ -115,12 +115,6 @@ const testingTiers = [
         method: 'LC-MS/MS Targeted Screening',
         text: 'LC-MS/MS based targeted screening for fentanyl and its analogs to help ensure product safety and compliance. Sensitive detection at low parts-per-billion levels with full method documentation.',
       },
-      {
-        icon: 'badge',
-        title: 'Batch Conformity Testing',
-        method: 'Comparative Analytical Assessment',
-        text: 'Comprehensive comparison of critical quality attributes between production batches to ensure consistency and conformity to specification.',
-      },
     ],
     includes: [
       'Purity & Quantitation (HPLC)',
@@ -129,16 +123,11 @@ const testingTiers = [
       'Heavy Metals (ICP-MS)',
       'Rapid Sterility Screen (DNA Microarray)',
       'Fentanyl Testing',
-      'Batch Conformity Testing',
     ],
     additional: [
       {
         title: 'Fentanyl Testing',
         text: 'LC-MS/MS targeted screening for fentanyl and analogs to support safety documentation.',
-      },
-      {
-        title: 'Batch Conformity Testing',
-        text: 'Comparative analytical assessment to check consistency across production batches.',
       },
     ],
   },
@@ -198,6 +187,62 @@ const testingTiers = [
     ],
   },
   {
+    id: 'gold-plus',
+    name: 'Gold+',
+    label: 'Advanced Testing',
+    description: 'Moderate/high-risk coverage for complex peptides that need a broader screening pass.',
+    qualifiedCount: 0,
+    assignmentLabel: 'Pending assignment',
+    turnaround: 'Confirm per lab queue',
+    turnaroundNote: 'Used when risk review calls for added screening beyond Gold',
+    peptides: [],
+    panel: [
+      {
+        icon: 'atom',
+        title: 'Peptide Identity',
+        method: 'Identity confirmation',
+        text: 'Confirms the submitted sample aligns with the expected peptide identity.',
+      },
+      {
+        icon: 'flask',
+        title: 'Purity',
+        method: 'Analytical purity check',
+        text: 'Documents the main purity profile for the selected complex peptide.',
+      },
+      {
+        icon: 'vial',
+        title: 'Content / Quantity',
+        method: 'Quantity confirmation',
+        text: 'Checks vial content so the round can compare expected and observed quantity.',
+      },
+      {
+        icon: 'microscope',
+        title: 'Endotoxin',
+        method: 'Endotoxin screening',
+        text: 'Adds bacterial endotoxin screening for moderate/high-risk selections.',
+      },
+      {
+        icon: 'shield',
+        title: 'Fentanyl Screening',
+        method: 'Targeted screening',
+        text: 'Adds targeted screening for fentanyl risk when selected by the group.',
+      },
+    ],
+    includes: [
+      'Peptide Identity',
+      'Purity',
+      'Content / Quantity',
+      'Endotoxin',
+      'Fentanyl Screening',
+    ],
+    additional: [
+      {
+        title: 'Batch Conformity Add-on',
+        text: 'Can be attached separately for eligible peptides when lot consistency needs review.',
+      },
+    ],
+  },
+  {
     id: 'bronze',
     name: 'Bronze',
     label: '2x Testing',
@@ -230,12 +275,29 @@ const testingTiers = [
   },
 ] as const;
 
+const testingTierSelectorOrder = ['gold', 'gold-plus', 'platinum', 'bronze'] as const;
+const testingTierSelectorItems = testingTierSelectorOrder
+  .map((tierId) => testingTiers.find((tier) => tier.id === tierId))
+  .filter((tier): tier is TestingTier => Boolean(tier));
+
+const batchConformityAddon = {
+  label: 'Add-on',
+  title: 'Batch Conformity',
+  text: 'Applies to eligible peptides regardless of tier and is often paired with Platinum selections.',
+  checks: [
+    '5 spot-checks across lots for consistency confirmation',
+    'Rapid identity screen',
+  ],
+} as const;
+
 const navItems = publicPageItems;
-const disabledPages = new Set<string>(__HELIX_DISABLED_PAGES__);
+const configuredDisabledPages =
+  typeof __HELIX_DISABLED_PAGES__ === 'undefined' ? [] : __HELIX_DISABLED_PAGES__;
+const disabledPages = new Set<string>(configuredDisabledPages);
 
 type PageId = PublicPageId | 'hxadmin' | 'hxowner';
 type TestingTier = (typeof testingTiers)[number];
-type TestingIconType = TestingTier['panel'][number]['icon'];
+type TestingIconType = TestingTier['panel'][number]['icon'] | 'badge';
 type AdminSession = {
   isAuthenticated: boolean;
   role?: 'owner' | 'admin';
@@ -557,7 +619,7 @@ function TestingPage() {
           </aside>
 
           <div className="tier-selector" aria-label="Testing tiers">
-            {testingTiers.map((tier) => (
+            {testingTierSelectorItems.map((tier) => (
               <button
                 className={`tier-button tier-button--${tier.id} ${
                   selectedTier.id === tier.id ? 'is-selected' : ''
@@ -571,13 +633,18 @@ function TestingPage() {
                 <span>{tier.name}</span>
                 <strong>{tier.label}</strong>
                 <em>{tier.description}</em>
-                <small>{tier.qualifiedCount} qualified peptides</small>
+                <small>
+                  {'assignmentLabel' in tier
+                    ? tier.assignmentLabel
+                    : `${tier.qualifiedCount} qualified peptides`}
+                </small>
               </button>
             ))}
           </div>
         </div>
 
         <TestingTierDetails tier={selectedTier} />
+        <BatchConformityAddon />
       </div>
     </section>
   );
@@ -647,15 +714,45 @@ function TestingTierDetails({ tier }: { tier: TestingTier }) {
       <section className="qualified-list" aria-label={`${tier.name} qualified peptides`}>
         <div>
           <p className="eyebrow">Qualified this round</p>
-          <h3>{tier.qualifiedCount} peptides assigned to {tier.name}</h3>
+          <h3>
+            {'assignmentLabel' in tier
+              ? tier.assignmentLabel
+              : `${tier.qualifiedCount} peptides assigned to ${tier.name}`}
+          </h3>
         </div>
-        <ul>
-          {tier.peptides.map((peptide) => (
-            <li key={peptide}>{peptide}</li>
-          ))}
-        </ul>
+        {tier.peptides.length > 0 ? (
+          <ul>
+            {tier.peptides.map((peptide) => (
+              <li key={peptide}>{peptide}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="qualified-list__empty">
+            Specific peptides will be listed after the round review assigns this tier.
+          </p>
+        )}
       </section>
     </article>
+  );
+}
+
+function BatchConformityAddon() {
+  return (
+    <section className="batch-addon" aria-labelledby="batch-addon-title">
+      <div className="batch-addon__icon" aria-hidden="true">
+        <TestingIcon type="badge" />
+      </div>
+      <div className="batch-addon__copy">
+        <p className="eyebrow">{batchConformityAddon.label}</p>
+        <h2 id="batch-addon-title">{batchConformityAddon.title}</h2>
+        <p>{batchConformityAddon.text}</p>
+      </div>
+      <ul className="batch-addon__checks">
+        {batchConformityAddon.checks.map((check) => (
+          <li key={check}>{check}</li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
