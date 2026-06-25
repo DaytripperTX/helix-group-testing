@@ -307,6 +307,52 @@ test('vote endpoint dedupes fingerprints and changes only votes', async () => {
   assert.equal(JSON.parse(removeVote.body)[0].voteFingerprints, undefined);
 });
 
+test('admin label edits preserve server-side report and vote state', async () => {
+  await resetData();
+  await postLabel({ templateName: 'Original Template' });
+
+  const [label] = await readCollection('label-templates');
+  const voteResponse = await apiRequest('/api/labels/vote', 'POST', {
+    id: label.id,
+    direction: 1,
+  }, {
+    ip: '198.51.100.77',
+    userAgent: 'admin-preserve-vote-test',
+  });
+  const reportResponse = await apiRequest('/api/labels/report', 'POST', {
+    id: label.id,
+    reason: 'spam',
+    details: 'Needs review',
+  }, {
+    ip: '198.51.100.78',
+    userAgent: 'admin-preserve-report-test',
+  });
+
+  assert.equal(voteResponse.statusCode, 200);
+  assert.equal(reportResponse.statusCode, 200);
+
+  await adminUpsertLabelTemplate({
+    ...label,
+    templateName: 'Admin Edited Template',
+    moderationStatus: 'approved',
+    votes: 0,
+    reportCount: 0,
+    reports: [],
+    reportFingerprints: [],
+    voteFingerprints: [],
+  });
+
+  const [updatedLabel] = await readCollection('label-templates');
+
+  assert.equal(updatedLabel.templateName, 'Admin Edited Template');
+  assert.equal(updatedLabel.moderationStatus, 'approved');
+  assert.equal(updatedLabel.votes, 1);
+  assert.equal(updatedLabel.voteFingerprints.length, 1);
+  assert.equal(updatedLabel.reportCount, 1);
+  assert.equal(updatedLabel.reports.length, 1);
+  assert.equal(updatedLabel.reportFingerprints.length, 1);
+});
+
 test('admin delete and reject move labels to trash, then recover or permanently delete', async () => {
   await resetData();
   await postLabel({ templateName: 'Trash Recover' });
