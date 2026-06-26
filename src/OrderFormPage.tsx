@@ -1,15 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import DisclaimerSection from './Helpers/DisclaimerSection';
+import { fetchRounds, getCurrentRounds, parseRoundMassMg, type Round, type RoundPeptide } from './rounds';
 
 const orderTestingTiers = [
   { id: 'platinum', name: 'Platinum', label: '7x Testing' },
   { id: 'gold', name: 'Gold', label: '5x Testing' },
+  { id: 'gold-plus', name: 'Gold+', label: 'Advanced Testing' },
   { id: 'bronze', name: 'Bronze', label: '2x Testing' },
 ] as const;
 
 type TestingTierId = (typeof orderTestingTiers)[number]['id'];
 type OrderPeptide = {
   id: string;
+  roundId?: string;
   shorthand: string;
   fullName: string;
   supplierCode: string;
@@ -263,6 +266,9 @@ const massFilters = [
 type MassFilterId = (typeof massFilters)[number]['id'];
 
 function OrderFormPage() {
+  const [rounds, setRounds] = useState<Round[]>([]);
+  const [selectedRoundId, setSelectedRoundId] = useState('');
+  const [roundsLoadFailed, setRoundsLoadFailed] = useState(false);
   const [selectedTierIds, setSelectedTierIds] = useState<Set<TestingTierId>>(
     () => new Set(orderTestingTiers.map((tier) => tier.id)),
   );
@@ -277,8 +283,48 @@ function OrderFormPage() {
     phone: '',
   });
   const [copyStatus, setCopyStatus] = useState('');
+  const currentRounds = getCurrentRounds(rounds);
+  const selectedRound =
+    currentRounds.find((round) => round.id === selectedRoundId) ?? currentRounds[0] ?? null;
+  const activeOrderPeptides = selectedRound
+    ? selectedRound.peptides
+      .map((row) => createOrderPeptideFromRound(row, selectedRound))
+      .filter((peptide): peptide is OrderPeptide => Boolean(peptide))
+    : orderPeptides;
+  const activeDiscountRate = selectedRound ? selectedRound.roundDiscountPercent / 100 : bulkDiscountRate;
 
-  const filteredPeptides = orderPeptides.filter((peptide) => {
+  useEffect(() => {
+    let isMounted = true;
+
+    fetchRounds()
+      .then((nextRounds) => {
+        if (isMounted) {
+          setRounds(nextRounds);
+          setRoundsLoadFailed(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setRoundsLoadFailed(true);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentRounds.length === 0) {
+      return;
+    }
+
+    if (!currentRounds.some((round) => round.id === selectedRoundId)) {
+      setSelectedRoundId(currentRounds[0].id);
+    }
+  }, [currentRounds, selectedRoundId]);
+
+  const filteredPeptides = activeOrderPeptides.filter((peptide) => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
     const matchesTier = selectedTierIds.has(peptide.tier);
     const matchesSearch =
@@ -295,13 +341,13 @@ function OrderFormPage() {
     return matchesTier && matchesSearch && matchesMass;
   });
 
-  const selectedPeptides = orderPeptides
+  const selectedPeptides = activeOrderPeptides
     .map((peptide) => ({
       ...peptide,
       quantity: peptideQuantities[peptide.id] ?? 0,
     }))
     .filter((peptide) => peptide.quantity > 0);
-  const vendorMessage = buildVendorMessage(contactInfo, selectedPeptides);
+  const vendorMessage = buildVendorMessage(contactInfo, selectedPeptides, selectedRound);
   const isContactComplete =
     contactInfo.name.trim().length > 0 &&
     contactInfo.address.trim().length > 0 &&
@@ -315,7 +361,7 @@ function OrderFormPage() {
     0,
   );
   const selectedTotal = selectedPeptides.reduce(
-    (total, peptide) => total + getDiscountedPrice(peptide.price) * peptide.quantity,
+    (total, peptide) => total + getDiscountedPrice(peptide.price, activeDiscountRate) * peptide.quantity,
     0,
   );
 
@@ -436,9 +482,26 @@ function OrderFormPage() {
             <div className="peptide-shop__header">
               <div>
                 <p className="eyebrow">Current round</p>
-                <h2>Peptides List</h2>
+                <h2>{selectedRound?.name ?? 'Peptides List'}</h2>
+                {selectedRound && <p>{selectedRound.status || 'Round in progress'}</p>}
+                {roundsLoadFailed && <p className="order-round-fallback">Showing saved fallback peptides.</p>}
               </div>
-              <span>{filteredPeptides.length} shown</span>
+              <div className="order-round-controls">
+                {currentRounds.length > 1 && (
+                  <label className="order-round-selector">
+                    <span>Round</span>
+                    <select value={selectedRound?.id ?? ''} onChange={(event) => setSelectedRoundId(event.target.value)}>
+                      {currentRounds.map((round) => (
+                        <option value={round.id} key={round.id}>
+                          {round.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <span>{filteredPeptides.length} shown</span>
+                <span>{Math.round(activeDiscountRate * 100)}% discount</span>
+              </div>
             </div>
 
             <div className="peptide-grid">
@@ -446,6 +509,7 @@ function OrderFormPage() {
                 <PeptideCard
                   peptide={peptide}
                   quantity={peptideQuantities[peptide.id] ?? 0}
+                  discountRate={activeDiscountRate}
                   onQuantityChange={(quantity) => setPeptideQuantity(peptide.id, quantity)}
                   key={peptide.id}
                 />
@@ -480,7 +544,7 @@ function OrderFormPage() {
                       <span>Qty {peptide.quantity}</span>
                     </span>
                   </div>
-                  <em>{formatCurrency(getDiscountedPrice(peptide.price) * peptide.quantity)}</em>
+                  <em>{formatCurrency(getDiscountedPrice(peptide.price, activeDiscountRate) * peptide.quantity)}</em>
                 </div>
               ))}
 
@@ -624,17 +688,64 @@ function OrderFormPage() {
   );
 }
 
+function createOrderPeptideFromRound(row: RoundPeptide, round: Round): OrderPeptide | null {
+  if (!row.peptideName.trim() || !row.vendorCode.trim() || row.vendorPrice === null || row.testingTier === 'none') {
+    return null;
+  }
+
+  const massMg = parseRoundMassMg(row.mass);
+
+  return {
+    id: `${round.id}-${row.id}`,
+    roundId: round.id,
+    shorthand: createPeptideShorthand(row.peptideName),
+    fullName: row.peptideName,
+    supplierCode: row.vendorCode,
+    massMg,
+    price: row.vendorPrice,
+    tier: row.testingTier,
+    headcount: row.participantCount,
+    totalOrdered: row.totalOrdered,
+    upgradeGoal: 0,
+    upgradePledged: 0,
+  };
+}
+
+function createPeptideShorthand(name: string) {
+  const cleanName = name.trim();
+
+  if (cleanName.length <= 8) {
+    return cleanName.toUpperCase();
+  }
+
+  const uppercaseChunks = cleanName.match(/[A-Z0-9+-]{2,}/g);
+
+  if (uppercaseChunks?.[0]) {
+    return uppercaseChunks[0].slice(0, 8);
+  }
+
+  return cleanName
+    .split(/[\s/-]+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 8)
+    .toUpperCase();
+}
+
 function PeptideCard({
   peptide,
   quantity,
+  discountRate,
   onQuantityChange,
 }: {
   peptide: OrderPeptide;
   quantity: number;
+  discountRate: number;
   onQuantityChange: (quantity: number) => void;
 }) {
   const tier = testingTierLookup[peptide.tier];
-  const discountedPrice = getDiscountedPrice(peptide.price);
+  const discountedPrice = getDiscountedPrice(peptide.price, discountRate);
   const [isInfoPinned, setIsInfoPinned] = useState(false);
 
   return (
@@ -744,11 +855,11 @@ function PeptideCard({
   );
 }
 
-function getDiscountedPrice(price: number) {
-  return price * (1 - bulkDiscountRate);
+function getDiscountedPrice(price: number, discountRate: number) {
+  return price * (1 - discountRate);
 }
 
-function buildVendorMessage(contactInfo: ContactInfo, selectedPeptides: SelectedOrderPeptide[]) {
+function buildVendorMessage(contactInfo: ContactInfo, selectedPeptides: SelectedOrderPeptide[], round: Round | null) {
   const orderLines = selectedPeptides.map(
     (peptide) => `${peptide.supplierCode} x${peptide.quantity}`,
   );
@@ -757,6 +868,7 @@ function buildVendorMessage(contactInfo: ContactInfo, selectedPeptides: Selected
     `Name: ${contactInfo.name.trim()}`,
     `Address: ${contactInfo.address.trim().replace(/\s+/g, ' ')}`,
     `Phone: ${contactInfo.phone.trim()}`,
+    ...(round ? [`Round: ${round.name}`, `Vendor: ${round.priceListSnapshot?.vendorName || round.vendorId || 'TBD'}`] : []),
     '',
     'Order:',
     ...orderLines,

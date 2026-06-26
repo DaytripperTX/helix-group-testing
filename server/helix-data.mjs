@@ -38,6 +38,7 @@ const collections = new Map([
   ['label-templates', { fileName: 'label-templates.json', kind: 'items', readAccess: 'public' }],
   ['vendors', { fileName: 'vendors.json', kind: 'items', readAccess: 'public' }],
   ['vendor-price-lists', { fileName: 'vendor-price-lists.json', kind: 'items', readAccess: 'public' }],
+  ['rounds', { fileName: 'rounds.json', kind: 'items', readAccess: 'public' }],
   ['admin-notes', { fileName: 'admin-notes.json', kind: 'items', readAccess: 'admin' }],
   ['current-round', { fileName: 'current-round.json', kind: 'data', readAccess: 'public' }],
   ['reports', { fileName: 'reports.json', kind: 'items', readAccess: 'admin' }],
@@ -651,7 +652,7 @@ function normalizeDocument(collectionName, value) {
       return {
         version: value.version,
         updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date().toISOString(),
-        items: collectionName === 'peptides' ? items.map((item) => normalizePeptideItem(item)) : items,
+        items: normalizeCollectionItems(collectionName, items),
       };
     }
 
@@ -667,7 +668,7 @@ function normalizeDocument(collectionName, value) {
 
     return createCollectionDocument(
       collectionName,
-      collectionName === 'peptides' ? items.map((item) => normalizePeptideItem(item)) : items,
+      normalizeCollectionItems(collectionName, items),
     );
   }
 
@@ -746,8 +747,241 @@ function mergeLabelTemplateOverrides(baseItems, overrides) {
   return mergedItems;
 }
 
+function normalizeCollectionItems(collectionName, items) {
+  if (collectionName === 'peptides') {
+    return items.map((item) => normalizePeptideItem(item));
+  }
+
+  if (collectionName === 'rounds') {
+    return items.map((item) => normalizeRoundItem(item)).filter(Boolean);
+  }
+
+  return items;
+}
+
 function normalizeCollectionItem(collectionName, item) {
-  return collectionName === 'peptides' ? normalizePeptideItem(item) : item;
+  if (collectionName === 'peptides') {
+    return normalizePeptideItem(item);
+  }
+
+  if (collectionName === 'rounds') {
+    const normalizedRound = normalizeRoundItem(item);
+
+    if (!normalizedRound) {
+      throw createHttpError(400, 'Invalid round.');
+    }
+
+    return normalizedRound;
+  }
+
+  return item;
+}
+
+function normalizeRoundItem(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  const id = sanitizeRoundToken(item.id, 120);
+
+  if (!id) {
+    return null;
+  }
+
+  const priceListSnapshot = normalizeRoundPriceListSnapshot(item.priceListSnapshot);
+
+  return {
+    id,
+    name: sanitizeRoundText(item.name, 120) || 'Untitled round',
+    status: sanitizeRoundText(item.status, 120),
+    vendorId: sanitizeRoundToken(item.vendorId, 120),
+    isCurrent: item.isCurrent === true,
+    priceSourceMode: normalizeRoundPriceSourceMode(item.priceSourceMode, priceListSnapshot),
+    startDate: normalizeDateString(item.startDate),
+    endDate: normalizeDateString(item.endDate),
+    targetWindow: sanitizeRoundText(item.targetWindow, 120),
+    participants: normalizeNonNegativeInteger(item.participants),
+    roundDiscountPercent: normalizePercentage(item.roundDiscountPercent),
+    priceListSnapshot,
+    peptides: Array.isArray(item.peptides)
+      ? item.peptides.map((row, index) => normalizeRoundPeptideRow(row, index)).filter(Boolean)
+      : [],
+    createdAt: normalizeDateTimeString(item.createdAt),
+    updatedAt: normalizeDateTimeString(item.updatedAt),
+  };
+}
+
+function normalizeRoundPeptideRow(row, index) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) {
+    return null;
+  }
+
+  const id = sanitizeRoundToken(row.id, 160) || `row-${index + 1}`;
+
+  return {
+    id,
+    peptideId: sanitizeRoundToken(row.peptideId, 120),
+    peptideName: sanitizeRoundText(row.peptideName, 120),
+    priceListItemId: sanitizeRoundToken(row.priceListItemId, 160),
+    vendorCode: sanitizeRoundText(row.vendorCode, 80),
+    vendorPrice: normalizeNullableMoney(row.vendorPrice),
+    vendorPriceOverridden: row.vendorPriceOverridden === true,
+    mass: sanitizeRoundText(row.mass, 60),
+    testingTier: normalizeTestingTier(row.testingTier),
+    additionalTesting: sanitizeRoundText(row.additionalTesting, 160),
+    batchConformity: row.batchConformity === true,
+    capColor: sanitizeRoundText(row.capColor, 60),
+    notes: sanitizeRoundText(row.notes, 400),
+    participantCount: normalizeNonNegativeInteger(row.participantCount),
+    totalOrdered: normalizeNonNegativeInteger(row.totalOrdered),
+  };
+}
+
+function normalizeRoundPriceListSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return null;
+  }
+
+  return {
+    id: sanitizeRoundToken(snapshot.id, 160),
+    vendorId: sanitizeRoundToken(snapshot.vendorId, 120),
+    vendorName: sanitizeRoundText(snapshot.vendorName, 120),
+    source: normalizeRoundPriceListSource(snapshot.source),
+    parsedAt: normalizeDateTimeString(snapshot.parsedAt),
+    items: Array.isArray(snapshot.items)
+      ? snapshot.items.map((item, index) => normalizeRoundPriceListItem(item, index)).filter(Boolean)
+      : [],
+  };
+}
+
+function normalizeRoundPriceListSource(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    return null;
+  }
+
+  if (source.type === 'google-sheet') {
+    return {
+      type: 'google-sheet',
+      url: sanitizeRoundText(source.url, 400),
+    };
+  }
+
+  if (source.type === 'file') {
+    return {
+      type: 'file',
+      fileName: sanitizeRoundText(source.fileName, 160),
+      mimeType: sanitizeRoundText(source.mimeType, 120),
+      blobKey: sanitizeRoundText(source.blobKey, 240),
+    };
+  }
+
+  return null;
+}
+
+function normalizeRoundPriceListItem(item, index) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  return {
+    id: sanitizeRoundToken(item.id, 160) || `price-row-${index + 1}`,
+    vendorCode: sanitizeRoundText(item.vendorCode, 80),
+    productName: sanitizeRoundText(item.productName, 120),
+    mass: sanitizeRoundText(item.mass, 60),
+    price: normalizeNullableMoney(item.price),
+    vialsPerPack: Math.max(1, normalizeNonNegativeInteger(item.vialsPerPack) || 1),
+    peptideIds: sanitizeRoundTokenArray(item.peptideIds, 20, 120),
+    needsReview: item.needsReview === true,
+  };
+}
+
+function sanitizeRoundText(value, maxLength) {
+  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').slice(0, maxLength) : '';
+}
+
+function sanitizeRoundToken(value, maxLength) {
+  return typeof value === 'string' ? value.trim().replace(/[^a-zA-Z0-9._:-]/g, '-').slice(0, maxLength) : '';
+}
+
+function sanitizeRoundTokenArray(value, maxItems, maxLength) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const nextValues = [];
+
+  for (const item of value) {
+    const token = sanitizeRoundToken(item, maxLength);
+
+    if (token && !nextValues.includes(token)) {
+      nextValues.push(token);
+    }
+
+    if (nextValues.length >= maxItems) {
+      break;
+    }
+  }
+
+  return nextValues;
+}
+
+function normalizeDateString(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    return '';
+  }
+
+  const cleanValue = value.trim();
+  const timestamp = Date.parse(`${cleanValue}T00:00:00.000Z`);
+
+  return Number.isFinite(timestamp) ? cleanValue : '';
+}
+
+function normalizeDateTimeString(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return '';
+  }
+
+  const timestamp = Date.parse(value);
+
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : '';
+}
+
+function normalizeTestingTier(value) {
+  return ['platinum', 'gold', 'gold-plus', 'bronze'].includes(value) ? value : 'none';
+}
+
+function normalizeRoundPriceSourceMode(value, priceListSnapshot) {
+  if (value === 'vendor-default' || value === 'round-override') {
+    return value;
+  }
+
+  return priceListSnapshot ? 'round-override' : 'none';
+}
+
+function normalizeNonNegativeInteger(value) {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
+}
+
+function normalizeNullableMoney(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed * 100) / 100) : null;
+}
+
+function normalizePercentage(value) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+
+  return Math.min(100, Math.max(0, Math.round(parsed * 100) / 100));
 }
 
 function normalizePeptideImportItem(item) {
