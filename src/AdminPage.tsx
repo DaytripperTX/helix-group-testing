@@ -246,10 +246,7 @@ function AdminPage({
   const [isPeptideModalOpen, setIsPeptideModalOpen] = useState(false);
   const [editingRound, setEditingRound] = useState<Round | null>(null);
   const [roundForm, setRoundForm] = useState<RoundForm>(emptyRoundForm);
-  const [roundPeptideSort, setRoundPeptideSort] = useState<RoundPeptideSort>({
-    key: 'peptideName',
-    direction: 'asc',
-  });
+  const [roundPeptideSort, setRoundPeptideSort] = useState<RoundPeptideSort | null>(null);
   const [isRoundModalOpen, setIsRoundModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
@@ -821,7 +818,9 @@ function AdminPage({
   const updateRoundPeptideSort = (key: RoundPeptideSortKey) => {
     setRoundPeptideSort((currentSort) => ({
       key,
-      direction: currentSort.key === key && currentSort.direction === 'asc' ? 'desc' : 'asc',
+      direction: currentSort?.key === key
+        ? currentSort.direction === 'asc' ? 'desc' : 'asc'
+        : getDefaultRoundPeptideSortDirection(key),
     }));
   };
 
@@ -2208,17 +2207,17 @@ function RoundPeptideSortButton({
 }: {
   sortKey: RoundPeptideSortKey;
   label: string;
-  activeSort: RoundPeptideSort;
+  activeSort: RoundPeptideSort | null;
   onSort: (key: RoundPeptideSortKey) => void;
 }) {
-  const isActive = activeSort.key === sortKey;
+  const isActive = activeSort?.key === sortKey;
   const direction = isActive ? activeSort.direction : 'none';
 
   return (
     <button
       className={isActive ? 'admin-round-sort admin-round-sort--active' : 'admin-round-sort'}
       type="button"
-      aria-sort={isActive ? (activeSort.direction === 'asc' ? 'ascending' : 'descending') : undefined}
+      aria-sort={direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : undefined}
       onClick={() => onSort(sortKey)}
     >
       <span className="admin-round-sort__label">{label}</span>
@@ -2604,7 +2603,11 @@ function stripRoundPeptideBatchFields(row: RoundPeptideBatchRow): RoundPeptide {
   return roundPeptide;
 }
 
-function sortRoundPeptideRows(rows: RoundPeptide[], sort: RoundPeptideSort) {
+function sortRoundPeptideRows(rows: RoundPeptide[], sort: RoundPeptideSort | null) {
+  if (!sort) {
+    return rows;
+  }
+
   const indexedRows = rows.map((row, index) => ({ row, index }));
 
   indexedRows.sort((first, second) => {
@@ -2618,6 +2621,10 @@ function sortRoundPeptideRows(rows: RoundPeptide[], sort: RoundPeptideSort) {
   });
 
   return indexedRows.map(({ row }) => row);
+}
+
+function getDefaultRoundPeptideSortDirection(key: RoundPeptideSortKey): RoundPeptideSort['direction'] {
+  return key === 'participantCount' || key === 'totalOrdered' ? 'desc' : 'asc';
 }
 
 function compareRoundPeptideRows(first: RoundPeptide, second: RoundPeptide, key: RoundPeptideSortKey) {
@@ -2678,11 +2685,11 @@ function parseMassNumber(value: string) {
 
 function getTestingTierSortValue(tier: TestingTierId) {
   const tierOrder: Record<TestingTierId, number> = {
-    none: 0,
-    platinum: 1,
-    'gold-plus': 2,
-    gold: 3,
-    bronze: 4,
+    platinum: 0,
+    'gold-plus': 1,
+    gold: 2,
+    bronze: 3,
+    none: 4,
   };
 
   return tierOrder[tier];

@@ -235,6 +235,7 @@ test('round peptide batch parse imports linked rows with batch conformity', asyn
       text: [
         'Peptide Name,Supplier Code,Price,MG,Tier,Additional testing,Batch conformity,Cap color,Headcount,Total Order Qty,Notes',
         'BPC-157,BPC10,66,10 mg,Platinum,Fentanyl,yes,Blue,26,82,Priority',
+        'Bac Water,BAC30,4,30 ml,None,,,,0,0,Keep units',
       ].join('\n'),
     },
     priceListItems: [
@@ -252,17 +253,22 @@ test('round peptide batch parse imports linked rows with batch conformity', asyn
 
   assert.equal(response.statusCode, 200);
 
-  const [row] = JSON.parse(response.body).rows;
+  const [row, bacWaterRow] = JSON.parse(response.body).rows;
 
   assert.equal(row.peptideId, 'bpc-157');
   assert.equal(row.priceListItemId, 'price-bpc10');
   assert.equal(row.vendorCode, 'BPC10');
   assert.equal(row.vendorPrice, 66);
+  assert.equal(row.mass, '10');
   assert.equal(row.testingTier, 'platinum');
   assert.equal(row.batchConformity, true);
   assert.equal(row.participantCount, 26);
   assert.equal(row.totalOrdered, 82);
   assert.deepEqual(row.errors, []);
+  assert.equal(bacWaterRow.peptideName, 'Bac Water');
+  assert.equal(bacWaterRow.mass, '30 ml');
+  assert.equal(bacWaterRow.testingTier, 'none');
+  assert.deepEqual(bacWaterRow.errors, []);
 });
 
 async function resetData() {

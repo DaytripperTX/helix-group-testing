@@ -18,6 +18,7 @@ export async function parseRoundPeptideBatch({ source, peptides = [], priceListI
     const priceItem = findPriceListItem(row, knownPriceItems);
     const peptide = findPeptide(row.peptideName || priceItem?.productName || '', knownPeptides, priceItem);
     const peptideName = peptide?.name || sanitizeText(row.peptideName || priceItem?.productName);
+    const sheetMass = normalizeImportedMass(row.mass, peptideName || priceItem?.productName);
     const tier = normalizeTestingTier(row.testingTier);
     const parsedRow = {
       rowNumber: index + 2,
@@ -28,7 +29,7 @@ export async function parseRoundPeptideBatch({ source, peptides = [], priceListI
       vendorCode: sanitizeText(row.vendorCode || priceItem?.vendorCode),
       vendorPrice: parseNullableNumber(row.vendorPrice || priceItem?.price),
       vendorPriceOverridden: Boolean(row.vendorPrice),
-      mass: sanitizeText(row.mass || priceItem?.mass),
+      mass: sheetMass || sanitizeText(priceItem?.mass),
       testingTier: tier || 'none',
       additionalTesting: sanitizeText(row.additionalTesting),
       batchConformity: parseBoolean(row.batchConformity),
@@ -146,6 +147,22 @@ function parseNullableNumber(value) {
 
   const parsed = Number.parseFloat(cleanValue);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : null;
+}
+
+function normalizeImportedMass(value, peptideName) {
+  const cleanValue = sanitizeText(value);
+
+  if (!cleanValue || isBacWaterName(peptideName)) {
+    return cleanValue;
+  }
+
+  const numericValue = cleanValue.replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+
+  return numericValue ? numericValue[0] : cleanValue;
+}
+
+function isBacWaterName(value) {
+  return normalizeName(value).includes('bacwater') || normalizeName(value).includes('bacteriostaticwater');
 }
 
 function parseNonNegativeInteger(value) {
