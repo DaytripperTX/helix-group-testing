@@ -6,6 +6,7 @@ import OrderFormPage from './OrderFormPage';
 import DisclaimerSection from './Helpers/DisclaimerSection';
 import PageHero from './Helpers/PageHero';
 import { publicPageItems, type PublicPageId } from './page-disables';
+import { fetchRounds, getCurrentRounds, type Round, type RoundPeptide, type TestingTierId } from './rounds';
 
 const coordinationPoints = [
   'Members coordinate current testing rounds, selected peptides, and shared third-party lab testing scope.',
@@ -60,7 +61,38 @@ const currentTestingRound = {
   targetWindow: 'June testing queue',
 };
 
-const testingTiers = [
+type TestingPanelItem = {
+  icon: 'flask' | 'atom' | 'microscope' | 'vial' | 'tubes' | 'shield';
+  title: string;
+  method: string;
+  text: string;
+};
+
+type TestingPeptidePill = {
+  id: string;
+  label: string;
+  batchConformity: boolean;
+};
+
+type TestingTier = {
+  id: TestingTierId;
+  name: string;
+  label: string;
+  description: string;
+  qualifiedCount: number;
+  assignmentLabel?: string;
+  turnaround: string;
+  turnaroundNote: string;
+  peptides: Array<string | TestingPeptidePill>;
+  panel: TestingPanelItem[];
+  includes: string[];
+  additional: {
+    title: string;
+    text: string;
+  }[];
+};
+
+const testingTiers: TestingTier[] = [
   {
     id: 'platinum',
     name: 'Platinum',
@@ -273,9 +305,9 @@ const testingTiers = [
       },
     ],
   },
-] as const;
+];
 
-const testingTierSelectorOrder = ['gold', 'gold-plus', 'platinum', 'bronze'] as const;
+const testingTierSelectorOrder = ['platinum', 'gold-plus', 'gold', 'bronze'] as const;
 const testingTierSelectorItems = testingTierSelectorOrder
   .map((tierId) => testingTiers.find((tier) => tier.id === tierId))
   .filter((tier): tier is TestingTier => Boolean(tier));
@@ -296,7 +328,6 @@ const configuredDisabledPages =
 const disabledPages = new Set<string>(configuredDisabledPages);
 
 type PageId = PublicPageId | 'hxadmin' | 'hxowner';
-type TestingTier = (typeof testingTiers)[number];
 type TestingIconType = TestingTier['panel'][number]['icon'] | 'badge';
 type AdminSession = {
   isAuthenticated: boolean;
@@ -586,8 +617,53 @@ function MissionIcon({ type }: { type: (typeof missionBenefits)[number]['icon'] 
 
 function TestingPage() {
   const [selectedTierId, setSelectedTierId] = useState<TestingTier['id']>('platinum');
+  const [rounds, setRounds] = useState<Round[]>([]);
+  const [selectedRoundId, setSelectedRoundId] = useState('');
+  const [roundsLoadFailed, setRoundsLoadFailed] = useState(false);
+  const currentRounds = getCurrentRounds(rounds);
+  const selectedRound =
+    currentRounds.find((round) => round.id === selectedRoundId) ?? currentRounds[0] ?? null;
+  const activeTestingRound = selectedRound ? createTestingRoundSummary(selectedRound) : currentTestingRound;
+  const activeTestingTiers = selectedRound ? createTestingTiersForRound(selectedRound) : testingTiers;
   const selectedTier =
-    testingTiers.find((tier) => tier.id === selectedTierId) ?? testingTiers[0];
+    activeTestingTiers.find((tier) => tier.id === selectedTierId) ?? activeTestingTiers[0];
+
+  useEffect(() => {
+    let isMounted = true;
+
+    fetchRounds()
+      .then((nextRounds) => {
+        if (isMounted) {
+          setRounds(nextRounds);
+          setRoundsLoadFailed(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setRoundsLoadFailed(true);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentRounds.length === 0) {
+      return;
+    }
+
+    if (!currentRounds.some((round) => round.id === selectedRoundId)) {
+      setSelectedRoundId(currentRounds[0].id);
+    }
+  }, [currentRounds, selectedRoundId]);
+
+  useEffect(() => {
+    if (!activeTestingTiers.some((tier) => tier.id === selectedTierId)) {
+      setSelectedTierId(activeTestingTiers[0]?.id ?? 'platinum');
+    }
+  }, [activeTestingTiers, selectedTierId]);
 
   return (
     <section className="testing-dashboard" aria-labelledby="testing-title">
@@ -595,31 +671,47 @@ function TestingPage() {
         <div className="testing-overview">
           <aside className="round-summary" aria-label="Current round stats">
             <p className="eyebrow">Current round</p>
-            <h1 id="testing-title">{currentTestingRound.name}</h1>
-            <p>{currentTestingRound.status}</p>
+            <h1 id="testing-title">{activeTestingRound.name}</h1>
+            <p>{activeTestingRound.status}</p>
+            {currentRounds.length > 1 && (
+              <label className="round-selector">
+                <span>Round</span>
+                <select value={selectedRound?.id ?? ''} onChange={(event) => setSelectedRoundId(event.target.value)}>
+                  {currentRounds.map((round) => (
+                    <option value={round.id} key={round.id}>
+                      {round.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {roundsLoadFailed && <p className="round-summary__fallback">Showing saved fallback details.</p>}
 
             <dl className="round-summary__stats">
               <div>
                 <dt>Members</dt>
-                <dd>{currentTestingRound.participants}</dd>
+                <dd>{activeTestingRound.participants}</dd>
               </div>
               <div>
                 <dt>Selected peptides</dt>
-                <dd>{currentTestingRound.selectedPeptides}</dd>
+                <dd>{activeTestingRound.selectedPeptides}</dd>
               </div>
               <div>
                 <dt>Qualified</dt>
-                <dd>{currentTestingRound.qualifiedPeptides}</dd>
+                <dd>{activeTestingRound.qualifiedPeptides}</dd>
               </div>
               <div>
                 <dt>Target window</dt>
-                <dd>{currentTestingRound.targetWindow}</dd>
+                <dd>{activeTestingRound.targetWindow}</dd>
               </div>
             </dl>
           </aside>
 
           <div className="tier-selector" aria-label="Testing tiers">
-            {testingTierSelectorItems.map((tier) => (
+            {testingTierSelectorOrder
+              .map((tierId) => activeTestingTiers.find((tier) => tier.id === tierId))
+              .filter((tier): tier is TestingTier => Boolean(tier))
+              .map((tier) => (
               <button
                 className={`tier-button tier-button--${tier.id} ${
                   selectedTier.id === tier.id ? 'is-selected' : ''
@@ -651,6 +743,20 @@ function TestingPage() {
 }
 
 function TestingTierDetails({ tier }: { tier: TestingTier }) {
+  const [activeBatchPill, setActiveBatchPill] = useState<{ id: string; pinned: boolean } | null>(null);
+  const peptidePills = tier.peptides.map(normalizeTestingPeptidePill);
+
+  useEffect(() => {
+    if (!activeBatchPill?.pinned) {
+      return undefined;
+    }
+
+    const clearActivePill = () => setActiveBatchPill(null);
+
+    window.addEventListener('pointerdown', clearActivePill);
+    return () => window.removeEventListener('pointerdown', clearActivePill);
+  }, [activeBatchPill]);
+
   return (
     <article
       className={`tier-detail tier-detail--${tier.id}`}
@@ -720,10 +826,52 @@ function TestingTierDetails({ tier }: { tier: TestingTier }) {
               : `${tier.qualifiedCount} peptides assigned to ${tier.name}`}
           </h3>
         </div>
-        {tier.peptides.length > 0 ? (
+        {peptidePills.length > 0 ? (
           <ul>
-            {tier.peptides.map((peptide) => (
-              <li key={peptide}>{peptide}</li>
+            {peptidePills.map((peptide) => (
+              <li className="qualified-pill" key={peptide.id}>
+                <span>{peptide.label}</span>
+                {peptide.batchConformity && (
+                  <span
+                    className="batch-conformity-marker"
+                    onMouseEnter={() => setActiveBatchPill({ id: peptide.id, pinned: false })}
+                    onMouseLeave={() => {
+                      setActiveBatchPill((current) =>
+                        current?.id === peptide.id && !current.pinned ? null : current,
+                      );
+                    }}
+                  >
+                    <button
+                      className="batch-conformity-marker__button"
+                      type="button"
+                      aria-label="Batch conformity"
+                      aria-expanded={activeBatchPill?.id === peptide.id}
+                      onFocus={() => setActiveBatchPill({ id: peptide.id, pinned: false })}
+                      onBlur={() => {
+                        setActiveBatchPill((current) =>
+                          current?.id === peptide.id && !current.pinned ? null : current,
+                        );
+                      }}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setActiveBatchPill((current) =>
+                          current?.id === peptide.id && current.pinned
+                            ? null
+                            : { id: peptide.id, pinned: true },
+                        );
+                      }}
+                    >
+                      <BatchConformityMiniIcon />
+                    </button>
+                    {activeBatchPill?.id === peptide.id && (
+                      <span className="batch-conformity-marker__bubble" role="tooltip">
+                        Batch conformity
+                      </span>
+                    )}
+                  </span>
+                )}
+              </li>
             ))}
           </ul>
         ) : (
@@ -733,6 +881,27 @@ function TestingTierDetails({ tier }: { tier: TestingTier }) {
         )}
       </section>
     </article>
+  );
+}
+
+function normalizeTestingPeptidePill(peptide: string | TestingPeptidePill): TestingPeptidePill {
+  if (typeof peptide === 'string') {
+    return {
+      id: peptide,
+      label: peptide,
+      batchConformity: false,
+    };
+  }
+
+  return peptide;
+}
+
+function BatchConformityMiniIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 2.5 21 7v6.2c0 4.4-3.1 7.6-9 9.3-5.9-1.7-9-4.9-9-9.3V7l9-4.5Z" />
+      <path d="M8.2 12.2 10.7 15l5.2-6" />
+    </svg>
   );
 }
 
@@ -754,6 +923,47 @@ function BatchConformityAddon() {
       </ul>
     </section>
   );
+}
+
+function createTestingRoundSummary(round: Round) {
+  const selectedPeptides = round.peptides.filter((row) => row.peptideName.trim());
+  const qualifiedPeptides = selectedPeptides.filter((row) => row.testingTier).length;
+
+  return {
+    name: round.name,
+    status: round.status || 'Round in progress',
+    participants: round.participants,
+    selectedPeptides: selectedPeptides.length,
+    qualifiedPeptides,
+    targetWindow: round.targetWindow || round.startDate || 'Current round',
+  };
+}
+
+function createTestingTiersForRound(round: Round): TestingTier[] {
+  return testingTiers.map((tier) => {
+    const tierRows = round.peptides.filter((row) => row.testingTier === tier.id && row.peptideName.trim());
+    const peptidePills = tierRows.map(createRoundPeptidePill);
+
+    return {
+      ...tier,
+      qualifiedCount: peptidePills.length,
+      assignmentLabel: peptidePills.length === 0 ? 'Pending assignment' : undefined,
+      peptides: peptidePills,
+    };
+  });
+}
+
+function createRoundPeptidePill(row: RoundPeptide): TestingPeptidePill {
+  const details = [
+    row.mass,
+    row.additionalTesting,
+  ].filter(Boolean).join(' - ');
+
+  return {
+    id: row.id,
+    label: details ? `${row.peptideName} (${details})` : row.peptideName,
+    batchConformity: row.batchConformity,
+  };
 }
 
 function TestingIcon({ type }: { type: TestingIconType }) {

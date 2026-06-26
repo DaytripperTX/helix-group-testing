@@ -28,6 +28,7 @@ test('generic collection reads enforce public and admin access policy', async ()
     'peptides',
     'peptide-categories',
     'current-round',
+    'rounds',
     'vendors',
     'vendor-price-lists',
   ]) {

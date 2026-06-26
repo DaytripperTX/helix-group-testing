@@ -1,4 +1,11 @@
 import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  sortRoundsForDisplay,
+  type Round,
+  type RoundPeptide,
+  type RoundPriceListSnapshot,
+  type TestingTierId,
+} from './rounds';
 
 type AdminSession = {
   isAuthenticated: boolean;
@@ -6,7 +13,7 @@ type AdminSession = {
 };
 
 type AdminRole = 'owner' | 'admin';
-type AdminTab = 'vendors' | 'peptides' | 'notes' | 'labels';
+type AdminTab = 'vendors' | 'rounds' | 'peptides' | 'notes' | 'labels';
 
 type VendorPriceSheet =
   | { type: 'google-sheet'; url: string }
@@ -90,6 +97,11 @@ type BatchPeptideRow = Peptide & {
   errors: string[];
 };
 
+type RoundPeptideBatchRow = RoundPeptide & {
+  rowNumber: number;
+  errors: string[];
+};
+
 type PeptideTransfer = {
   version: number;
   collection: 'peptides';
@@ -111,6 +123,41 @@ type AdminNoteForm = {
   subject: string;
   body: string;
   tags: AdminRole[];
+};
+
+type RoundPriceSourceMode = 'none' | 'vendor-default' | 'round-override';
+
+type RoundForm = {
+  name: string;
+  status: string;
+  vendorId: string;
+  isCurrent: boolean;
+  startDate: string;
+  endDate: string;
+  targetWindow: string;
+  participants: string;
+  roundDiscountPercent: string;
+  priceSourceMode: RoundPriceSourceMode;
+  priceListSnapshot: RoundPriceListSnapshot | null;
+  peptides: RoundPeptide[];
+};
+
+type RoundPeptideSortKey =
+  | 'peptideName'
+  | 'vendorCode'
+  | 'vendorPrice'
+  | 'mass'
+  | 'testingTier'
+  | 'additionalTesting'
+  | 'batchConformity'
+  | 'capColor'
+  | 'participantCount'
+  | 'totalOrdered'
+  | 'notes';
+
+type RoundPeptideSort = {
+  key: RoundPeptideSortKey;
+  direction: 'asc' | 'desc';
 };
 
 const emptyVendorForm: VendorForm = {
@@ -138,6 +185,37 @@ const emptyAdminNoteForm: AdminNoteForm = {
   tags: [],
 };
 
+const emptyRoundForm: RoundForm = {
+  name: '',
+  status: 'Collecting signups',
+  vendorId: '',
+  isCurrent: false,
+  startDate: '',
+  endDate: '',
+  targetWindow: '',
+  participants: '',
+  roundDiscountPercent: '',
+  priceSourceMode: 'none',
+  priceListSnapshot: null,
+  peptides: [],
+};
+
+const testingTierOptions: { id: TestingTierId; label: string }[] = [
+  { id: 'none', label: 'None' },
+  { id: 'platinum', label: 'Platinum' },
+  { id: 'gold', label: 'Gold' },
+  { id: 'gold-plus', label: 'Gold+' },
+  { id: 'bronze', label: 'Bronze' },
+];
+
+const testingTierSummaryOptions: { id: TestingTierId; label: string }[] = [
+  { id: 'platinum', label: 'Platinum' },
+  { id: 'gold-plus', label: 'Gold+' },
+  { id: 'gold', label: 'Gold' },
+  { id: 'bronze', label: 'Bronze' },
+  { id: 'none', label: 'None' },
+];
+
 function AdminPage({
   session,
   loginRole,
@@ -155,6 +233,7 @@ function AdminPage({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>('vendors');
   const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [rounds, setRounds] = useState<Round[]>([]);
   const [peptides, setPeptides] = useState<Peptide[]>([]);
   const [adminNotes, setAdminNotes] = useState<AdminNote[]>([]);
   const [peptideCategories, setPeptideCategories] = useState<PeptideCategory[]>([]);
@@ -165,6 +244,13 @@ function AdminPage({
   const [editingPeptide, setEditingPeptide] = useState<Peptide | null>(null);
   const [peptideForm, setPeptideForm] = useState<PeptideForm>(emptyPeptideForm);
   const [isPeptideModalOpen, setIsPeptideModalOpen] = useState(false);
+  const [editingRound, setEditingRound] = useState<Round | null>(null);
+  const [roundForm, setRoundForm] = useState<RoundForm>(emptyRoundForm);
+  const [roundPeptideSort, setRoundPeptideSort] = useState<RoundPeptideSort>({
+    key: 'peptideName',
+    direction: 'asc',
+  });
+  const [isRoundModalOpen, setIsRoundModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [batchRows, setBatchRows] = useState<BatchPeptideRow[]>([]);
@@ -176,7 +262,12 @@ function AdminPage({
   const [priceListFile, setPriceListFile] = useState<File | null>(null);
   const [priceListUrl, setPriceListUrl] = useState('');
   const [priceListStatus, setPriceListStatus] = useState('');
+  const [roundPriceListFile, setRoundPriceListFile] = useState<File | null>(null);
+  const [roundPriceListUrl, setRoundPriceListUrl] = useState('');
+  const [roundPriceListStatus, setRoundPriceListStatus] = useState('');
   const priceListFileInputRef = useRef<HTMLInputElement | null>(null);
+  const roundPriceListFileInputRef = useRef<HTMLInputElement | null>(null);
+  const roundPeptideImportInputRef = useRef<HTMLInputElement | null>(null);
   const peptideImportInputRef = useRef<HTMLInputElement | null>(null);
   const [savedPriceListVendorId, setSavedPriceListVendorId] = useState('');
   const vendorGoogleSheetUrlError =
@@ -207,14 +298,23 @@ function AdminPage({
     () => [...peptides].sort((first, second) => first.name.localeCompare(second.name)),
     [peptides],
   );
+  const sortedRounds = useMemo(
+    () => sortRoundsForDisplay(rounds),
+    [rounds],
+  );
+  const sortedRoundPeptideRows = useMemo(
+    () => sortRoundPeptideRows(roundForm.peptides, roundPeptideSort),
+    [roundForm.peptides, roundPeptideSort],
+  );
   const sortedAdminNotes = useMemo(
     () => [...adminNotes].sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime()),
     [adminNotes],
   );
 
   const refreshAdminData = async () => {
-    const [nextVendors, nextPeptides, nextPriceLists, nextPeptideCategories, nextAdminNotes] = await Promise.all([
+    const [nextVendors, nextRounds, nextPeptides, nextPriceLists, nextPeptideCategories, nextAdminNotes] = await Promise.all([
       fetchCollection<Vendor>('vendors'),
+      fetchCollection<Round>('rounds'),
       fetchCollection<Peptide>('peptides'),
       fetchCollection<VendorPriceList>('vendor-price-lists'),
       fetchCollection<PeptideCategory>('peptide-categories'),
@@ -222,6 +322,7 @@ function AdminPage({
     ]);
 
     setVendors(nextVendors);
+    setRounds(nextRounds);
     setPeptides(nextPeptides);
     setPriceLists(nextPriceLists);
     setPeptideCategories(nextPeptideCategories);
@@ -535,6 +636,280 @@ function AdminPage({
       setPriceListStatus('Price list could not be deleted.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const openNewRoundModal = () => {
+    setEditingRound(null);
+    setRoundForm({
+      ...emptyRoundForm,
+      name: createNextRoundName(rounds),
+    });
+    setRoundPriceListFile(null);
+    setRoundPriceListUrl('');
+    setRoundPriceListStatus('');
+    setIsRoundModalOpen(true);
+    setStatus('');
+  };
+
+  const openEditRoundModal = (round: Round) => {
+    setEditingRound(round);
+    setRoundForm({
+      name: round.name,
+      status: round.status,
+      vendorId: round.vendorId,
+      isCurrent: round.isCurrent,
+      startDate: round.startDate,
+      endDate: round.endDate,
+      targetWindow: round.targetWindow,
+      participants: String(round.participants || ''),
+      roundDiscountPercent: String(round.roundDiscountPercent || ''),
+      priceSourceMode: round.priceSourceMode,
+      priceListSnapshot: round.priceListSnapshot,
+      peptides: round.peptides,
+    });
+    setRoundPriceListFile(null);
+    setRoundPriceListUrl(round.priceListSnapshot?.source?.type === 'google-sheet' ? round.priceListSnapshot.source.url : '');
+    setRoundPriceListStatus(
+      round.priceListSnapshot
+        ? `${round.priceListSnapshot.items.length} price rows in this round snapshot.`
+        : 'Use the default vendor list, parse a round-specific sheet, or enter rows manually.',
+    );
+    setIsRoundModalOpen(true);
+    setStatus('');
+  };
+
+  const updateRoundVendor = (vendorId: string) => {
+    setRoundForm((currentForm) => ({
+      ...currentForm,
+      vendorId,
+      priceSourceMode: currentForm.priceSourceMode === 'vendor-default' ? 'vendor-default' : currentForm.priceSourceMode,
+      priceListSnapshot:
+        currentForm.priceSourceMode === 'vendor-default'
+          ? getSavedVendorPriceListSnapshot(priceLists, vendorId)
+          : currentForm.priceListSnapshot,
+    }));
+  };
+
+  const updateRoundPriceSourceMode = (priceSourceMode: RoundPriceSourceMode) => {
+    setRoundForm((currentForm) => ({
+      ...currentForm,
+      priceSourceMode,
+      priceListSnapshot:
+        priceSourceMode === 'vendor-default'
+          ? getSavedVendorPriceListSnapshot(priceLists, currentForm.vendorId)
+          : priceSourceMode === 'none'
+            ? null
+            : currentForm.priceListSnapshot,
+    }));
+    setRoundPriceListStatus(
+      priceSourceMode === 'vendor-default'
+        ? 'Using a snapshot of the default vendor price list.'
+        : priceSourceMode === 'round-override'
+          ? 'Parse a round-specific file or Google Sheet.'
+          : '',
+    );
+  };
+
+  const parseRoundPriceList = async (override?: { file?: File | null; url?: string }) => {
+    const vendor = vendors.find((currentVendor) => currentVendor.id === roundForm.vendorId);
+
+    if (!vendor) {
+      setRoundPriceListStatus('Choose a vendor before parsing a price sheet.');
+      return;
+    }
+
+    const source = await getPriceListParseSource(
+      override?.file === undefined ? roundPriceListFile : override.file,
+      override?.url === undefined ? roundPriceListUrl : override.url,
+    );
+
+    if (!source) {
+      setRoundPriceListStatus('Choose a file or enter a Google Sheet URL first.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setRoundPriceListStatus('Parsing round price list...');
+
+    try {
+      const parsedPriceList = await parseVendorPriceListSource(vendor, source);
+      const snapshot = toRoundPriceListSnapshot(parsedPriceList);
+
+      setRoundForm((currentForm) => ({
+        ...currentForm,
+        priceSourceMode: 'round-override',
+        priceListSnapshot: snapshot,
+      }));
+      setRoundPriceListStatus(`${snapshot.items.length} rows parsed for this round.`);
+    } catch (error) {
+      console.error(error);
+      setRoundPriceListStatus('Round price list could not be parsed.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const addRoundPeptideRow = () => {
+    setRoundForm((currentForm) => ({
+      ...currentForm,
+      peptides: [...currentForm.peptides, createRoundPeptideRow(currentForm.peptides)],
+    }));
+  };
+
+  const beginRoundPeptideImport = () => {
+    roundPeptideImportInputRef.current?.click();
+  };
+
+  const importRoundPeptides = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+
+    if (!file) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    setRoundPriceListStatus('Importing peptide rows...');
+
+    try {
+      const rows = await parseRoundPeptideBatchFile(file, roundForm.priceListSnapshot?.items ?? [], roundForm.peptides);
+      const validRows = rows.filter((row) => row.errors.length === 0).map(stripRoundPeptideBatchFields);
+
+      if (validRows.length === 0) {
+        setRoundPriceListStatus('No valid peptide rows found.');
+        return;
+      }
+
+      setRoundForm((currentForm) => ({
+        ...currentForm,
+        peptides: [...currentForm.peptides, ...validRows],
+      }));
+      setRoundPriceListStatus(`${validRows.length} peptide rows imported.`);
+    } catch (error) {
+      console.error(error);
+      setRoundPriceListStatus('Peptide rows could not be imported.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const duplicateRoundPeptideRow = (row: RoundPeptide) => {
+    setRoundForm((currentForm) => ({
+      ...currentForm,
+      peptides: insertAfterRoundPeptide(currentForm.peptides, row.id, {
+        ...row,
+        id: createUniqueId(`${row.id}-copy`, currentForm.peptides),
+      }),
+    }));
+  };
+
+  const removeRoundPeptideRow = (rowId: string) => {
+    setRoundForm((currentForm) => ({
+      ...currentForm,
+      peptides: currentForm.peptides.filter((row) => row.id !== rowId),
+    }));
+  };
+
+  const updateRoundPeptideRow = (rowId: string, fields: Partial<RoundPeptide>) => {
+    setRoundForm((currentForm) => ({
+      ...currentForm,
+      peptides: currentForm.peptides.map((row) => (row.id === rowId ? { ...row, ...fields } : row)),
+    }));
+  };
+
+  const updateRoundPeptideSort = (key: RoundPeptideSortKey) => {
+    setRoundPeptideSort((currentSort) => ({
+      key,
+      direction: currentSort.key === key && currentSort.direction === 'asc' ? 'desc' : 'asc',
+    }));
+  };
+
+  const applyPriceListItemToRoundRow = (rowId: string, priceListItemId: string) => {
+    const item = roundForm.priceListSnapshot?.items.find((currentItem) => currentItem.id === priceListItemId);
+
+    if (!item) {
+      updateRoundPeptideRow(rowId, {
+        priceListItemId: '',
+        vendorCode: '',
+      });
+      return;
+    }
+
+    const linkedPeptide = item.peptideIds.length > 0
+      ? peptides.find((peptide) => peptide.id === item.peptideIds[0])
+      : null;
+
+    updateRoundPeptideRow(rowId, {
+      priceListItemId: item.id,
+      vendorCode: item.vendorCode,
+      peptideId: linkedPeptide?.id ?? '',
+      peptideName: linkedPeptide?.name ?? item.productName,
+      mass: item.mass,
+      vendorPrice: item.price,
+      vendorPriceOverridden: false,
+    });
+  };
+
+  const saveRound = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const name = sanitizeText(roundForm.name);
+
+    if (!name) {
+      setStatus('Round name is required.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const existingRound = findByNormalizedName(rounds, name);
+      const id = editingRound?.id ?? existingRound?.id ?? createUniqueId(name, rounds);
+      const now = new Date().toISOString();
+      const priceListSnapshot = await resolveRoundPriceListSnapshot(roundForm, roundPriceListFile);
+      const round: Round = {
+        id,
+        name,
+        status: sanitizeText(roundForm.status),
+        vendorId: roundForm.vendorId,
+        isCurrent: roundForm.isCurrent,
+        priceSourceMode: roundForm.priceSourceMode,
+        startDate: roundForm.startDate,
+        endDate: roundForm.endDate,
+        targetWindow: sanitizeText(roundForm.targetWindow),
+        participants: Math.max(0, Math.trunc(parseNullableNumber(roundForm.participants) ?? 0)),
+        roundDiscountPercent: Math.min(100, Math.max(0, parseNullableNumber(roundForm.roundDiscountPercent) ?? 0)),
+        priceListSnapshot,
+        peptides: roundForm.peptides.map(normalizeRoundPeptideFormRow),
+        createdAt: editingRound?.createdAt || now,
+        updatedAt: now,
+      };
+
+      const nextRounds = await saveCollectionItem<Round>('rounds', round);
+
+      setRounds(nextRounds);
+      setIsRoundModalOpen(false);
+      setStatus('Round saved.');
+    } catch (error) {
+      console.error(error);
+      setStatus('Round could not be saved.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const deleteRound = async (round: Round) => {
+    if (!window.confirm(`Delete round "${round.name}"? This cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      setRounds(await deleteCollectionItem<Round>('rounds', round.id));
+      setStatus('Round deleted.');
+    } catch (error) {
+      console.error(error);
+      setStatus('Round could not be deleted.');
     }
   };
 
@@ -988,7 +1363,7 @@ function AdminPage({
         </header>
 
         <nav className="admin-tabs" aria-label="Admin sections">
-          {(['vendors', 'peptides', 'notes', 'labels'] as AdminTab[]).map((tab) => (
+          {(['vendors', 'rounds', 'peptides', 'notes', 'labels'] as AdminTab[]).map((tab) => (
             <button
               className={activeTab === tab ? 'is-selected' : ''}
               type="button"
@@ -1050,6 +1425,51 @@ function AdminPage({
                 </article>
               ))}
               {vendors.length === 0 && <p className="admin-empty">No vendors yet.</p>}
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'rounds' && (
+          <section className="admin-panel" aria-labelledby="rounds-title">
+            <AdminPanelHeader
+              title="Rounds"
+              count={rounds.length}
+              actionLabel="Add Round"
+              onAction={openNewRoundModal}
+            />
+            <div className="admin-table">
+              {sortedRounds.map((round) => {
+                const vendor = vendors.find((currentVendor) => currentVendor.id === round.vendorId);
+                const tierSummary = getRoundTierSummary(round);
+
+                return (
+                  <article className={round.isCurrent ? 'admin-row admin-row--pinned' : 'admin-row'} key={round.id}>
+                    <div>
+                      <strong>
+                        {round.name}
+                        {round.isCurrent ? <span className="admin-pin-badge">Current</span> : null}
+                      </strong>
+                      <span>{round.status || 'No status'} - {vendor?.name ?? 'No vendor'}</span>
+                      <p>{round.targetWindow || formatRoundAdminDates(round) || 'No target window'}</p>
+                    </div>
+                    <div className="admin-row__meta">
+                      <span>{round.participants} participants</span>
+                      <span>{round.peptides.length} peptides</span>
+                      <span>{round.roundDiscountPercent}% discount</span>
+                      {tierSummary && <span>{tierSummary}</span>}
+                    </div>
+                    <div className="admin-row__actions">
+                      <button type="button" onClick={() => openEditRoundModal(round)}>
+                        Edit
+                      </button>
+                      <button type="button" onClick={() => void deleteRound(round)}>
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+              {rounds.length === 0 && <p className="admin-empty">No rounds yet.</p>}
             </div>
           </section>
         )}
@@ -1204,6 +1624,227 @@ function AdminPage({
               </button>
               <button className="admin-primary-button" type="submit" disabled={isSubmitting || Boolean(vendorGoogleSheetUrlError)}>
                 Save Vendor
+              </button>
+            </div>
+          </form>
+        </AdminModal>
+      )}
+
+      {isRoundModalOpen && (
+        <AdminModal title={editingRound ? 'Edit round' : 'Add round'} wide onClose={() => setIsRoundModalOpen(false)}>
+          <form className="admin-form admin-form--wide" onSubmit={saveRound}>
+            <div className="admin-round-grid">
+              <AdminTextField label="Round name" value={roundForm.name} required onChange={(value) => setRoundForm({ ...roundForm, name: value })} />
+              <AdminTextField label="Status" value={roundForm.status} onChange={(value) => setRoundForm({ ...roundForm, status: value })} />
+              <label className="admin-field">
+                <span>Vendor</span>
+                <select value={roundForm.vendorId} onChange={(event) => updateRoundVendor(event.target.value)}>
+                  <option value="">No vendor selected</option>
+                  {sortedVendors.map((vendor) => (
+                    <option value={vendor.id} key={vendor.id}>
+                      {vendor.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <AdminTextField label="Target window" value={roundForm.targetWindow} placeholder="June testing queue" onChange={(value) => setRoundForm({ ...roundForm, targetWindow: value })} />
+              <AdminTextField label="Start date" value={roundForm.startDate} onChange={(value) => setRoundForm({ ...roundForm, startDate: value })} />
+              <AdminTextField label="End date" value={roundForm.endDate} onChange={(value) => setRoundForm({ ...roundForm, endDate: value })} />
+              <AdminTextField label="Participants" value={roundForm.participants} onChange={(value) => setRoundForm({ ...roundForm, participants: value })} />
+              <AdminTextField label="Round discount %" value={roundForm.roundDiscountPercent} onChange={(value) => setRoundForm({ ...roundForm, roundDiscountPercent: value })} />
+              <label className="admin-field admin-check-field">
+                <input
+                  type="checkbox"
+                  checked={roundForm.isCurrent}
+                  onChange={(event) => setRoundForm({ ...roundForm, isCurrent: event.target.checked })}
+                />
+                <span>Current / pinned</span>
+              </label>
+            </div>
+
+            <section className="admin-round-source" aria-label="Round price source">
+              <div className="admin-round-source__header">
+                <div>
+                  <span>Price source</span>
+                  <small>{roundForm.priceListSnapshot ? `${roundForm.priceListSnapshot.items.length} linked rows` : 'No price snapshot'}</small>
+                </div>
+                <label>
+                  <span>Mode</span>
+                  <select
+                    value={roundForm.priceSourceMode}
+                    onChange={(event) => updateRoundPriceSourceMode(event.target.value as RoundPriceSourceMode)}
+                  >
+                    <option value="none">No sheet</option>
+                    <option value="vendor-default">Use default</option>
+                    <option value="round-override">Round-specific override</option>
+                  </select>
+                </label>
+              </div>
+
+              {roundForm.priceSourceMode === 'round-override' && (
+                <div className="admin-price-source">
+                  <label className="admin-field">
+                    <span>Upload CSV or XLSX price sheet</span>
+                    <input
+                      ref={roundPriceListFileInputRef}
+                      type="file"
+                      accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0] ?? null;
+                        setRoundPriceListFile(file);
+
+                        if (file) {
+                          setRoundPriceListUrl('');
+                          void parseRoundPriceList({ file, url: '' });
+                        }
+                      }}
+                    />
+                  </label>
+                  <AdminTextField
+                    label="Google Sheet URL"
+                    value={roundPriceListUrl}
+                    onChange={(value) => {
+                      setRoundPriceListUrl(value);
+
+                      if (value.trim()) {
+                        setRoundPriceListFile(null);
+
+                        if (roundPriceListFileInputRef.current) {
+                          roundPriceListFileInputRef.current.value = '';
+                        }
+                      }
+                    }}
+                  />
+                  <button type="button" disabled={isSubmitting} onClick={() => void parseRoundPriceList()}>
+                    Parse Preview
+                  </button>
+                </div>
+              )}
+              {roundPriceListStatus && <p className="admin-status">{roundPriceListStatus}</p>}
+            </section>
+
+            <div className="admin-round-toolbar">
+              <div>
+                <strong>{roundForm.peptides.length} peptide rows</strong>
+                <span>{getRoundFormTierSummary(roundForm.peptides)}</span>
+              </div>
+              <div className="admin-round-toolbar__actions">
+                <button type="button" onClick={addRoundPeptideRow}>
+                  Add Peptide Row
+                </button>
+                <button type="button" disabled={isSubmitting} onClick={beginRoundPeptideImport}>
+                  Batch Import
+                </button>
+                <input
+                  ref={roundPeptideImportInputRef}
+                  type="file"
+                  accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  className="admin-hidden-file-input"
+                  onChange={(event) => void importRoundPeptides(event)}
+                />
+              </div>
+            </div>
+
+            <div className="admin-round-table">
+              <div className="admin-round-row admin-round-row--header">
+                <RoundPeptideSortButton sortKey="peptideName" label="Peptide" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                <RoundPeptideSortButton sortKey="vendorCode" label="Vendor code" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                <RoundPeptideSortButton sortKey="vendorPrice" label="Price" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                <RoundPeptideSortButton sortKey="mass" label="Mass" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                <RoundPeptideSortButton sortKey="testingTier" label="Tier" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                <RoundPeptideSortButton sortKey="additionalTesting" label="Additional" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                <RoundPeptideSortButton sortKey="batchConformity" label="Batch conf." activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                <RoundPeptideSortButton sortKey="capColor" label="Cap color" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                <span className="admin-round-sort-pair">
+                  <RoundPeptideSortButton sortKey="participantCount" label="Heads" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                  <RoundPeptideSortButton sortKey="totalOrdered" label="Total" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                </span>
+                <RoundPeptideSortButton sortKey="notes" label="Notes" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
+                <span />
+              </div>
+              {sortedRoundPeptideRows.map((row) => (
+                <div className="admin-round-row" key={row.id}>
+                  <input
+                    value={row.peptideName}
+                    list="round-peptide-options"
+                    onChange={(event) => updateRoundPeptideRow(row.id, { peptideName: event.target.value })}
+                  />
+                  <select
+                    value={row.priceListItemId}
+                    aria-label={`Price list item for ${row.peptideName || 'round peptide'}`}
+                    onChange={(event) => applyPriceListItemToRoundRow(row.id, event.target.value)}
+                  >
+                    <option value="">{row.vendorCode || 'Manual'}</option>
+                    {roundForm.priceListSnapshot?.items.map((item) => (
+                      <option value={item.id} key={item.id}>
+                        {item.vendorCode || item.productName}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    value={row.vendorPrice ?? ''}
+                    onChange={(event) => updateRoundPeptideRow(row.id, {
+                      vendorPrice: parseNullableNumber(event.target.value),
+                      vendorPriceOverridden: true,
+                    })}
+                  />
+                  <input value={row.mass} onChange={(event) => updateRoundPeptideRow(row.id, { mass: event.target.value })} />
+                  <select
+                    value={row.testingTier}
+                    onChange={(event) => updateRoundPeptideRow(row.id, { testingTier: event.target.value as TestingTierId })}
+                  >
+                    {testingTierOptions.map((tier) => (
+                      <option value={tier.id} key={tier.id}>
+                        {tier.label}
+                      </option>
+                    ))}
+                  </select>
+                  <input value={row.additionalTesting} onChange={(event) => updateRoundPeptideRow(row.id, { additionalTesting: event.target.value })} />
+                  <label className="admin-round-checkbox" aria-label={`${row.peptideName || 'Peptide'} batch conformity`}>
+                    <input
+                      type="checkbox"
+                      checked={row.batchConformity}
+                      onChange={(event) => updateRoundPeptideRow(row.id, { batchConformity: event.target.checked })}
+                    />
+                  </label>
+                  <input value={row.capColor} onChange={(event) => updateRoundPeptideRow(row.id, { capColor: event.target.value })} />
+                  <div className="admin-round-counts">
+                    <input
+                      aria-label={`${row.peptideName || 'Peptide'} participant count`}
+                      value={row.participantCount || ''}
+                      onChange={(event) => updateRoundPeptideRow(row.id, { participantCount: Math.max(0, Math.trunc(parseNullableNumber(event.target.value) ?? 0)) })}
+                    />
+                    <input
+                      aria-label={`${row.peptideName || 'Peptide'} total ordered`}
+                      value={row.totalOrdered || ''}
+                      onChange={(event) => updateRoundPeptideRow(row.id, { totalOrdered: Math.max(0, Math.trunc(parseNullableNumber(event.target.value) ?? 0)) })}
+                    />
+                  </div>
+                  <input value={row.notes} onChange={(event) => updateRoundPeptideRow(row.id, { notes: event.target.value })} />
+                  <div className="admin-round-actions">
+                    <button type="button" onClick={() => duplicateRoundPeptideRow(row)}>
+                      Copy
+                    </button>
+                    <button type="button" onClick={() => removeRoundPeptideRow(row.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {roundForm.peptides.length === 0 && <p className="admin-empty">No peptide rows yet.</p>}
+            </div>
+            <datalist id="round-peptide-options">
+              {peptides.map((peptide) => (
+                <option value={peptide.name} key={peptide.id} />
+              ))}
+            </datalist>
+
+            <div className="admin-modal__actions">
+              <button type="button" onClick={() => setIsRoundModalOpen(false)}>
+                Cancel
+              </button>
+              <button className="admin-primary-button" type="submit" disabled={isSubmitting}>
+                Save Round
               </button>
             </div>
           </form>
@@ -1375,7 +2016,7 @@ function AdminPage({
       )}
 
       {priceListVendor && (
-        <AdminModal title={`${priceListVendor.name} price list`} onClose={() => setPriceListVendor(null)}>
+        <AdminModal title={`${priceListVendor.name} price list`} wide onClose={() => setPriceListVendor(null)}>
           <div className="admin-form admin-form--wide">
             <div className="admin-price-source">
               <label className="admin-field">
@@ -1537,14 +2178,16 @@ function AdminModal({
   title,
   children,
   onClose,
+  wide,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  wide?: boolean;
 }) {
   return (
     <div className="admin-modal-backdrop" role="presentation">
-      <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
+      <section className={wide ? 'admin-modal admin-modal--wide' : 'admin-modal'} role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
         <div className="admin-modal__header">
           <h2 id="admin-modal-title">{title}</h2>
           <button className="admin-modal__close" type="button" aria-label="Close" onClick={onClose}>
@@ -1554,6 +2197,58 @@ function AdminModal({
         {children}
       </section>
     </div>
+  );
+}
+
+function RoundPeptideSortButton({
+  sortKey,
+  label,
+  activeSort,
+  onSort,
+}: {
+  sortKey: RoundPeptideSortKey;
+  label: string;
+  activeSort: RoundPeptideSort;
+  onSort: (key: RoundPeptideSortKey) => void;
+}) {
+  const isActive = activeSort.key === sortKey;
+  const direction = isActive ? activeSort.direction : 'none';
+
+  return (
+    <button
+      className={isActive ? 'admin-round-sort admin-round-sort--active' : 'admin-round-sort'}
+      type="button"
+      aria-sort={isActive ? (activeSort.direction === 'asc' ? 'ascending' : 'descending') : undefined}
+      onClick={() => onSort(sortKey)}
+    >
+      <span className="admin-round-sort__label">{label}</span>
+      <RoundPeptideSortIcon direction={direction} />
+    </button>
+  );
+}
+
+function RoundPeptideSortIcon({ direction }: { direction: 'asc' | 'desc' | 'none' }) {
+  const upClassName = direction === 'asc' ? 'admin-round-sort__arrow admin-round-sort__arrow--active' : 'admin-round-sort__arrow';
+  const downClassName = direction === 'desc' ? 'admin-round-sort__arrow admin-round-sort__arrow--active' : 'admin-round-sort__arrow';
+
+  if (direction === 'desc') {
+    return (
+      <svg className="admin-round-sort__icon" aria-hidden="true" viewBox="0 0 24 24">
+        <path className={downClassName} d="m3 16 4 4 4-4" />
+        <path className={downClassName} d="M7 20V4" />
+        <path className={upClassName} d="m21 8-4-4-4 4" />
+        <path className={upClassName} d="M17 4v16" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg className="admin-round-sort__icon" aria-hidden="true" viewBox="0 0 24 24">
+      <path className={downClassName} d="m21 16-4 4-4-4" />
+      <path className={downClassName} d="M17 20V4" />
+      <path className={upClassName} d="m3 8 4-4 4 4" />
+      <path className={upClassName} d="M7 4v16" />
+    </svg>
   );
 }
 
@@ -1867,6 +2562,130 @@ async function parsePeptideBatchFile(file: File) {
 
   const result = (await response.json()) as { rows?: BatchPeptideRow[] };
   return Array.isArray(result.rows) ? result.rows : [];
+}
+
+async function parseRoundPeptideBatchFile(
+  file: File,
+  priceListItems: RoundPriceListSnapshot['items'],
+  existingRows: RoundPeptide[],
+) {
+  const response = await fetch('/api/admin/rounds/parse-peptides', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      source: {
+        type: 'file',
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        base64: await fileToBase64(file),
+      },
+      priceListItems,
+      existingRows,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Round peptide batch file could not be parsed.');
+  }
+
+  const result = (await response.json()) as { rows?: RoundPeptideBatchRow[] };
+  return Array.isArray(result.rows) ? result.rows : [];
+}
+
+function stripRoundPeptideBatchFields(row: RoundPeptideBatchRow): RoundPeptide {
+  const { rowNumber, errors, ...roundPeptide } = row;
+
+  void rowNumber;
+  void errors;
+
+  return roundPeptide;
+}
+
+function sortRoundPeptideRows(rows: RoundPeptide[], sort: RoundPeptideSort) {
+  const indexedRows = rows.map((row, index) => ({ row, index }));
+
+  indexedRows.sort((first, second) => {
+    const comparison = compareRoundPeptideRows(first.row, second.row, sort.key);
+
+    if (comparison !== 0) {
+      return sort.direction === 'asc' ? comparison : -comparison;
+    }
+
+    return first.index - second.index;
+  });
+
+  return indexedRows.map(({ row }) => row);
+}
+
+function compareRoundPeptideRows(first: RoundPeptide, second: RoundPeptide, key: RoundPeptideSortKey) {
+  if (key === 'vendorPrice') {
+    return compareNullableNumbers(first.vendorPrice, second.vendorPrice);
+  }
+
+  if (key === 'participantCount' || key === 'totalOrdered') {
+    return compareNumbers(first[key], second[key]);
+  }
+
+  if (key === 'mass') {
+    const massComparison = compareNullableNumbers(parseMassNumber(first.mass), parseMassNumber(second.mass));
+
+    return massComparison || compareText(first.mass, second.mass);
+  }
+
+  if (key === 'batchConformity') {
+    return compareNumbers(first.batchConformity ? 1 : 0, second.batchConformity ? 1 : 0);
+  }
+
+  if (key === 'testingTier') {
+    return compareNumbers(getTestingTierSortValue(first.testingTier), getTestingTierSortValue(second.testingTier));
+  }
+
+  return compareText(String(first[key] ?? ''), String(second[key] ?? ''));
+}
+
+function compareText(first: string, second: string) {
+  return first.localeCompare(second, undefined, { sensitivity: 'base', numeric: true });
+}
+
+function compareNumbers(first: number, second: number) {
+  return first - second;
+}
+
+function compareNullableNumbers(first: number | null, second: number | null) {
+  if (first === null && second === null) {
+    return 0;
+  }
+
+  if (first === null) {
+    return 1;
+  }
+
+  if (second === null) {
+    return -1;
+  }
+
+  return first - second;
+}
+
+function parseMassNumber(value: string) {
+  const match = value.match(/-?\d+(?:\.\d+)?/);
+
+  return match ? Number(match[0]) : null;
+}
+
+function getTestingTierSortValue(tier: TestingTierId) {
+  const tierOrder: Record<TestingTierId, number> = {
+    none: 0,
+    platinum: 1,
+    'gold-plus': 2,
+    gold: 3,
+    bronze: 4,
+  };
+
+  return tierOrder[tier];
 }
 
 async function uploadVendorPriceSheetFile(file: File): Promise<VendorPriceSheet> {
@@ -2336,6 +3155,144 @@ function formatPriceListSummary(priceLists: VendorPriceList[], vendorId: string)
   }
 
   return `${priceList.items.length} parsed rows`;
+}
+
+function createNextRoundName(rounds: Round[]) {
+  const roundNumbers = rounds
+    .map((round) => round.name.match(/round\s+(\d+)/i)?.[1])
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  const nextNumber = roundNumbers.length > 0 ? Math.max(...roundNumbers) + 1 : rounds.length + 1;
+
+  return `Round ${nextNumber}`;
+}
+
+function getSavedVendorPriceListSnapshot(priceLists: VendorPriceList[], vendorId: string): RoundPriceListSnapshot | null {
+  const priceList = priceLists.find((currentPriceList) => currentPriceList.vendorId === vendorId);
+
+  return priceList ? toRoundPriceListSnapshot(priceList) : null;
+}
+
+function toRoundPriceListSnapshot(priceList: VendorPriceList): RoundPriceListSnapshot {
+  return {
+    id: priceList.id,
+    vendorId: priceList.vendorId,
+    vendorName: priceList.vendorName,
+    source: priceList.source.type === 'google-sheet'
+      ? { type: 'google-sheet', url: priceList.source.url }
+      : {
+          type: 'file',
+          fileName: priceList.source.fileName,
+          mimeType: priceList.source.mimeType,
+          blobKey: 'blobKey' in priceList.source ? priceList.source.blobKey : undefined,
+        },
+    parsedAt: priceList.parsedAt,
+    items: priceList.items.map((item) => ({
+      id: item.id,
+      vendorCode: item.vendorCode,
+      productName: item.productName,
+      mass: item.mass,
+      price: item.price,
+      vialsPerPack: item.vialsPerPack,
+      peptideIds: item.peptideIds,
+      needsReview: item.needsReview,
+    })),
+  };
+}
+
+async function resolveRoundPriceListSnapshot(
+  form: RoundForm,
+  roundPriceListFile: File | null,
+): Promise<RoundPriceListSnapshot | null> {
+  if (!form.priceListSnapshot || form.priceSourceMode === 'none') {
+    return null;
+  }
+
+  if (form.priceListSnapshot.source?.type !== 'file' || form.priceListSnapshot.source.blobKey || !roundPriceListFile) {
+    return form.priceListSnapshot;
+  }
+
+  const savedSource = await uploadVendorPriceSheetFile(roundPriceListFile);
+
+  return {
+    ...form.priceListSnapshot,
+    source: savedSource,
+  };
+}
+
+function createRoundPeptideRow(existingRows: { id: string }[]): RoundPeptide {
+  return {
+    id: createUniqueId(`round-row-${Date.now()}`, existingRows),
+    peptideId: '',
+    peptideName: '',
+    priceListItemId: '',
+    vendorCode: '',
+    vendorPrice: null,
+    vendorPriceOverridden: false,
+    mass: '',
+    testingTier: 'none',
+    additionalTesting: '',
+    batchConformity: false,
+    capColor: '',
+    notes: '',
+    participantCount: 0,
+    totalOrdered: 0,
+  };
+}
+
+function insertAfterRoundPeptide(rows: RoundPeptide[], sourceRowId: string, insertedRow: RoundPeptide) {
+  const sourceIndex = rows.findIndex((row) => row.id === sourceRowId);
+
+  if (sourceIndex < 0) {
+    return [...rows, insertedRow];
+  }
+
+  return [
+    ...rows.slice(0, sourceIndex + 1),
+    insertedRow,
+    ...rows.slice(sourceIndex + 1),
+  ];
+}
+
+function normalizeRoundPeptideFormRow(row: RoundPeptide): RoundPeptide {
+  return {
+    ...row,
+    peptideId: sanitizeText(row.peptideId),
+    peptideName: sanitizeText(row.peptideName),
+    priceListItemId: sanitizeText(row.priceListItemId),
+    vendorCode: sanitizeText(row.vendorCode),
+    vendorPrice: row.vendorPrice === null ? null : Math.max(0, Number(row.vendorPrice) || 0),
+    mass: sanitizeText(row.mass),
+    additionalTesting: sanitizeText(row.additionalTesting),
+    batchConformity: row.batchConformity === true,
+    capColor: sanitizeText(row.capColor),
+    notes: sanitizeText(row.notes),
+    participantCount: Math.max(0, Math.trunc(Number(row.participantCount) || 0)),
+    totalOrdered: Math.max(0, Math.trunc(Number(row.totalOrdered) || 0)),
+  };
+}
+
+function getRoundTierSummary(round: Round) {
+  return getRoundFormTierSummary(round.peptides);
+}
+
+function getRoundFormTierSummary(rows: RoundPeptide[]) {
+  const counts = testingTierSummaryOptions
+    .map((tier) => ({
+      ...tier,
+      count: rows.filter((row) => row.testingTier === tier.id).length,
+    }))
+    .filter((tier) => tier.count > 0);
+
+  return counts.map((tier) => `${tier.label}: ${tier.count}`).join(' / ');
+}
+
+function formatRoundAdminDates(round: Round) {
+  if (round.startDate && round.endDate) {
+    return `${round.startDate} to ${round.endDate}`;
+  }
+
+  return round.startDate || round.endDate || '';
 }
 
 function isVendorPriceSheetSource(
