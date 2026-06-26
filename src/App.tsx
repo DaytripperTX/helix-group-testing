@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import AdminPage from './AdminPage';
 import FaqsPage from './FaqsPage';
 import LabelsPage from './LabelsPage';
@@ -6,7 +6,7 @@ import OrderFormPage from './OrderFormPage';
 import DisclaimerSection from './Helpers/DisclaimerSection';
 import PageHero from './Helpers/PageHero';
 import { publicPageItems, type PublicPageId } from './page-disables';
-import { fetchRounds, getCurrentRounds, type Round, type RoundPeptide, type TestingTierId } from './rounds';
+import { fetchRounds, getCurrentRounds, sortRoundsForDisplay, type Round, type RoundPeptide, type TestingTierId } from './rounds';
 
 const coordinationPoints = [
   'Members coordinate current testing rounds, selected peptides, and shared third-party lab testing scope.',
@@ -619,10 +619,23 @@ function TestingPage() {
   const [selectedTierId, setSelectedTierId] = useState<TestingTier['id']>('platinum');
   const [rounds, setRounds] = useState<Round[]>([]);
   const [selectedRoundId, setSelectedRoundId] = useState('');
+  const [roundSearchTerm, setRoundSearchTerm] = useState('');
   const [roundsLoadFailed, setRoundsLoadFailed] = useState(false);
-  const currentRounds = getCurrentRounds(rounds);
+  const currentRounds = useMemo(() => getCurrentRounds(rounds), [rounds]);
+  const selectableRounds = useMemo(() => sortRoundsForDisplay(rounds), [rounds]);
+  const filteredSelectableRounds = useMemo(
+    () => filterTestingRounds(selectableRounds, roundSearchTerm),
+    [selectableRounds, roundSearchTerm],
+  );
   const selectedRound =
-    currentRounds.find((round) => round.id === selectedRoundId) ?? currentRounds[0] ?? null;
+    selectableRounds.find((round) => round.id === selectedRoundId) ?? currentRounds[0] ?? selectableRounds[0] ?? null;
+  const visibleRoundOptions = useMemo(
+    () =>
+      selectedRound && !filteredSelectableRounds.some((round) => round.id === selectedRound.id)
+        ? [selectedRound, ...filteredSelectableRounds]
+        : filteredSelectableRounds,
+    [filteredSelectableRounds, selectedRound],
+  );
   const activeTestingRound = selectedRound ? createTestingRoundSummary(selectedRound) : currentTestingRound;
   const activeTestingTiers = selectedRound ? createTestingTiersForRound(selectedRound) : testingTiers;
   const selectedTier =
@@ -650,14 +663,14 @@ function TestingPage() {
   }, []);
 
   useEffect(() => {
-    if (currentRounds.length === 0) {
+    if (selectableRounds.length === 0) {
       return;
     }
 
-    if (!currentRounds.some((round) => round.id === selectedRoundId)) {
-      setSelectedRoundId(currentRounds[0].id);
+    if (!selectableRounds.some((round) => round.id === selectedRoundId)) {
+      setSelectedRoundId((currentRounds[0] ?? selectableRounds[0]).id);
     }
-  }, [currentRounds, selectedRoundId]);
+  }, [currentRounds, selectableRounds, selectedRoundId]);
 
   useEffect(() => {
     if (!activeTestingTiers.some((tier) => tier.id === selectedTierId)) {
@@ -668,23 +681,29 @@ function TestingPage() {
   return (
     <section className="testing-dashboard" aria-labelledby="testing-title">
       <div className="section__content testing-dashboard__content">
+        {selectableRounds.length > 0 && (
+          <div className="testing-round-controls">
+            <select value={selectedRound?.id ?? ''} onChange={(event) => setSelectedRoundId(event.target.value)} aria-label="Round">
+              {visibleRoundOptions.map((round) => (
+                <option value={round.id} key={round.id}>
+                  {getTestingRoundOptionLabel(round)}
+                </option>
+              ))}
+            </select>
+            <input
+              type="search"
+              value={roundSearchTerm}
+              placeholder="Search rounds"
+              aria-label="Search rounds"
+              onChange={(event) => setRoundSearchTerm(event.target.value)}
+            />
+          </div>
+        )}
         <div className="testing-overview">
           <aside className="round-summary" aria-label="Current round stats">
             <p className="eyebrow">Current round</p>
             <h1 id="testing-title">{activeTestingRound.name}</h1>
             <p>{activeTestingRound.status}</p>
-            {currentRounds.length > 1 && (
-              <label className="round-selector">
-                <span>Round</span>
-                <select value={selectedRound?.id ?? ''} onChange={(event) => setSelectedRoundId(event.target.value)}>
-                  {currentRounds.map((round) => (
-                    <option value={round.id} key={round.id}>
-                      {round.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
             {roundsLoadFailed && <p className="round-summary__fallback">Showing saved fallback details.</p>}
 
             <dl className="round-summary__stats">
@@ -726,9 +745,9 @@ function TestingPage() {
                 <strong>{tier.label}</strong>
                 <em>{tier.description}</em>
                 <small>
-                  {'assignmentLabel' in tier
+                  {tier.assignmentLabel
                     ? tier.assignmentLabel
-                    : `${tier.qualifiedCount} qualified peptides`}
+                    : `${tier.qualifiedCount} peptides`}
                 </small>
               </button>
             ))}
@@ -821,7 +840,7 @@ function TestingTierDetails({ tier }: { tier: TestingTier }) {
         <div>
           <p className="eyebrow">Qualified this round</p>
           <h3>
-            {'assignmentLabel' in tier
+            {tier.assignmentLabel
               ? tier.assignmentLabel
               : `${tier.qualifiedCount} peptides assigned to ${tier.name}`}
           </h3>
@@ -927,7 +946,7 @@ function BatchConformityAddon() {
 
 function createTestingRoundSummary(round: Round) {
   const selectedPeptides = round.peptides.filter((row) => row.peptideName.trim());
-  const qualifiedPeptides = selectedPeptides.filter((row) => row.testingTier).length;
+  const qualifiedPeptides = selectedPeptides.filter((row) => row.testingTier !== 'none').length;
 
   return {
     name: round.name,
@@ -937,6 +956,35 @@ function createTestingRoundSummary(round: Round) {
     qualifiedPeptides,
     targetWindow: round.targetWindow || round.startDate || 'Current round',
   };
+}
+
+function getTestingRoundOptionLabel(round: Round) {
+  return [
+    round.name,
+    round.isCurrent ? 'Current' : 'Past',
+  ].filter(Boolean).join(' - ');
+}
+
+function filterTestingRounds(rounds: Round[], searchTerm: string) {
+  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+
+  if (!normalizedSearchTerm) {
+    return rounds;
+  }
+
+  return rounds.filter((round) =>
+    [
+      round.name,
+      round.status,
+      round.targetWindow,
+      round.startDate,
+      round.endDate,
+      round.isCurrent ? 'current' : 'past scheduled previous',
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(normalizedSearchTerm),
+  );
 }
 
 function createTestingTiersForRound(round: Round): TestingTier[] {

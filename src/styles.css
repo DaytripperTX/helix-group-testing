@@ -3642,6 +3642,26 @@ h2 {
   gap: 22px;
 }
 
+.testing-round-controls {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.25fr) minmax(0, 0.75fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.testing-round-controls select,
+.testing-round-controls input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #cbd9e2;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #ffffff;
+  color: #07101f;
+  font: inherit;
+  font-weight: 850;
+}
+
 .testing-overview {
   display: grid;
   grid-template-columns: minmax(210px, 0.8fr) minmax(0, 3.2fr);
@@ -3684,11 +3704,13 @@ h2 {
   font-weight: 850;
 }
 
-.round-selector select {
+.round-selector select,
+.round-selector input {
   width: 100%;
   border: 1px solid #cbd9e2;
   border-radius: 8px;
   padding: 9px 10px;
+  background: #ffffff;
   color: #07101f;
   font: inherit;
 }
@@ -3855,23 +3877,23 @@ h2 {
 }
 
 .tier-button--gold-plus {
-  border-color: rgba(0, 126, 166, 0.75);
-  background: #d8f5fb;
+  border-color: rgba(190, 107, 104, 0.82);
+  background: #f3d5cf;
 }
 
 .tier-button--gold-plus::before {
   background:
-    linear-gradient(135deg, rgba(0, 126, 166, 0.42), rgba(255, 255, 255, 0.24) 48%),
-    linear-gradient(315deg, rgba(19, 244, 255, 0.32), transparent 52%);
+    linear-gradient(135deg, rgba(190, 107, 104, 0.46), rgba(255, 255, 255, 0.22) 48%),
+    linear-gradient(315deg, rgba(238, 190, 140, 0.56), transparent 52%);
 }
 
 .tier-button--gold-plus strong,
 .tier-detail--gold-plus .tier-detail__header strong {
-  color: #007ea6;
+  color: #9f4f4f;
 }
 
 .tier-button--gold-plus.is-selected::after {
-  background: linear-gradient(90deg, #007ea6, #13f4ff);
+  background: linear-gradient(90deg, #be6b68, #eeb76f);
 }
 
 .tier-button--bronze {
@@ -3967,8 +3989,8 @@ h2 {
 }
 
 .tier-detail--gold-plus .testing-label {
-  border-color: rgba(0, 126, 166, 0.45);
-  background: rgba(19, 244, 255, 0.13);
+  border-color: rgba(190, 107, 104, 0.45);
+  background: rgba(190, 107, 104, 0.13);
 }
 
 .tier-detail--bronze .testing-label {
@@ -4013,8 +4035,8 @@ h2 {
 }
 
 .tier-detail--gold-plus .qc-tile__icon {
-  background: rgba(19, 244, 255, 0.13);
-  color: #007ea6;
+  background: rgba(190, 107, 104, 0.13);
+  color: #9f4f4f;
 }
 
 .tier-detail--bronze .qc-tile__icon {
@@ -4118,8 +4140,8 @@ h2 {
 }
 
 .tier-detail--gold-plus .panel-list li::before {
-  border-color: #13f4ff;
-  color: #13f4ff;
+  border-color: #eeb76f;
+  color: #eeb76f;
 }
 
 .tier-detail--bronze .panel-list li::before {
@@ -5125,6 +5147,7 @@ h2 {
   }
 
   .testing-overview,
+  .testing-round-controls,
   .tier-selector,
   .tier-detail,
   .batch-addon,
