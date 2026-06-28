@@ -53,6 +53,36 @@ test('owner peptide import replaces stale target peptides', async () => {
   assert.deepEqual(body.map((item) => item.id), ['transfer-peptide']);
   assert.deepEqual(storedPeptides.map((item) => item.id), ['transfer-peptide']);
   assert.equal(storedPeptides[0].name, 'Transfer Peptide');
+  assert.equal(storedPeptides[0].kind, 'peptide');
+  assert.deepEqual(storedPeptides[0].components, []);
+});
+
+test('owner peptide import preserves sanitized blend metadata', async () => {
+  await resetData();
+
+  const response = await apiRequest('/api/admin/data/peptides/import', 'POST', {
+    ...createTransfer(),
+    items: [
+      {
+        ...createPeptide('recovery-blend', 'Recovery Blend'),
+        kind: 'blend',
+        components: [
+          { peptideId: 'bpc-157', name: 'BPC-157', ratio: '1' },
+          { peptideId: 'bpc-157', name: 'BPC-157 duplicate', ratio: '2' },
+          { peptideId: '../tb-500', name: 'TB-500', ratio: '1' },
+          { peptideId: 'empty-name', name: '', ratio: '1' },
+        ],
+      },
+    ],
+  }, createAdminSessionCookie('owner'));
+  const storedPeptides = await readCollection('peptides');
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(storedPeptides[0].kind, 'blend');
+  assert.deepEqual(storedPeptides[0].components, [
+    { peptideId: 'bpc-157', name: 'BPC-157', ratio: '1' },
+    { peptideId: '..-tb-500', name: 'TB-500', ratio: '1' },
+  ]);
 });
 
 test('owner peptide import rejects invalid files and duplicate ids', async () => {
@@ -74,10 +104,15 @@ test('owner peptide import rejects invalid files and duplicate ids', async () =>
     ...createTransfer(),
     items: [{ id: '', name: '', categories: [] }],
   }, ownerCookie);
+  const emptyBlend = await apiRequest('/api/admin/data/peptides/import', 'POST', {
+    ...createTransfer(),
+    items: [{ ...createPeptide('empty-blend', 'Empty Blend'), kind: 'blend', components: [] }],
+  }, ownerCookie);
 
   assert.equal(wrongCollection.statusCode, 400);
   assert.equal(duplicateIds.statusCode, 400);
   assert.equal(invalidRecord.statusCode, 400);
+  assert.equal(emptyBlend.statusCode, 400);
 });
 
 async function resetData() {

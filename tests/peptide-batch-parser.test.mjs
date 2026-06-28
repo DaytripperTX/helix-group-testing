@@ -39,6 +39,65 @@ test('peptide batch parse returns preview rows for valid admin CSV upload', asyn
   assert.deepEqual(result.rows[0].errors, []);
 });
 
+test('peptide batch parse returns blend components from valid admin CSV upload', async () => {
+  await resetData();
+  const response = await apiRequest({
+    headers: adminHeaders(),
+    body: createParseBody(
+      'peptides.csv',
+      [
+        'name,kind,categories,components',
+        'Recovery Blend,blend,Recovery,"[{""peptideId"":""bpc-157"",""name"":""BPC-157"",""ratio"":""1""},{""peptideId"":""tb-500"",""name"":""TB-500"",""ratio"":""1""}]"',
+      ].join('\n'),
+    ),
+  });
+
+  assert.equal(response.statusCode, 200);
+
+  const result = JSON.parse(response.body);
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].kind, 'blend');
+  assert.deepEqual(result.rows[0].components, [
+    { peptideId: 'bpc-157', name: 'BPC-157', ratio: '1' },
+    { peptideId: 'tb-500', name: 'TB-500', ratio: '1' },
+  ]);
+  assert.deepEqual(result.rows[0].errors, []);
+});
+
+test('peptide batch parse marks malformed blend components as a row error', async () => {
+  await resetData();
+  const response = await apiRequest({
+    headers: adminHeaders(),
+    body: createParseBody(
+      'peptides.csv',
+      'name,kind,categories,components\nBroken Blend,blend,Recovery,"not json"',
+    ),
+  });
+
+  assert.equal(response.statusCode, 200);
+
+  const result = JSON.parse(response.body);
+
+  assert.equal(result.rows[0].kind, 'blend');
+  assert.deepEqual(result.rows[0].components, []);
+  assert.deepEqual(result.rows[0].errors, ['Invalid components JSON']);
+});
+
+test('peptide batch parse requires components for blend rows', async () => {
+  await resetData();
+  const response = await apiRequest({
+    headers: adminHeaders(),
+    body: createParseBody('peptides.csv', 'name,kind,categories\nEmpty Blend,blend,Recovery'),
+  });
+
+  assert.equal(response.statusCode, 200);
+
+  const result = JSON.parse(response.body);
+
+  assert.deepEqual(result.rows[0].errors, ['Blend components are required']);
+});
+
 test('peptide batch parse returns preview rows for valid admin XLSX upload', async () => {
   await resetData();
   const response = await apiRequest({

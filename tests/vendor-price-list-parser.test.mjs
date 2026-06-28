@@ -150,6 +150,60 @@ test('vendor price parser does not link distinct normalized names by broad parti
   assert.deepEqual(result.items[0].peptideIds, []);
 });
 
+test('vendor price parser links blend names exactly like peptide names', async () => {
+  const result = await parseVendorPriceList({
+    vendorId: 'vendor-a',
+    vendorName: 'Vendor A',
+    source: {
+      type: 'file',
+      fileName: 'price-list.csv',
+      mimeType: 'text/csv',
+      base64: Buffer.from('code,product,price\nRB,Recovery Blend,150').toString('base64'),
+    },
+    peptides: [
+      {
+        id: 'recovery-blend',
+        name: 'Recovery Blend',
+        kind: 'blend',
+        components: [
+          { peptideId: 'bpc-157', name: 'BPC-157', ratio: '1' },
+          { peptideId: 'tb-500', name: 'TB-500', ratio: '1' },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.deepEqual(result.items[0].peptideIds, ['recovery-blend']);
+});
+
+test('vendor price parser does not link blends by component names alone', async () => {
+  const result = await parseVendorPriceList({
+    vendorId: 'vendor-a',
+    vendorName: 'Vendor A',
+    source: {
+      type: 'file',
+      fileName: 'price-list.csv',
+      mimeType: 'text/csv',
+      base64: Buffer.from('code,product,price\nBPC,BPC-157,42').toString('base64'),
+    },
+    peptides: [
+      {
+        id: 'recovery-blend',
+        name: 'Recovery Blend',
+        kind: 'blend',
+        components: [
+          { peptideId: 'bpc-157', name: 'BPC-157', ratio: '1' },
+          { peptideId: 'tb-500', name: 'TB-500', ratio: '1' },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.deepEqual(result.items[0].peptideIds, []);
+});
+
 async function parseWithFetchCapture(url) {
   const fetchCalls = [];
   globalThis.fetch = async (fetchUrl) => {

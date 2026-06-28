@@ -108,7 +108,7 @@ test('round normalization keeps public fields bounded and allowlisted', async ()
   assert.equal(stored.vendorId, 'Vendor-One-');
   assert.equal(stored.isCurrent, false);
   assert.equal(stored.priceSourceMode, 'vendor-default');
-  assert.equal(stored.startDate, '2026-06-25');
+  assert.equal(stored.startDate, '06/25/26');
   assert.equal(stored.endDate, '');
   assert.equal(stored.roundDiscountPercent, 100);
   assert.equal(stored.participants, 4);
@@ -123,6 +123,35 @@ test('round normalization keeps public fields bounded and allowlisted', async ()
   assert.equal(stored.peptides[0].vendorPrice, 0);
   assert.equal(stored.peptides[0].participantCount, 3);
   assert.equal(stored.peptides[0].totalOrdered, 8);
+});
+
+test('round date normalization accepts common admin date formats', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  const examples = [
+    ['slash-short', '6/25/26', '06/25/26'],
+    ['slash-long', '06/25/2026', '06/25/26'],
+    ['dash-short', '6-25-26', '06/25/26'],
+    ['dot-short', '6.25.26', '06/25/26'],
+    ['iso', '2026-06-25', '06/25/26'],
+    ['month-name', 'June 25, 2026', '06/25/26'],
+  ];
+
+  for (const [id, startDate, expectedDate] of examples) {
+    const response = await apiRequest('/api/admin/data/rounds/' + id, 'PUT', createRound({
+      id,
+      startDate,
+      endDate: startDate,
+    }), { cookie: adminCookie });
+
+    assert.equal(response.statusCode, 200);
+
+    const stored = (await readCollection('rounds')).find((round) => round.id === id);
+
+    assert.equal(stored.startDate, expectedDate);
+    assert.equal(stored.endDate, expectedDate);
+  }
 });
 
 test('multiple current rounds can be stored simultaneously', async () => {

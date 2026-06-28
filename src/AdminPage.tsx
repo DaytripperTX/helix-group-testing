@@ -60,11 +60,21 @@ type WikiLink = {
   status: WikiStatus;
 };
 
+type PeptideKind = 'peptide' | 'blend';
+
+type BlendComponent = {
+  peptideId: string;
+  name: string;
+  ratio: string;
+};
+
 type Peptide = {
   id: string;
   name: string;
+  kind?: PeptideKind;
   categories: string[];
   description?: string;
+  components?: BlendComponent[];
   wikiLinks?: WikiLink[];
   peptidepediaUrl?: string;
 };
@@ -87,8 +97,10 @@ type VendorForm = {
 
 type PeptideForm = {
   name: string;
+  kind: PeptideKind;
   categories: string;
   description: string;
+  components: BlendComponent[];
   wikiLinks: WikiLink[];
 };
 
@@ -173,8 +185,10 @@ const emptyVendorForm: VendorForm = {
 
 const emptyPeptideForm: PeptideForm = {
   name: '',
+  kind: 'peptide',
   categories: '',
   description: '',
+  components: [],
   wikiLinks: createDefaultWikiLinks(),
 };
 
@@ -924,8 +938,10 @@ function AdminPage({
     setEditingPeptide(peptide);
     setPeptideForm({
       name: peptide.name,
+      kind: normalizePeptideKind(peptide.kind),
       categories: peptide.categories.join(', '),
       description: peptide.description ?? '',
+      components: normalizeBlendComponents(peptide.components),
       wikiLinks: createWikiLinkFormRows(peptide),
     });
     setWikiStatus('');
@@ -940,6 +956,11 @@ function AdminPage({
 
     if (!name) {
       setStatus('Peptide name is required.');
+      return;
+    }
+
+    if (peptideForm.kind === 'blend' && normalizeBlendComponents(peptideForm.components).length === 0) {
+      setStatus('Blend components are required.');
       return;
     }
 
@@ -959,8 +980,10 @@ function AdminPage({
       const peptide: Peptide = {
         id,
         name,
+        kind: peptideForm.kind,
         categories: normalizedCategories,
         description: sanitizeText(peptideForm.description),
+        components: peptideForm.kind === 'blend' ? normalizeBlendComponents(peptideForm.components) : [],
         wikiLinks: normalizeWikiLinks({ wikiLinks: peptideForm.wikiLinks }),
       };
 
@@ -1087,6 +1110,41 @@ function AdminPage({
         wikiLinks: wikiLinks.length > 0 ? wikiLinks : [createWikiLink({ source: 'other', status: 'manual', url: '' })],
       };
     });
+  };
+
+  const updateBlendComponent = (index: number, fields: Partial<BlendComponent>) => {
+    setPeptideForm((currentForm) => ({
+      ...currentForm,
+      components: currentForm.components.map((component, currentIndex) =>
+        currentIndex === index ? { ...component, ...fields } : component,
+      ),
+    }));
+  };
+
+  const updateBlendComponentPeptide = (index: number, peptideId: string) => {
+    const linkedPeptide = peptides.find((peptide) => peptide.id === peptideId);
+
+    updateBlendComponent(index, {
+      peptideId,
+      ...(linkedPeptide ? { name: linkedPeptide.name } : {}),
+    });
+  };
+
+  const addBlendComponent = () => {
+    setPeptideForm((currentForm) => ({
+      ...currentForm,
+      components: [
+        ...currentForm.components,
+        { peptideId: '', name: '', ratio: '' },
+      ],
+    }));
+  };
+
+  const removeBlendComponent = (index: number) => {
+    setPeptideForm((currentForm) => ({
+      ...currentForm,
+      components: currentForm.components.filter((_, currentIndex) => currentIndex !== index),
+    }));
   };
 
   const autofillWikiLinks = async () => {
@@ -1231,8 +1289,10 @@ function AdminPage({
         const peptide = {
           id: existingPeptide?.id ?? row.id,
           name: normalizePeptideName(row.name),
+          kind: normalizePeptideKind(row.kind),
           categories: row.categories,
           description: row.description ?? '',
+          components: normalizePeptideKind(row.kind) === 'blend' ? normalizeBlendComponents(row.components) : [],
           wikiLinks: normalizeWikiLinks(row),
         };
 
@@ -1510,8 +1570,14 @@ function AdminPage({
               {sortedPeptides.map((peptide) => (
                 <article className="admin-row" key={peptide.id}>
                   <div>
-                    <strong>{peptide.name}</strong>
+                    <strong>
+                      {peptide.name}
+                      {normalizePeptideKind(peptide.kind) === 'blend' && <span className="admin-peptide-kind">Blend</span>}
+                    </strong>
                     <span>{peptide.categories.length > 0 ? peptide.categories.join(', ') : 'No categories'}</span>
+                    {normalizePeptideKind(peptide.kind) === 'blend' && (
+                      <span>{formatBlendComponents(peptide.components)}</span>
+                    )}
                     {peptide.description && <p>{peptide.description}</p>}
                   </div>
                   <div className="admin-wiki-links">
@@ -1865,6 +1931,16 @@ function AdminPage({
               onChange={(value) => setPeptideForm({ ...peptideForm, name: value })}
             />
             <label className="admin-field">
+              <span>Type</span>
+              <select
+                value={peptideForm.kind}
+                onChange={(event) => setPeptideForm({ ...peptideForm, kind: event.target.value as PeptideKind })}
+              >
+                <option value="peptide">Peptide</option>
+                <option value="blend">Blend</option>
+              </select>
+            </label>
+            <label className="admin-field">
               <span>Categories</span>
               <input
                 type="text"
@@ -1880,6 +1956,57 @@ function AdminPage({
               </datalist>
             </label>
             <AdminTextArea label="Description" value={peptideForm.description} onChange={(value) => setPeptideForm({ ...peptideForm, description: value })} />
+            {peptideForm.kind === 'blend' && (
+              <div className="admin-blend-editor">
+                <div className="admin-blend-editor__header">
+                  <span>Blend Components</span>
+                  <button type="button" onClick={addBlendComponent}>
+                    Add Component
+                  </button>
+                </div>
+                {peptideForm.components.map((component, index) => (
+                  <div className="admin-blend-row" key={`${component.peptideId}-${index}`}>
+                    <label>
+                      <span>Dictionary Link</span>
+                      <select
+                        value={component.peptideId}
+                        onChange={(event) => updateBlendComponentPeptide(index, event.target.value)}
+                      >
+                        <option value="">Unlinked</option>
+                        {peptides
+                          .filter((peptide) => peptide.id !== editingPeptide?.id)
+                          .map((peptide) => (
+                            <option key={peptide.id} value={peptide.id}>
+                              {peptide.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Name</span>
+                      <input
+                        type="text"
+                        value={component.name}
+                        onChange={(event) => updateBlendComponent(index, { name: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>Ratio</span>
+                      <input
+                        type="text"
+                        value={component.ratio}
+                        placeholder="1:1"
+                        onChange={(event) => updateBlendComponent(index, { ratio: event.target.value })}
+                      />
+                    </label>
+                    <button type="button" onClick={() => removeBlendComponent(index)}>
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                {peptideForm.components.length === 0 && <p className="admin-help">Add at least one component when the recipe is known.</p>}
+              </div>
+            )}
             <div className="admin-wiki-editor">
               <div className="admin-wiki-editor__header">
                 <span>Wiki Links</span>
@@ -1952,14 +2079,14 @@ function AdminPage({
                 onChange={loadPeptideBatch}
               />
             </label>
-            <p className="admin-help">Accepted columns: name, categories, description, wikiLinks, peptidepediaUrl, pepPediaUrl.</p>
+            <p className="admin-help">Accepted columns: name, kind, categories, description, components, wikiLinks, peptidepediaUrl, pepPediaUrl.</p>
             {batchStatus && <p className="admin-status">{batchStatus}</p>}
             {batchRows.length > 0 && (
               <div className="admin-batch-preview">
                 {batchRows.slice(0, 12).map((row) => (
                   <div className={row.errors.length > 0 ? 'admin-batch-row has-error' : 'admin-batch-row'} key={`${row.rowNumber}-${row.name}`}>
                     <strong>{row.name || `Row ${row.rowNumber}`}</strong>
-                    <span>{row.categories.join(', ') || 'No categories'}</span>
+                    <span>{normalizePeptideKind(row.kind) === 'blend' ? `Blend: ${formatBlendComponents(row.components)}` : row.categories.join(', ') || 'No categories'}</span>
                     <small>{row.errors.length > 0 ? row.errors.join(', ') : 'Ready'}</small>
                   </div>
                 ))}
@@ -2733,8 +2860,10 @@ async function searchWikiLinks(name: string): Promise<{ name: string; wikiLinks:
 function createEmptyPeptideForm(): PeptideForm {
   return {
     name: '',
+    kind: 'peptide',
     categories: '',
     description: '',
+    components: [],
     wikiLinks: createDefaultWikiLinks(),
   };
 }
@@ -3006,6 +3135,57 @@ function normalizePeptideName(value: string) {
   return specialNames.get(normalizeName(cleanValue)) ?? titleCase(cleanValue);
 }
 
+function normalizePeptideKind(value: unknown): PeptideKind {
+  return value === 'blend' ? 'blend' : 'peptide';
+}
+
+function normalizeBlendComponents(value: unknown): BlendComponent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const components: BlendComponent[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const component of value) {
+    if (!component || typeof component !== 'object' || Array.isArray(component)) {
+      continue;
+    }
+
+    const sourceComponent = component as Partial<BlendComponent>;
+    const peptideId = sanitizeToken(sourceComponent.peptideId);
+    const name = sanitizeText(sourceComponent.name ?? '');
+    const ratio = sanitizeText(sourceComponent.ratio ?? '');
+
+    if (!name) {
+      continue;
+    }
+
+    const key = peptideId || normalizeName(name);
+
+    if (seenKeys.has(key)) {
+      continue;
+    }
+
+    seenKeys.add(key);
+    components.push({ peptideId, name, ratio });
+  }
+
+  return components;
+}
+
+function formatBlendComponents(components: unknown) {
+  const normalizedComponents = normalizeBlendComponents(components);
+
+  if (normalizedComponents.length === 0) {
+    return 'No components listed';
+  }
+
+  return normalizedComponents
+    .map((component) => component.ratio ? `${component.name} (${component.ratio})` : component.name)
+    .join(', ');
+}
+
 function normalizeCategories(value: string | string[]) {
   const rawCategories = Array.isArray(value) ? value : parseList(value);
   const categories: string[] = [];
@@ -3069,6 +3249,10 @@ function sanitizeUrl(value: string) {
   } catch {
     return '';
   }
+}
+
+function sanitizeToken(value: unknown) {
+  return String(value ?? '').trim().replace(/[^a-zA-Z0-9._:-]/g, '-').slice(0, 120);
 }
 
 function titleCase(value: string) {

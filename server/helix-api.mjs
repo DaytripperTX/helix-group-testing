@@ -487,11 +487,9 @@ async function searchWiki(name) {
 }
 
 async function searchPeptidepedia(name) {
-  const normalizedName = normalizeSearchText(name);
-
   const fallbackMatch = peptidepediaIndex.find((entry) =>
-    normalizeSearchText(entry.name) === normalizedName ||
-    entry.aliases.some((alias) => normalizeSearchText(alias) === normalizedName),
+    matchesBlendSearchName(name, entry.name) ||
+    entry.aliases.some((alias) => matchesBlendSearchName(name, alias)),
   );
 
   try {
@@ -501,8 +499,8 @@ async function searchPeptidepedia(name) {
       const html = await response.text();
       const entries = extractPeptidepediaEntries(html);
       const match = entries.find((entry) =>
-        normalizeSearchText(entry.name) === normalizedName ||
-        entry.aliases.some((alias) => normalizeSearchText(alias) === normalizedName),
+        matchesBlendSearchName(name, entry.name) ||
+        entry.aliases.some((alias) => matchesBlendSearchName(name, alias)),
       );
 
       if (match) {
@@ -517,12 +515,12 @@ async function searchPeptidepedia(name) {
 }
 
 async function searchPepPedia(name) {
-  const normalizedName = normalizeSearchText(name);
+  const normalizedNames = createBlendSearchVariants(name);
   const entries = await getPepPediaIndex();
   const exactMatch = entries.find((entry) =>
-    normalizeSearchText(entry.slug) === normalizedName ||
-    normalizeSearchText(entry.slug.replace(/-/g, ' ')) === normalizedName ||
-    normalizeSearchText(entry.slug.replace(/-plus\b/g, '+')) === normalizedName,
+    createBlendSearchVariants(entry.slug).some((entryName) => normalizedNames.includes(entryName)) ||
+    createBlendSearchVariants(entry.slug.replace(/-/g, ' ')).some((entryName) => normalizedNames.includes(entryName)) ||
+    createBlendSearchVariants(entry.slug.replace(/-plus\b/g, '+')).some((entryName) => normalizedNames.includes(entryName)),
   );
 
   if (exactMatch) {
@@ -568,6 +566,28 @@ function stripHtml(value) {
 
 function normalizeSearchText(value) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function matchesBlendSearchName(query, candidate) {
+  const queryNames = createBlendSearchVariants(query);
+  const candidateNames = createBlendSearchVariants(candidate);
+
+  return candidateNames.some((candidateName) => queryNames.includes(candidateName));
+}
+
+function createBlendSearchVariants(value) {
+  const cleanValue = String(value ?? '').trim();
+  const variants = [
+    cleanValue,
+    cleanValue.replace(/\b(blend|stack)\b/gi, ' '),
+    `${cleanValue} blend`,
+    `${cleanValue} stack`,
+  ];
+
+  return variants
+    .map((variant) => normalizeSearchText(variant))
+    .filter(Boolean)
+    .filter((variant, index, variantList) => variantList.indexOf(variant) === index);
 }
 
 function createWikiLink({ source, url, status }) {

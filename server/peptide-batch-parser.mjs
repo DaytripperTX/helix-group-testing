@@ -19,8 +19,10 @@ export async function parsePeptideBatch({ source, peptides }) {
       rowNumber: index + 2,
       id: existingPeptide?.id ?? createUniqueId(name || `peptide-${index + 2}`, existingPeptides),
       name,
+      kind: normalizedRow.kind,
       categories: normalizeCategories(normalizedRow.categories),
       description: sanitizeText(normalizedRow.description),
+      components: normalizedRow.components,
       wikiLinks: normalizedRow.wikiLinks,
       errors: [],
     };
@@ -39,6 +41,14 @@ export async function parsePeptideBatch({ source, peptides }) {
 
     if (normalizedRow.wikiLinksError) {
       peptide.errors.push(normalizedRow.wikiLinksError);
+    }
+
+    if (normalizedRow.componentsError) {
+      peptide.errors.push(normalizedRow.componentsError);
+    }
+
+    if (!normalizedRow.componentsError && normalizedRow.kind === 'blend' && normalizedRow.components.length === 0) {
+      peptide.errors.push('Blend components are required');
     }
 
     return peptide;
@@ -63,6 +73,7 @@ function normalizeSpreadsheetRow(row) {
     Object.entries(row).map(([key, value]) => [key.trim().toLowerCase().replace(/[^a-z0-9]/g, ''), String(value ?? '').trim()]),
   );
 
+  const componentsResult = parseSpreadsheetComponents(fields.get('components') ?? fields.get('blendcomponents') ?? '');
   const wikiLinksResult = parseSpreadsheetWikiLinks({
     wikiLinks: fields.get('wikilinks') ?? '',
     peptidepediaUrl: fields.get('peptidepediaurl') ?? fields.get('peptidepedia') ?? fields.get('url') ?? '',
@@ -71,11 +82,44 @@ function normalizeSpreadsheetRow(row) {
 
   return {
     name: fields.get('name') ?? '',
+    kind: normalizePeptideKind(fields.get('kind') ?? fields.get('type') ?? ''),
     categories: fields.get('categories') ?? fields.get('category') ?? '',
     description: fields.get('description') ?? '',
+    components: componentsResult.components,
+    componentsError: componentsResult.error,
     wikiLinks: wikiLinksResult.wikiLinks,
     wikiLinksError: wikiLinksResult.error,
   };
+}
+
+function parseSpreadsheetComponents(value) {
+  if (!value.trim()) {
+    return {
+      components: [],
+      error: '',
+    };
+  }
+
+  try {
+    const parsedComponents = JSON.parse(value);
+
+    if (!Array.isArray(parsedComponents)) {
+      return {
+        components: [],
+        error: 'Invalid components JSON',
+      };
+    }
+
+    return {
+      components: normalizeBlendComponents(parsedComponents),
+      error: '',
+    };
+  } catch {
+    return {
+      components: [],
+      error: 'Invalid components JSON',
+    };
+  }
 }
 
 function parseSpreadsheetWikiLinks({ wikiLinks, peptidepediaUrl, pepPediaUrl }) {
@@ -130,6 +174,45 @@ function normalizePeptideName(value) {
   ]);
 
   return specialNames.get(normalizeName(cleanValue)) ?? titleCase(cleanValue);
+}
+
+function normalizePeptideKind(value) {
+  const normalizedKind = normalizeName(value);
+  return normalizedKind === 'blend' ? 'blend' : 'peptide';
+}
+
+function normalizeBlendComponents(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const components = [];
+  const seenKeys = new Set();
+
+  for (const component of value) {
+    if (!component || typeof component !== 'object' || Array.isArray(component)) {
+      continue;
+    }
+
+    const peptideId = sanitizeToken(component.peptideId);
+    const name = sanitizeText(component.name);
+    const ratio = sanitizeText(component.ratio);
+
+    if (!name) {
+      continue;
+    }
+
+    const key = peptideId || normalizeName(name);
+
+    if (seenKeys.has(key)) {
+      continue;
+    }
+
+    seenKeys.add(key);
+    components.push({ peptideId, name, ratio });
+  }
+
+  return components;
 }
 
 function normalizeCategories(value) {
@@ -283,6 +366,10 @@ function sanitizeUrl(value) {
   } catch {
     return '';
   }
+}
+
+function sanitizeToken(value) {
+  return String(value ?? '').trim().replace(/[^a-zA-Z0-9._:-]/g, '-').slice(0, 120);
 }
 
 function titleCase(value) {

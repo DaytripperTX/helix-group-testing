@@ -761,7 +761,7 @@ function normalizeCollectionItems(collectionName, items) {
 
 function normalizeCollectionItem(collectionName, item) {
   if (collectionName === 'peptides') {
-    return normalizePeptideItem(item);
+    return normalizePeptideItem(item, {}, { requireBlendComponents: true });
   }
 
   if (collectionName === 'rounds') {
@@ -926,14 +926,61 @@ function sanitizeRoundTokenArray(value, maxItems, maxLength) {
 }
 
 function normalizeDateString(value) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+  if (typeof value !== 'string' || !value.trim()) {
     return '';
   }
 
   const cleanValue = value.trim();
-  const timestamp = Date.parse(`${cleanValue}T00:00:00.000Z`);
+  const numericMatch = cleanValue.match(/^(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})$/);
 
-  return Number.isFinite(timestamp) ? cleanValue : '';
+  if (numericMatch) {
+    const [, firstPart, secondPart, thirdPart] = numericMatch;
+    const firstNumber = Number(firstPart);
+    const secondNumber = Number(secondPart);
+    const thirdNumber = Number(thirdPart);
+
+    if (firstPart.length === 4) {
+      return formatRoundDateParts(secondNumber, thirdNumber, firstNumber);
+    }
+
+    return formatRoundDateParts(firstNumber, secondNumber, normalizeRoundDateYear(thirdNumber));
+  }
+
+  const timestamp = Date.parse(cleanValue);
+
+  if (!Number.isFinite(timestamp)) {
+    return '';
+  }
+
+  const parsedDate = new Date(timestamp);
+
+  return formatRoundDateParts(parsedDate.getUTCMonth() + 1, parsedDate.getUTCDate(), parsedDate.getUTCFullYear());
+}
+
+function normalizeRoundDateYear(year) {
+  if (year < 100) {
+    return year >= 70 ? 1900 + year : 2000 + year;
+  }
+
+  return year;
+}
+
+function formatRoundDateParts(month, day, year) {
+  const parsedDate = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    parsedDate.getUTCFullYear() !== year ||
+    parsedDate.getUTCMonth() !== month - 1 ||
+    parsedDate.getUTCDate() !== day
+  ) {
+    return '';
+  }
+
+  const displayMonth = String(month).padStart(2, '0');
+  const displayDay = String(day).padStart(2, '0');
+  const displayYear = String(year % 100).padStart(2, '0');
+
+  return `${displayMonth}/${displayDay}/${displayYear}`;
 }
 
 function normalizeDateTimeString(value) {
@@ -1008,7 +1055,7 @@ function normalizePeptideImportItem(item) {
     name,
     categories,
     description: typeof item.description === 'string' ? item.description.trim() : '',
-  });
+  }, {}, { requireBlendComponents: true });
 }
 
 async function enrichDocumentFromSeed(collectionName, config, document) {
@@ -1032,17 +1079,72 @@ async function enrichDocumentFromSeed(collectionName, config, document) {
   }
 }
 
-function normalizePeptideItem(item, seedItem = {}) {
+function normalizePeptideItem(item, seedItem = {}, options = {}) {
+  const kind = normalizePeptideKind(item?.kind ?? seedItem?.kind);
+  const components = normalizeBlendComponents(item?.components ?? seedItem?.components);
+
+  if (options.requireBlendComponents && kind === 'blend' && components.length === 0) {
+    throw createHttpError(400, 'Blend components are required.');
+  }
+
   const mergedItem = {
     ...seedItem,
     ...item,
+    kind,
     description: item?.description || seedItem?.description || '',
+    components: kind === 'blend' ? components : [],
     wikiLinks: normalizePeptideWikiLinks(item, seedItem),
   };
 
   delete mergedItem.peptidepediaUrl;
 
   return mergedItem;
+}
+
+function normalizePeptideKind(value) {
+  return value === 'blend' ? 'blend' : 'peptide';
+}
+
+function normalizeBlendComponents(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const components = [];
+  const seenKeys = new Set();
+
+  for (const component of value) {
+    if (!component || typeof component !== 'object' || Array.isArray(component)) {
+      continue;
+    }
+
+    const peptideId = sanitizeRoundToken(component.peptideId, 120);
+    const name = sanitizeTextField(component.name, {
+      maxLength: 120,
+      fieldName: 'Blend component name',
+      required: false,
+    });
+    const ratio = sanitizeTextField(component.ratio, {
+      maxLength: 80,
+      fieldName: 'Blend component ratio',
+      required: false,
+    });
+
+    if (!name) {
+      continue;
+    }
+
+    const key = peptideId || name.toLowerCase();
+
+    if (seenKeys.has(key)) {
+      continue;
+    }
+
+    seenKeys.add(key);
+    components.push({ peptideId, name, ratio });
+  }
+
+  return components;
 }
 
 function normalizePeptideWikiLinks(item = {}, seedItem = {}) {
