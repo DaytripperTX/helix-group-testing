@@ -1235,7 +1235,7 @@ function CoasPage() {
               Showing {filteredResults.length} of {coaResults.length} results
             </div>
 
-            <div className="coa-table-shell">
+            <div className="coa-table-shell" tabIndex={0} aria-label="Scrollable COA results table">
               <table className="coa-results-table" aria-describedby="coa-results-count">
                 <colgroup>
                   <col className="coa-col-peptide" />
@@ -1439,7 +1439,7 @@ function getCoaHashSelection() {
 }
 
 function filterCoaResults(results: CoaResult[], searchTerm: string, peptideFilter: string) {
-  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+  const normalizedSearchTerm = normalizeCoaSearchText(searchTerm);
 
   return results.filter((result) => {
     if (peptideFilter !== 'all' && result.peptideName !== peptideFilter) {
@@ -1450,7 +1450,7 @@ function filterCoaResults(results: CoaResult[], searchTerm: string, peptideFilte
       return true;
     }
 
-    return [
+    return normalizeCoaSearchText([
       result.peptideName,
       result.mass,
       result.batchNumber,
@@ -1464,10 +1464,17 @@ function filterCoaResults(results: CoaResult[], searchTerm: string, peptideFilte
       result.sterility,
       result.capColor,
     ]
-      .join(' ')
-      .toLowerCase()
+      .join(' '))
       .includes(normalizedSearchTerm);
   });
+}
+
+function normalizeCoaSearchText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9.%+]+/g, ' ')
+    .replace(/\s+/g, ' ');
 }
 
 function createCoaResult(row: CoaTrackerRow, index: number): CoaResult {

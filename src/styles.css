@@ -4640,18 +4640,32 @@ h2 {
 }
 
 .coa-table-shell {
-  overflow-x: auto;
+  max-height: calc(100vh - 330px);
+  overflow: auto;
+  overscroll-behavior: contain;
   border: 1px solid #d9e4eb;
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 16px 36px rgba(5, 8, 22, 0.07);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.coa-table-shell::-webkit-scrollbar {
+  display: none;
+}
+
+.coa-table-shell:focus {
+  outline: 3px solid rgba(19, 244, 255, 0.18);
+  outline-offset: 3px;
 }
 
 .coa-results-table {
   width: 100%;
   min-width: 1548px;
   table-layout: fixed;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .coa-col-peptide {
@@ -4711,6 +4725,9 @@ h2 {
 }
 
 .coa-results-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   background: #f8fbfd;
   color: #536173;
   font-size: 0.77rem;
@@ -4720,6 +4737,22 @@ h2 {
   text-align: center;
   text-transform: uppercase;
   white-space: normal;
+}
+
+.coa-results-table th + th {
+  border-left: 1px solid #c6d5df;
+}
+
+.coa-results-table tbody td + td {
+  border-left: 1px solid rgba(198, 213, 223, 0.11);
+}
+
+.coa-results-table th:first-child {
+  border-top-left-radius: 8px;
+}
+
+.coa-results-table th:last-child {
+  border-top-right-radius: 8px;
 }
 
 .coa-results-table tbody tr {
@@ -5827,6 +5860,7 @@ h2 {
     grid-template-columns: minmax(100px, 0.38fr) minmax(0, 1fr);
     gap: 10px;
     align-items: center;
+    border-left: 0;
     border-bottom: 1px solid #edf2f6;
     padding: 10px 12px;
     font-size: 0.9rem;
