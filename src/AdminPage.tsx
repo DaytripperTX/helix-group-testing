@@ -172,6 +172,11 @@ type RoundPeptideSort = {
   direction: 'asc' | 'desc';
 };
 
+type PeptideModalOrigin =
+  | { type: 'price-list'; itemId: string }
+  | { type: 'round-row'; rowId: string }
+  | null;
+
 const emptyVendorForm: VendorForm = {
   name: '',
   nickname: '',
@@ -258,6 +263,7 @@ function AdminPage({
   const [editingPeptide, setEditingPeptide] = useState<Peptide | null>(null);
   const [peptideForm, setPeptideForm] = useState<PeptideForm>(emptyPeptideForm);
   const [isPeptideModalOpen, setIsPeptideModalOpen] = useState(false);
+  const [peptideModalOrigin, setPeptideModalOrigin] = useState<PeptideModalOrigin>(null);
   const [editingRound, setEditingRound] = useState<Round | null>(null);
   const [roundForm, setRoundForm] = useState<RoundForm>(emptyRoundForm);
   const [roundPeptideSort, setRoundPeptideSort] = useState<RoundPeptideSort | null>(null);
@@ -562,6 +568,18 @@ function AdminPage({
     );
   };
 
+  const beginAddPeptideFromPriceListItem = (item: VendorPriceListItem) => {
+    setEditingPeptide(null);
+    setPeptideForm({
+      ...createEmptyPeptideForm(),
+      name: sanitizeText(item.productName),
+    });
+    setPeptideModalOrigin({ type: 'price-list', itemId: item.id });
+    setWikiStatus('');
+    setIsPeptideModalOpen(true);
+    setStatus('');
+  };
+
   const saveVendorPriceList = async () => {
     if (!priceListDraft) {
       setPriceListStatus('Parse or load a price list before saving.');
@@ -677,7 +695,7 @@ function AdminPage({
       roundDiscountPercent: String(round.roundDiscountPercent || ''),
       priceSourceMode: round.priceSourceMode,
       priceListSnapshot: round.priceListSnapshot,
-      peptides: round.peptides,
+      peptides: round.peptides.map((row) => normalizeRoundPeptideDraftRow(row, peptides, round.priceListSnapshot)),
     });
     setRoundPriceListFile(null);
     setRoundPriceListUrl(round.priceListSnapshot?.source?.type === 'google-sheet' ? round.priceListSnapshot.source.url : '');
@@ -794,7 +812,10 @@ function AdminPage({
 
       setRoundForm((currentForm) => ({
         ...currentForm,
-        peptides: [...currentForm.peptides, ...validRows],
+        peptides: [
+          ...currentForm.peptides,
+          ...validRows.map((row) => normalizeRoundPeptideDraftRow(row, peptides, currentForm.priceListSnapshot)),
+        ],
       }));
       setRoundPriceListStatus(`${validRows.length} peptide rows imported.`);
     } catch (error) {
@@ -829,6 +850,15 @@ function AdminPage({
     }));
   };
 
+  const updateRoundPeptideLink = (rowId: string, peptideId: string) => {
+    const peptide = peptides.find((currentPeptide) => currentPeptide.id === peptideId);
+
+    updateRoundPeptideRow(rowId, {
+      peptideId: peptide?.id ?? '',
+      peptideName: peptide?.name ?? getRoundRowSourceName(roundForm, rowId),
+    });
+  };
+
   const updateRoundPeptideSort = (key: RoundPeptideSortKey) => {
     setRoundPeptideSort((currentSort) => ({
       key,
@@ -851,7 +881,7 @@ function AdminPage({
 
     const linkedPeptide = item.peptideIds.length > 0
       ? peptides.find((peptide) => peptide.id === item.peptideIds[0])
-      : null;
+      : findPeptideByName(item.productName, peptides);
 
     updateRoundPeptideRow(rowId, {
       priceListItemId: item.id,
@@ -862,6 +892,18 @@ function AdminPage({
       vendorPrice: item.price,
       vendorPriceOverridden: false,
     });
+  };
+
+  const beginAddPeptideFromRoundRow = (row: RoundPeptide) => {
+    setEditingPeptide(null);
+    setPeptideForm({
+      ...createEmptyPeptideForm(),
+      name: getRoundRowSourceName(roundForm, row.id),
+    });
+    setPeptideModalOrigin({ type: 'round-row', rowId: row.id });
+    setWikiStatus('');
+    setIsPeptideModalOpen(true);
+    setStatus('');
   };
 
   const saveRound = async (event: FormEvent<HTMLFormElement>) => {
@@ -894,7 +936,7 @@ function AdminPage({
         participants: Math.max(0, Math.trunc(parseNullableNumber(roundForm.participants) ?? 0)),
         roundDiscountPercent: Math.min(100, Math.max(0, parseNullableNumber(roundForm.roundDiscountPercent) ?? 0)),
         priceListSnapshot,
-        peptides: roundForm.peptides.map(normalizeRoundPeptideFormRow),
+        peptides: roundForm.peptides.map((row) => normalizeRoundPeptideFormRow(row, peptides, roundForm.priceListSnapshot)),
         createdAt: editingRound?.createdAt || now,
         updatedAt: now,
       };
@@ -929,6 +971,7 @@ function AdminPage({
   const openNewPeptideModal = () => {
     setEditingPeptide(null);
     setPeptideForm(createEmptyPeptideForm());
+    setPeptideModalOrigin(null);
     setWikiStatus('');
     setIsPeptideModalOpen(true);
     setStatus('');
@@ -944,9 +987,15 @@ function AdminPage({
       components: normalizeBlendComponents(peptide.components),
       wikiLinks: createWikiLinkFormRows(peptide),
     });
+    setPeptideModalOrigin(null);
     setWikiStatus('');
     setIsPeptideModalOpen(true);
     setStatus('');
+  };
+
+  const closePeptideModal = () => {
+    setPeptideModalOrigin(null);
+    setIsPeptideModalOpen(false);
   };
 
   const savePeptide = async (event: FormEvent<HTMLFormElement>) => {
@@ -991,7 +1040,33 @@ function AdminPage({
 
       setPeptides(nextPeptides);
       setPeptideCategories(nextPeptideCategories);
-      setIsPeptideModalOpen(false);
+      if (peptideModalOrigin?.type === 'price-list') {
+        setPriceListDraft((currentDraft) =>
+          currentDraft
+            ? {
+                ...currentDraft,
+                items: currentDraft.items.map((item) =>
+                  item.id === peptideModalOrigin.itemId
+                    ? { ...item, peptideIds: [peptide.id] }
+                    : item,
+                ),
+              }
+            : currentDraft,
+        );
+      }
+
+      if (peptideModalOrigin?.type === 'round-row') {
+        setRoundForm((currentForm) => ({
+          ...currentForm,
+          peptides: currentForm.peptides.map((row) =>
+            row.id === peptideModalOrigin.rowId
+              ? { ...row, peptideId: peptide.id, peptideName: peptide.name }
+              : row,
+          ),
+        }));
+      }
+
+      closePeptideModal();
       setStatus('Peptide saved.');
     } catch (error) {
       console.error(error);
@@ -1644,7 +1719,7 @@ function AdminPage({
       </div>
 
       {isVendorModalOpen && (
-        <AdminModal title={editingVendor ? 'Edit vendor' : 'Add vendor'} onClose={() => setIsVendorModalOpen(false)}>
+        <AdminModal title={editingVendor ? 'Edit vendor' : 'Add vendor'} titleId="admin-vendor-modal-title" onClose={() => setIsVendorModalOpen(false)}>
           <form className="admin-form" onSubmit={saveVendor}>
             <AdminTextField label="Name" value={vendorForm.name} required onChange={(value) => setVendorForm({ ...vendorForm, name: value })} />
             <AdminTextField label="Nickname" value={vendorForm.nickname} onChange={(value) => setVendorForm({ ...vendorForm, nickname: value })} />
@@ -1696,7 +1771,7 @@ function AdminPage({
       )}
 
       {isRoundModalOpen && (
-        <AdminModal title={editingRound ? 'Edit round' : 'Add round'} wide onClose={() => setIsRoundModalOpen(false)}>
+        <AdminModal title={editingRound ? 'Edit round' : 'Add round'} titleId="admin-round-modal-title" wide onClose={() => setIsRoundModalOpen(false)}>
           <form className="admin-form admin-form--wide" onSubmit={saveRound}>
             <div className="admin-round-grid">
               <AdminTextField label="Round name" value={roundForm.name} required onChange={(value) => setRoundForm({ ...roundForm, name: value })} />
@@ -1827,82 +1902,97 @@ function AdminPage({
                 <RoundPeptideSortButton sortKey="notes" label="Notes" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
                 <span />
               </div>
-              {sortedRoundPeptideRows.map((row) => (
-                <div className="admin-round-row" key={row.id}>
-                  <input
-                    value={row.peptideName}
-                    list="round-peptide-options"
-                    onChange={(event) => updateRoundPeptideRow(row.id, { peptideName: event.target.value })}
-                  />
-                  <select
-                    value={row.priceListItemId}
-                    aria-label={`Price list item for ${row.peptideName || 'round peptide'}`}
-                    onChange={(event) => applyPriceListItemToRoundRow(row.id, event.target.value)}
-                  >
-                    <option value="">{row.vendorCode || 'Manual'}</option>
-                    {roundForm.priceListSnapshot?.items.map((item) => (
-                      <option value={item.id} key={item.id}>
-                        {item.vendorCode || item.productName}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    value={row.vendorPrice ?? ''}
-                    onChange={(event) => updateRoundPeptideRow(row.id, {
-                      vendorPrice: parseNullableNumber(event.target.value),
-                      vendorPriceOverridden: true,
-                    })}
-                  />
-                  <input value={row.mass} onChange={(event) => updateRoundPeptideRow(row.id, { mass: event.target.value })} />
-                  <select
-                    value={row.testingTier}
-                    onChange={(event) => updateRoundPeptideRow(row.id, { testingTier: event.target.value as TestingTierId })}
-                  >
-                    {testingTierOptions.map((tier) => (
-                      <option value={tier.id} key={tier.id}>
-                        {tier.label}
-                      </option>
-                    ))}
-                  </select>
-                  <input value={row.additionalTesting} onChange={(event) => updateRoundPeptideRow(row.id, { additionalTesting: event.target.value })} />
-                  <label className="admin-round-checkbox" aria-label={`${row.peptideName || 'Peptide'} batch conformity`}>
+              {sortedRoundPeptideRows.map((row) => {
+                const rowLinkedPeptide = peptides.find((peptide) => peptide.id === row.peptideId) ?? null;
+                const rowPeptideSelectValue = rowLinkedPeptide?.id ?? '';
+
+                return (
+                  <div className="admin-round-row" key={row.id}>
+                    <div className="admin-peptide-link-cell">
+                      <select
+                        className="admin-peptide-link-select"
+                        value={rowPeptideSelectValue}
+                        aria-label={`Peptide link for ${getRoundRowSourceName(roundForm, row.id) || 'round peptide'}`}
+                        onChange={(event) => updateRoundPeptideLink(row.id, event.target.value)}
+                      >
+                        <option value="">Unlinked</option>
+                        {peptides.map((peptide) => (
+                          <option key={peptide.id} value={peptide.id}>
+                            {peptide.name}
+                          </option>
+                        ))}
+                      </select>
+                      {!rowPeptideSelectValue && (
+                        <button className="admin-inline-add-button" type="button" onClick={() => beginAddPeptideFromRoundRow(row)}>
+                          Add Peptide
+                        </button>
+                      )}
+                    </div>
+                    <select
+                      value={row.priceListItemId}
+                      aria-label={`Price list item for ${row.peptideName || 'round peptide'}`}
+                      onChange={(event) => applyPriceListItemToRoundRow(row.id, event.target.value)}
+                    >
+                      <option value="">{row.vendorCode || 'Manual'}</option>
+                      {roundForm.priceListSnapshot?.items.map((item) => (
+                        <option value={item.id} key={item.id}>
+                          {item.vendorCode || item.productName}
+                        </option>
+                      ))}
+                    </select>
                     <input
-                      type="checkbox"
-                      checked={row.batchConformity}
-                      onChange={(event) => updateRoundPeptideRow(row.id, { batchConformity: event.target.checked })}
+                      value={row.vendorPrice ?? ''}
+                      onChange={(event) => updateRoundPeptideRow(row.id, {
+                        vendorPrice: parseNullableNumber(event.target.value),
+                        vendorPriceOverridden: true,
+                      })}
                     />
-                  </label>
-                  <input value={row.capColor} onChange={(event) => updateRoundPeptideRow(row.id, { capColor: event.target.value })} />
-                  <div className="admin-round-counts">
-                    <input
-                      aria-label={`${row.peptideName || 'Peptide'} participant count`}
-                      value={row.participantCount || ''}
-                      onChange={(event) => updateRoundPeptideRow(row.id, { participantCount: Math.max(0, Math.trunc(parseNullableNumber(event.target.value) ?? 0)) })}
-                    />
-                    <input
-                      aria-label={`${row.peptideName || 'Peptide'} total ordered`}
-                      value={row.totalOrdered || ''}
-                      onChange={(event) => updateRoundPeptideRow(row.id, { totalOrdered: Math.max(0, Math.trunc(parseNullableNumber(event.target.value) ?? 0)) })}
-                    />
+                    <input value={row.mass} onChange={(event) => updateRoundPeptideRow(row.id, { mass: event.target.value })} />
+                    <select
+                      value={row.testingTier}
+                      onChange={(event) => updateRoundPeptideRow(row.id, { testingTier: event.target.value as TestingTierId })}
+                    >
+                      {testingTierOptions.map((tier) => (
+                        <option value={tier.id} key={tier.id}>
+                          {tier.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input value={row.additionalTesting} onChange={(event) => updateRoundPeptideRow(row.id, { additionalTesting: event.target.value })} />
+                    <label className="admin-round-checkbox" aria-label={`${row.peptideName || 'Peptide'} batch conformity`}>
+                      <input
+                        type="checkbox"
+                        checked={row.batchConformity}
+                        onChange={(event) => updateRoundPeptideRow(row.id, { batchConformity: event.target.checked })}
+                      />
+                    </label>
+                    <input value={row.capColor} onChange={(event) => updateRoundPeptideRow(row.id, { capColor: event.target.value })} />
+                    <div className="admin-round-counts">
+                      <input
+                        aria-label={`${row.peptideName || 'Peptide'} participant count`}
+                        value={row.participantCount || ''}
+                        onChange={(event) => updateRoundPeptideRow(row.id, { participantCount: Math.max(0, Math.trunc(parseNullableNumber(event.target.value) ?? 0)) })}
+                      />
+                      <input
+                        aria-label={`${row.peptideName || 'Peptide'} total ordered`}
+                        value={row.totalOrdered || ''}
+                        onChange={(event) => updateRoundPeptideRow(row.id, { totalOrdered: Math.max(0, Math.trunc(parseNullableNumber(event.target.value) ?? 0)) })}
+                      />
+                    </div>
+                    <input value={row.notes} onChange={(event) => updateRoundPeptideRow(row.id, { notes: event.target.value })} />
+                    <div className="admin-round-actions">
+                      <button type="button" onClick={() => duplicateRoundPeptideRow(row)}>
+                        Copy
+                      </button>
+                      <button type="button" onClick={() => removeRoundPeptideRow(row.id)}>
+                        Delete
+                      </button>
+                    </div>
                   </div>
-                  <input value={row.notes} onChange={(event) => updateRoundPeptideRow(row.id, { notes: event.target.value })} />
-                  <div className="admin-round-actions">
-                    <button type="button" onClick={() => duplicateRoundPeptideRow(row)}>
-                      Copy
-                    </button>
-                    <button type="button" onClick={() => removeRoundPeptideRow(row.id)}>
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {roundForm.peptides.length === 0 && <p className="admin-empty">No peptide rows yet.</p>}
             </div>
-            <datalist id="round-peptide-options">
-              {peptides.map((peptide) => (
-                <option value={peptide.name} key={peptide.id} />
-              ))}
-            </datalist>
 
             <div className="admin-modal__actions">
               <button type="button" onClick={() => setIsRoundModalOpen(false)}>
@@ -1917,7 +2007,12 @@ function AdminPage({
       )}
 
       {isPeptideModalOpen && (
-        <AdminModal title={editingPeptide ? 'Edit peptide' : 'Add peptide'} onClose={() => setIsPeptideModalOpen(false)}>
+        <AdminModal
+          title={editingPeptide ? 'Edit peptide' : 'Add peptide'}
+          titleId="admin-peptide-modal-title"
+          stacked={Boolean(peptideModalOrigin)}
+          onClose={closePeptideModal}
+        >
           <form className="admin-form" onSubmit={savePeptide}>
             <AdminTextField
               label="Name"
@@ -2057,7 +2152,7 @@ function AdminPage({
             </div>
             {wikiStatus && <p className="admin-status">{wikiStatus}</p>}
             <div className="admin-modal__actions">
-              <button type="button" onClick={() => setIsPeptideModalOpen(false)}>
+              <button type="button" onClick={closePeptideModal}>
                 Cancel
               </button>
               <button className="admin-primary-button" type="submit" disabled={isSubmitting}>
@@ -2069,7 +2164,7 @@ function AdminPage({
       )}
 
       {isBatchModalOpen && (
-        <AdminModal title="Batch import peptides" onClose={() => setIsBatchModalOpen(false)}>
+        <AdminModal title="Batch import peptides" titleId="admin-batch-modal-title" onClose={() => setIsBatchModalOpen(false)}>
           <div className="admin-form">
             <label className="admin-field">
               <span>CSV or XLSX file</span>
@@ -2105,7 +2200,7 @@ function AdminPage({
       )}
 
       {isNoteModalOpen && (
-        <AdminModal title="Add admin note" onClose={() => setIsNoteModalOpen(false)}>
+        <AdminModal title="Add admin note" titleId="admin-note-modal-title" onClose={() => setIsNoteModalOpen(false)}>
           <form className="admin-form" onSubmit={saveAdminNote}>
             <AdminTextField label="Sender" value={noteForm.sender} required onChange={(value) => setNoteForm({ ...noteForm, sender: value })} />
             <AdminTextField label="Subject" value={noteForm.subject} required onChange={(value) => setNoteForm({ ...noteForm, subject: value })} />
@@ -2142,7 +2237,7 @@ function AdminPage({
       )}
 
       {priceListVendor && (
-        <AdminModal title={`${priceListVendor.name} price list`} wide onClose={() => setPriceListVendor(null)}>
+        <AdminModal title={`${priceListVendor.name} price list`} titleId="admin-price-list-modal-title" wide onClose={() => setPriceListVendor(null)}>
           <div className="admin-form admin-form--wide">
             <div className="admin-price-source">
               <label className="admin-field">
@@ -2212,19 +2307,26 @@ function AdminPage({
                       <input value={item.mass} onChange={(event) => updatePriceListItem(item.id, 'mass', event.target.value)} />
                       <input value={item.price ?? ''} onChange={(event) => updatePriceListItem(item.id, 'price', event.target.value)} />
                       <input value={item.vialsPerPack} onChange={(event) => updatePriceListItem(item.id, 'vialsPerPack', event.target.value)} />
-                      <select
-                        className="admin-price-peptide-select"
-                        value={item.peptideIds[0] ?? ''}
-                        aria-label={`Peptide link for ${item.productName || item.vendorCode || 'price row'}`}
-                        onChange={(event) => updatePriceListItemPeptide(item.id, event.target.value)}
-                      >
-                        <option value="">Unlinked</option>
-                        {peptides.map((peptide) => (
-                          <option key={peptide.id} value={peptide.id}>
-                            {peptide.name}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="admin-peptide-link-cell">
+                        <select
+                          className="admin-price-peptide-select admin-peptide-link-select"
+                          value={item.peptideIds[0] ?? ''}
+                          aria-label={`Peptide link for ${item.productName || item.vendorCode || 'price row'}`}
+                          onChange={(event) => updatePriceListItemPeptide(item.id, event.target.value)}
+                        >
+                          <option value="">Unlinked</option>
+                          {peptides.map((peptide) => (
+                            <option key={peptide.id} value={peptide.id}>
+                              {peptide.name}
+                            </option>
+                          ))}
+                        </select>
+                        {!item.peptideIds[0] && (
+                          <button className="admin-inline-add-button" type="button" onClick={() => beginAddPeptideFromPriceListItem(item)}>
+                            Add Peptide
+                          </button>
+                        )}
+                      </div>
                       <button type="button" onClick={() => removePriceListItem(item.id)}>
                         Delete
                       </button>
@@ -2302,20 +2404,28 @@ function AdminPanelHeader({
 
 function AdminModal({
   title,
+  titleId,
   children,
   onClose,
   wide,
+  stacked,
 }: {
   title: string;
+  titleId: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  stacked?: boolean;
 }) {
+  const backdropClassName = stacked
+    ? 'admin-modal-backdrop admin-modal-backdrop--stacked'
+    : 'admin-modal-backdrop';
+
   return (
-    <div className="admin-modal-backdrop" role="presentation">
-      <section className={wide ? 'admin-modal admin-modal--wide' : 'admin-modal'} role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
+    <div className={backdropClassName} role="presentation">
+      <section className={wide ? 'admin-modal admin-modal--wide' : 'admin-modal'} role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="admin-modal__header">
-          <h2 id="admin-modal-title">{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button className="admin-modal__close" type="button" aria-label="Close" onClick={onClose}>
             x
           </button>
@@ -3445,22 +3555,82 @@ function insertAfterRoundPeptide(rows: RoundPeptide[], sourceRowId: string, inse
   ];
 }
 
-function normalizeRoundPeptideFormRow(row: RoundPeptide): RoundPeptide {
+function normalizeRoundPeptideDraftRow(
+  row: RoundPeptide,
+  peptides: Peptide[],
+  priceListSnapshot: RoundPriceListSnapshot | null,
+): RoundPeptide {
+  const linkedPeptide = resolveRoundPeptideLink(row, peptides, priceListSnapshot);
+  const sourceName = getRoundRowSourceNameFromSnapshot(row, priceListSnapshot);
+
   return {
     ...row,
-    peptideId: sanitizeText(row.peptideId),
-    peptideName: sanitizeText(row.peptideName),
-    priceListItemId: sanitizeText(row.priceListItemId),
-    vendorCode: sanitizeText(row.vendorCode),
-    vendorPrice: row.vendorPrice === null ? null : Math.max(0, Number(row.vendorPrice) || 0),
-    mass: sanitizeText(row.mass),
-    additionalTesting: sanitizeText(row.additionalTesting),
-    batchConformity: row.batchConformity === true,
-    capColor: sanitizeText(row.capColor),
-    notes: sanitizeText(row.notes),
-    participantCount: Math.max(0, Math.trunc(Number(row.participantCount) || 0)),
-    totalOrdered: Math.max(0, Math.trunc(Number(row.totalOrdered) || 0)),
+    peptideId: linkedPeptide?.id ?? '',
+    peptideName: linkedPeptide?.name ?? sourceName,
   };
+}
+
+function normalizeRoundPeptideFormRow(
+  row: RoundPeptide,
+  peptides: Peptide[],
+  priceListSnapshot: RoundPriceListSnapshot | null,
+): RoundPeptide {
+  const normalizedRow = normalizeRoundPeptideDraftRow(row, peptides, priceListSnapshot);
+
+  return {
+    ...normalizedRow,
+    peptideId: sanitizeText(normalizedRow.peptideId),
+    peptideName: sanitizeText(normalizedRow.peptideName),
+    priceListItemId: sanitizeText(normalizedRow.priceListItemId),
+    vendorCode: sanitizeText(normalizedRow.vendorCode),
+    vendorPrice: normalizedRow.vendorPrice === null ? null : Math.max(0, Number(normalizedRow.vendorPrice) || 0),
+    mass: sanitizeText(normalizedRow.mass),
+    additionalTesting: sanitizeText(normalizedRow.additionalTesting),
+    batchConformity: normalizedRow.batchConformity === true,
+    capColor: sanitizeText(normalizedRow.capColor),
+    notes: sanitizeText(normalizedRow.notes),
+    participantCount: Math.max(0, Math.trunc(Number(normalizedRow.participantCount) || 0)),
+    totalOrdered: Math.max(0, Math.trunc(Number(normalizedRow.totalOrdered) || 0)),
+  };
+}
+
+function resolveRoundPeptideLink(
+  row: RoundPeptide,
+  peptides: Peptide[],
+  priceListSnapshot: RoundPriceListSnapshot | null,
+) {
+  const linkedById = row.peptideId
+    ? peptides.find((peptide) => peptide.id === row.peptideId)
+    : null;
+
+  if (linkedById) {
+    return linkedById;
+  }
+
+  const priceListItem = getRoundPriceListItem(row, priceListSnapshot);
+  const priceListPeptide = priceListItem?.peptideIds[0]
+    ? peptides.find((peptide) => peptide.id === priceListItem.peptideIds[0])
+    : null;
+
+  return priceListPeptide ?? findPeptideByName(row.peptideName || priceListItem?.productName || '', peptides);
+}
+
+function getRoundRowSourceName(form: RoundForm, rowId: string) {
+  const row = form.peptides.find((currentRow) => currentRow.id === rowId);
+
+  return row ? getRoundRowSourceNameFromSnapshot(row, form.priceListSnapshot) : '';
+}
+
+function getRoundRowSourceNameFromSnapshot(row: RoundPeptide, priceListSnapshot: RoundPriceListSnapshot | null) {
+  const priceListItem = getRoundPriceListItem(row, priceListSnapshot);
+
+  return sanitizeText(priceListItem?.productName || row.peptideName || '');
+}
+
+function getRoundPriceListItem(row: RoundPeptide, priceListSnapshot: RoundPriceListSnapshot | null) {
+  return row.priceListItemId
+    ? priceListSnapshot?.items.find((item) => item.id === row.priceListItemId) ?? null
+    : null;
 }
 
 function getRoundTierSummary(round: Round) {
@@ -3500,6 +3670,13 @@ function formatPeptideLinks(peptideIds: string[], peptides: Peptide[]) {
   return peptideIds
     .map((peptideId) => peptides.find((peptide) => peptide.id === peptideId)?.name ?? peptideId)
     .join(', ');
+}
+
+function findPeptideByName(productName: string, peptides: Peptide[]) {
+  const peptideIds = matchPeptideIds(productName, peptides);
+  const peptideId = peptideIds[0] ?? '';
+
+  return peptideId ? peptides.find((peptide) => peptide.id === peptideId) ?? null : null;
 }
 
 function matchPeptideIds(productName: string, peptides: Peptide[]) {

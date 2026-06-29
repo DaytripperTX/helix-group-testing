@@ -139,6 +139,11 @@ main {
   background: rgba(4, 13, 24, 0.58);
 }
 
+.admin-modal-backdrop--stacked {
+  z-index: 60;
+  background: rgba(4, 13, 24, 0.42);
+}
+
 .admin-modal {
   width: min(100%, 1100px);
   max-height: calc(100vh - 18px);
@@ -871,6 +876,41 @@ main {
   font: inherit;
 }
 
+.admin-peptide-link-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.admin-peptide-link-cell select.admin-peptide-link-select {
+  min-width: 0;
+}
+
+.admin-inline-add-button {
+  min-height: 36px;
+  border: 1px solid #c8d7e1;
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: #ffffff;
+  color: #07101f;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 950;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+
+.admin-inline-add-button:hover,
+.admin-inline-add-button:focus-visible {
+  border-color: #00aeb8;
+  background: #eafbff;
+  color: #006f78;
+  outline: none;
+}
+
 .admin-round-counts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1062,6 +1102,20 @@ main {
   color: #9a341e;
   font-weight: 900;
   cursor: pointer;
+}
+
+.admin-price-row .admin-inline-add-button {
+  border-color: #c8d7e1;
+  padding: 7px 9px;
+  background: #ffffff;
+  color: #07101f;
+}
+
+.admin-price-row .admin-inline-add-button:hover,
+.admin-price-row .admin-inline-add-button:focus-visible {
+  border-color: #00aeb8;
+  background: #eafbff;
+  color: #006f78;
 }
 
 select {

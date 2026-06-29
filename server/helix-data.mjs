@@ -119,8 +119,11 @@ export async function upsertCollectionItem(collectionName, itemId, item) {
     throw createHttpError(400, 'Collection does not support item updates.');
   }
 
+  const normalizeOptions = collectionName === 'rounds'
+    ? { peptides: await readCollection('peptides') }
+    : {};
   const currentItems = Array.isArray(document.items) ? document.items : [];
-  const nextItem = normalizeCollectionItem(collectionName, item);
+  const nextItem = normalizeCollectionItem(collectionName, item, normalizeOptions);
   const nextItems = [nextItem, ...currentItems.filter((currentItem) => currentItem?.id !== itemId)];
   const nextDocument = createCollectionDocument(collectionName, nextItems);
 
@@ -759,13 +762,13 @@ function normalizeCollectionItems(collectionName, items) {
   return items;
 }
 
-function normalizeCollectionItem(collectionName, item) {
+function normalizeCollectionItem(collectionName, item, options = {}) {
   if (collectionName === 'peptides') {
     return normalizePeptideItem(item, {}, { requireBlendComponents: true });
   }
 
   if (collectionName === 'rounds') {
-    const normalizedRound = normalizeRoundItem(item);
+    const normalizedRound = normalizeRoundItem(item, options);
 
     if (!normalizedRound) {
       throw createHttpError(400, 'Invalid round.');
@@ -777,7 +780,7 @@ function normalizeCollectionItem(collectionName, item) {
   return item;
 }
 
-function normalizeRoundItem(item) {
+function normalizeRoundItem(item, options = {}) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     return null;
   }
@@ -804,24 +807,31 @@ function normalizeRoundItem(item) {
     roundDiscountPercent: normalizePercentage(item.roundDiscountPercent),
     priceListSnapshot,
     peptides: Array.isArray(item.peptides)
-      ? item.peptides.map((row, index) => normalizeRoundPeptideRow(row, index)).filter(Boolean)
+      ? item.peptides.map((row, index) => normalizeRoundPeptideRow(row, index, options.peptides, priceListSnapshot)).filter(Boolean)
       : [],
     createdAt: normalizeDateTimeString(item.createdAt),
     updatedAt: normalizeDateTimeString(item.updatedAt),
   };
 }
 
-function normalizeRoundPeptideRow(row, index) {
+function normalizeRoundPeptideRow(row, index, peptides, priceListSnapshot = null) {
   if (!row || typeof row !== 'object' || Array.isArray(row)) {
     return null;
   }
 
   const id = sanitizeRoundToken(row.id, 160) || `row-${index + 1}`;
+  const shouldResolvePeptide = Array.isArray(peptides);
+  const sourceName = sanitizeRoundText(getRoundPeptideSourceName(row, priceListSnapshot), 120);
+  const linkedPeptide = shouldResolvePeptide
+    ? resolveRoundPeptide(row, peptides, priceListSnapshot)
+    : null;
 
   return {
     id,
-    peptideId: sanitizeRoundToken(row.peptideId, 120),
-    peptideName: sanitizeRoundText(row.peptideName, 120),
+    peptideId: shouldResolvePeptide ? linkedPeptide?.id ?? '' : sanitizeRoundToken(row.peptideId, 120),
+    peptideName: shouldResolvePeptide
+      ? linkedPeptide?.name ? sanitizeRoundText(linkedPeptide.name, 120) : sourceName
+      : sanitizeRoundText(row.peptideName, 120),
     priceListItemId: sanitizeRoundToken(row.priceListItemId, 160),
     vendorCode: sanitizeRoundText(row.vendorCode, 80),
     vendorPrice: normalizeNullableMoney(row.vendorPrice),
@@ -835,6 +845,70 @@ function normalizeRoundPeptideRow(row, index) {
     participantCount: normalizeNonNegativeInteger(row.participantCount),
     totalOrdered: normalizeNonNegativeInteger(row.totalOrdered),
   };
+}
+
+function resolveRoundPeptide(row, peptides = [], priceListSnapshot = null) {
+  const knownPeptides = Array.isArray(peptides) ? peptides : [];
+  const rowPeptideId = sanitizeRoundToken(row?.peptideId, 120);
+
+  if (rowPeptideId) {
+    return knownPeptides.find((peptide) => peptide?.id === rowPeptideId) ?? null;
+  }
+
+  const priceListItem = getRoundPriceListItem(row, priceListSnapshot);
+  const priceListPeptideId = Array.isArray(priceListItem?.peptideIds)
+    ? sanitizeRoundToken(priceListItem.peptideIds[0], 120)
+    : '';
+
+  if (priceListPeptideId) {
+    const priceListPeptide = knownPeptides.find((peptide) => peptide?.id === priceListPeptideId);
+
+    if (priceListPeptide) {
+      return priceListPeptide;
+    }
+  }
+
+  return findPeptideByName(getRoundPeptideSourceName(row, priceListSnapshot), knownPeptides);
+}
+
+function getRoundPeptideSourceName(row, priceListSnapshot = null) {
+  const priceListItem = getRoundPriceListItem(row, priceListSnapshot);
+
+  return priceListItem?.productName || row?.peptideName || '';
+}
+
+function getRoundPriceListItem(row, priceListSnapshot = null) {
+  const priceListItemId = sanitizeRoundToken(row?.priceListItemId, 160);
+
+  return priceListItemId && Array.isArray(priceListSnapshot?.items)
+    ? priceListSnapshot.items.find((item) => item?.id === priceListItemId) ?? null
+    : null;
+}
+
+function findPeptideByName(name, peptides = []) {
+  const sourceNames = getNameMatchVariants(name);
+
+  if (sourceNames.length === 0) {
+    return null;
+  }
+
+  return peptides.find((peptide) =>
+    getNameMatchVariants(peptide?.name).some((peptideName) => sourceNames.includes(peptideName)),
+  ) ?? null;
+}
+
+function getNameMatchVariants(value) {
+  return [
+    value,
+    String(value ?? '').replace(/\([^)]*\)/g, ' '),
+  ]
+    .map((variant) => normalizeRoundName(variant))
+    .filter(Boolean)
+    .filter((variant, index, variants) => variants.indexOf(variant) === index);
+}
+
+function normalizeRoundName(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
 function normalizeRoundPriceListSnapshot(snapshot) {
