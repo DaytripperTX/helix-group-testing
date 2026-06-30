@@ -13,12 +13,14 @@ import {
   publicUpsertLabelTemplate,
   publicVoteLabelTemplate,
   readCollection,
+  readCoaPdfAsset,
   readLabelTemplatePreviewAsset,
   readPublicLabelTemplates,
   recoverLabelTemplate,
   permanentlyDeleteLabelTemplate,
   upsertCollectionItem,
   writeAsset,
+  writeCoaPdfAsset,
 } from './helix-data.mjs';
 import {
   createAdminSessionCookie,
@@ -29,6 +31,7 @@ import {
 } from './helix-auth.mjs';
 import { parsePeptideBatch } from './peptide-batch-parser.mjs';
 import { parseRoundPeptideBatch } from './round-peptide-batch-parser.mjs';
+import { parseCoaBatchRows } from './coa-batch-parser.mjs';
 import { parseVendorPriceList } from './vendor-price-list-parser.mjs';
 
 const maxBodyBytes = 24 * 1024 * 1024;
@@ -91,6 +94,17 @@ export async function handleHelixApiRequest(request) {
       });
     }
 
+    if (method === 'GET' && pathname.startsWith('/api/coas/') && getPathPart(pathname, 4) === 'pdf') {
+      const coaId = decodeURIComponent(getPathPart(pathname, 3));
+      const pdf = await readCoaPdfAsset(coaId);
+
+      return binaryResponse(200, pdf.buffer, {
+        'Content-Type': pdf.mimeType,
+        'Cache-Control': 'public, max-age=3600',
+        'Content-Disposition': `inline; filename="${pdf.fileName.replace(/["\\]/g, '')}"`,
+      });
+    }
+
     if (pathname === '/api/labels') {
       if (method === 'GET') {
         return jsonResponse(
@@ -145,6 +159,16 @@ export async function handleHelixApiRequest(request) {
       }
 
       return jsonResponse(200, await writeAsset(parseJsonBody(request.bodyText)));
+    }
+
+    if (pathname === '/api/admin/assets/coa-pdf' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      return jsonResponse(200, await writeCoaPdfAsset(parseJsonBody(request.bodyText)));
     }
 
     if ((pathname === '/api/admin/wiki/search' || pathname === '/api/admin/peptidepedia/search') && method === 'GET') {
@@ -207,6 +231,21 @@ export async function handleHelixApiRequest(request) {
           peptides: await readCollection('peptides'),
           priceListItems: body?.priceListItems,
           existingRows: body?.existingRows,
+        }),
+      });
+    }
+
+    if (pathname === '/api/admin/coas/parse-batch-numbers' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, {
+        rows: await parseCoaBatchRows({
+          source: body?.source,
         }),
       });
     }

@@ -3,6 +3,7 @@ import {
   sortRoundsForDisplay,
   type Round,
   type RoundPeptide,
+  type RoundPriceListItem,
   type RoundPriceListSnapshot,
   type TestingTierId,
 } from './rounds';
@@ -266,7 +267,7 @@ function AdminPage({
   const [peptideModalOrigin, setPeptideModalOrigin] = useState<PeptideModalOrigin>(null);
   const [editingRound, setEditingRound] = useState<Round | null>(null);
   const [roundForm, setRoundForm] = useState<RoundForm>(emptyRoundForm);
-  const [roundPeptideSort, setRoundPeptideSort] = useState<RoundPeptideSort | null>(null);
+  const [roundPeptideSort, setRoundPeptideSort] = useState<RoundPeptideSort | null>({ key: 'vendorCode', direction: 'asc' });
   const [isRoundModalOpen, setIsRoundModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
@@ -1934,7 +1935,7 @@ function AdminPage({
                       onChange={(event) => applyPriceListItemToRoundRow(row.id, event.target.value)}
                     >
                       <option value="">{row.vendorCode || 'Manual'}</option>
-                      {roundForm.priceListSnapshot?.items.map((item) => (
+                      {sortRoundPriceListItemsByVendorCode(roundForm.priceListSnapshot?.items ?? []).map((item) => (
                         <option value={item.id} key={item.id}>
                           {item.vendorCode || item.productName}
                         </option>
@@ -2858,6 +2859,18 @@ function sortRoundPeptideRows(rows: RoundPeptide[], sort: RoundPeptideSort | nul
   });
 
   return indexedRows.map(({ row }) => row);
+}
+
+function sortRoundPriceListItemsByVendorCode(items: RoundPriceListItem[]) {
+  return [...items].sort((first, second) => {
+    const vendorCodeComparison = compareText(first.vendorCode, second.vendorCode);
+
+    if (vendorCodeComparison !== 0) {
+      return vendorCodeComparison;
+    }
+
+    return compareText(first.productName, second.productName);
+  });
 }
 
 function getDefaultRoundPeptideSortDirection(key: RoundPeptideSortKey): RoundPeptideSort['direction'] {

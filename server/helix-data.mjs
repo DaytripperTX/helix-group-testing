@@ -13,8 +13,10 @@ const localDataDir = process.env.HELIX_LOCAL_DATA_DIR
 const legacyLabelsPath = path.join(rootDir, 'dist', 'stored-data', 'labels', 'templates.json');
 const storeName = 'helix-data';
 const labelTemplateOverridePrefix = 'label-template-overrides/';
+const coaPdfAssetPrefix = 'coa-pdfs/';
 const maxLabelPreviewBytes = 3 * 1024 * 1024;
 const maxLabelCodeLength = 20 * 1024;
+const maxCoaPdfBytes = 8 * 1024 * 1024;
 const maxReportCountBeforeHide = 5;
 const trashRetentionMs = 5 * 24 * 60 * 60 * 1000;
 const allowedPreviewMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
@@ -39,6 +41,7 @@ const collections = new Map([
   ['vendors', { fileName: 'vendors.json', kind: 'items', readAccess: 'public' }],
   ['vendor-price-lists', { fileName: 'vendor-price-lists.json', kind: 'items', readAccess: 'public' }],
   ['rounds', { fileName: 'rounds.json', kind: 'items', readAccess: 'public' }],
+  ['coas', { fileName: 'coas.json', kind: 'items', readAccess: 'public' }],
   ['admin-notes', { fileName: 'admin-notes.json', kind: 'items', readAccess: 'admin' }],
   ['current-round', { fileName: 'current-round.json', kind: 'data', readAccess: 'public' }],
   ['reports', { fileName: 'reports.json', kind: 'items', readAccess: 'admin' }],
@@ -103,6 +106,21 @@ export async function readLabelTemplatePreviewAsset(itemId, { isAdmin = false } 
   };
 }
 
+export async function readCoaPdfAsset(itemId) {
+  const coas = await readCollection('coas');
+  const coa = coas.find((item) => item?.id === itemId);
+
+  if (!coa || !coa.coaBlobKey) {
+    throw createHttpError(404, 'COA PDF not found.');
+  }
+
+  return {
+    buffer: await readCoaPdfBuffer(coa.coaBlobKey),
+    mimeType: coa.coaMimeType || 'application/pdf',
+    fileName: sanitizePreviewFileName(coa.coaFileName || `${coa.id}.pdf`, 'application/pdf'),
+  };
+}
+
 export async function upsertCollectionItem(collectionName, itemId, item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     throw createHttpError(400, 'Expected an object item.');
@@ -121,7 +139,13 @@ export async function upsertCollectionItem(collectionName, itemId, item) {
 
   const normalizeOptions = collectionName === 'rounds'
     ? { peptides: await readCollection('peptides') }
-    : {};
+    : collectionName === 'coas'
+      ? {
+          rounds: await readCollection('rounds'),
+          requireLinked: true,
+          updateTimestamp: true,
+        }
+      : {};
   const currentItems = Array.isArray(document.items) ? document.items : [];
   const nextItem = normalizeCollectionItem(collectionName, item, normalizeOptions);
   const nextItems = [nextItem, ...currentItems.filter((currentItem) => currentItem?.id !== itemId)];
@@ -238,6 +262,57 @@ export async function publicUpsertLabelTemplate(template) {
   await writeCollectionDocument('label-templates', nextDocument);
 
   return [nextTemplate, ...currentItems];
+}
+
+export async function writeCoaPdfAsset(asset) {
+  if (
+    !asset ||
+    typeof asset !== 'object' ||
+    typeof asset.fileName !== 'string' ||
+    typeof asset.mimeType !== 'string' ||
+    typeof asset.base64 !== 'string'
+  ) {
+    throw createHttpError(400, 'Invalid COA PDF upload.');
+  }
+
+  if (asset.mimeType !== 'application/pdf') {
+    throw createHttpError(400, 'COA file must be a PDF.');
+  }
+
+  const safeFileName = asset.fileName.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const buffer = Buffer.from(asset.base64, 'base64');
+
+  if (buffer.length === 0 || buffer.length > maxCoaPdfBytes) {
+    throw createHttpError(400, 'COA PDF is too large.');
+  }
+
+  if (buffer.subarray(0, 5).toString('utf8') !== '%PDF-') {
+    throw createHttpError(400, 'COA file must be a valid PDF.');
+  }
+
+  const blobKey = `${coaPdfAssetPrefix}${Date.now()}-${safeFileName || 'coa.pdf'}`;
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    await store.set(blobKey, buffer, {
+      metadata: {
+        fileName: asset.fileName,
+        mimeType: 'application/pdf',
+      },
+    });
+  } else {
+    const localAssetPath = path.join(localDataDir, blobKey);
+
+    await mkdir(path.dirname(localAssetPath), { recursive: true });
+    await writeFile(localAssetPath, buffer);
+  }
+
+  return {
+    coaFileName: asset.fileName,
+    coaMimeType: 'application/pdf',
+    coaBlobKey: blobKey,
+    coaUploadedAt: new Date().toISOString(),
+  };
 }
 
 export async function publicReportLabelTemplate(report, headers = {}) {
@@ -570,6 +645,31 @@ async function readLabelPreviewAsset(assetKey) {
   }
 }
 
+async function readCoaPdfBuffer(assetKey) {
+  const cleanAssetKey = normalizeCoaAssetKey(assetKey);
+
+  if (!cleanAssetKey) {
+    throw createHttpError(404, 'COA PDF not found.');
+  }
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    const asset = await store.get(cleanAssetKey, { type: 'arrayBuffer' });
+
+    if (!asset) {
+      throw createHttpError(404, 'COA PDF not found.');
+    }
+
+    return Buffer.from(asset);
+  }
+
+  try {
+    return await readFile(path.join(localDataDir, cleanAssetKey));
+  } catch {
+    throw createHttpError(404, 'COA PDF not found.');
+  }
+}
+
 async function getBlobStore() {
   const { getStore } = await import('@netlify/blobs');
 
@@ -759,6 +859,10 @@ function normalizeCollectionItems(collectionName, items) {
     return items.map((item) => normalizeRoundItem(item)).filter(Boolean);
   }
 
+  if (collectionName === 'coas') {
+    return items.map((item) => normalizeCoaItem(item)).filter(Boolean);
+  }
+
   return items;
 }
 
@@ -775,6 +879,16 @@ function normalizeCollectionItem(collectionName, item, options = {}) {
     }
 
     return normalizedRound;
+  }
+
+  if (collectionName === 'coas') {
+    const normalizedCoa = normalizeCoaItem(item, options);
+
+    if (!normalizedCoa) {
+      throw createHttpError(400, 'Invalid COA entry.');
+    }
+
+    return normalizedCoa;
   }
 
   return item;
@@ -909,6 +1023,101 @@ function getNameMatchVariants(value) {
 
 function normalizeRoundName(value) {
   return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function normalizeCoaItem(item, options = {}) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  const id = sanitizeRoundToken(item.id, 180);
+  const batchNumber = sanitizeRoundText(item.batchNumber, 160);
+
+  if (!id || !batchNumber) {
+    return null;
+  }
+
+  const roundLink = resolveCoaRoundLink(item, options.rounds);
+
+  if (options.requireLinked && !roundLink) {
+    throw createHttpError(400, 'COA entry must link to a round peptide.');
+  }
+
+  const sourceRound = roundLink?.round;
+  const sourceRow = roundLink?.row;
+  const code = sanitizeRoundText(item.code || sourceRow?.vendorCode, 80);
+
+  if (options.requireLinked && !code) {
+    throw createHttpError(400, 'COA code is required.');
+  }
+
+  const now = new Date().toISOString();
+  const coaBlobKey = normalizeCoaAssetKey(item.coaBlobKey);
+
+  return {
+    id,
+    roundId: sanitizeRoundToken(sourceRound?.id ?? item.roundId, 120),
+    roundName: sanitizeRoundText(sourceRound?.name ?? item.roundName, 120),
+    roundPeptideId: sanitizeRoundToken(sourceRow?.id ?? item.roundPeptideId, 160),
+    peptideId: sanitizeRoundToken(sourceRow?.peptideId ?? item.peptideId, 120),
+    peptideName: sanitizeRoundText(sourceRow?.peptideName ?? item.peptideName, 120),
+    code,
+    batchNumber,
+    capColor: sanitizeRoundText(item.capColor, 60) || 'TBD',
+    mass: sanitizeRoundText(sourceRow?.mass ?? item.mass, 60),
+    testingTier: normalizeTestingTier(sourceRow?.testingTier ?? item.testingTier),
+    dateTested: sanitizeRoundText(item.dateTested, 80),
+    averageNetContent: sanitizeRoundText(item.averageNetContent, 80) || 'Pending',
+    purity: sanitizeRoundText(item.purity, 80) || 'Pending',
+    endotoxins: sanitizeRoundText(item.endotoxins, 80) || 'Pending',
+    heavyMetals: sanitizeRoundText(item.heavyMetals, 80) || 'Pending',
+    sterility: sanitizeRoundText(item.sterility, 80) || 'Pending',
+    ...(coaBlobKey
+      ? {
+          coaFileName: sanitizeRoundText(item.coaFileName, 180) || `${id}.pdf`,
+          coaMimeType: item.coaMimeType === 'application/pdf' ? 'application/pdf' : 'application/pdf',
+          coaBlobKey,
+          coaUploadedAt: normalizeDateTimeString(item.coaUploadedAt) || now,
+        }
+      : {}),
+    createdAt: normalizeDateTimeString(item.createdAt) || now,
+    updatedAt: options.updateTimestamp
+      ? now
+      : normalizeDateTimeString(item.updatedAt) || normalizeDateTimeString(item.createdAt) || now,
+  };
+}
+
+function resolveCoaRoundLink(item, rounds) {
+  if (!Array.isArray(rounds)) {
+    return null;
+  }
+
+  const roundId = sanitizeRoundToken(item?.roundId, 120);
+  const roundPeptideId = sanitizeRoundToken(item?.roundPeptideId, 160);
+  const round = rounds.find((currentRound) => currentRound?.id === roundId);
+
+  if (!round || !Array.isArray(round.peptides)) {
+    return null;
+  }
+
+  const row = round.peptides.find((currentRow) => currentRow?.id === roundPeptideId);
+
+  return row ? { round, row } : null;
+}
+
+function normalizeCoaAssetKey(value) {
+  const cleanValue = typeof value === 'string' ? value.trim().replace(/\\/g, '/') : '';
+
+  if (
+    !cleanValue ||
+    !cleanValue.startsWith(coaPdfAssetPrefix) ||
+    cleanValue.includes('..') ||
+    !/^[a-zA-Z0-9._/-]+$/.test(cleanValue)
+  ) {
+    return '';
+  }
+
+  return cleanValue;
 }
 
 function normalizeRoundPriceListSnapshot(snapshot) {

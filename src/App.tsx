@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import AdminPage from './AdminPage';
 import FaqsPage from './FaqsPage';
 import LabelsPage from './LabelsPage';
@@ -94,29 +94,73 @@ type TestingTier = {
 
 type CoaResult = {
   id: string;
+  roundId: string;
+  roundPeptideId: string;
+  peptideId: string;
   peptideName: string;
+  code: string;
   mass: string;
   batchNumber: string;
   dateTested: string;
   roundName: string;
-  testingTier: Exclude<TestingTierId, 'none'>;
+  testingTier: TestingTierId;
   averageNetContent: string;
   purity: string;
   endotoxins: string;
   heavyMetals: string;
   sterility: string;
   capColor: string;
-  coaUrl: string;
+  coaFileName?: string;
+  coaMimeType?: string;
+  coaBlobKey?: string;
+  coaUploadedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
   vialImageUrl?: string;
 };
 
-type CoaTrackerRow = {
+type CoaBatchFormRow = {
+  id: string;
+  roundPeptideId: string;
+  batchNumber: string;
+  capColor: string;
   code: string;
+  file: File | null;
+};
+
+type CoaEditForm = {
+  roundId: string;
+  roundPeptideId: string;
+  batchNumber: string;
+  capColor: string;
+  code: string;
+  dateTested: string;
+  averageNetContent: string;
+  purity: string;
+  endotoxins: string;
+  heavyMetals: string;
+  sterility: string;
+  file: File | null;
+};
+
+type CoaUploadDraft = {
+  id: string;
+  file: File;
+  matchedCoaId: string;
+};
+
+type CoaBatchImportRow = {
   peptideName: string;
   batchNumber: string;
-  testingTier: Exclude<TestingTierId, 'none'>;
-  roundName: string;
+  code: string;
   capColor: string;
+};
+
+type CoaPdfAsset = {
+  coaFileName: string;
+  coaMimeType: 'application/pdf';
+  coaBlobKey: string;
+  coaUploadedAt: string;
 };
 
 const testingTiers: TestingTier[] = [
@@ -349,44 +393,6 @@ const batchConformityAddon = {
   ],
 } as const;
 
-const coaTrackerRows = [
-  { code: 'CU100', peptideName: 'GHK-Cu', batchNumber: 'HLX-MIA-CU100-0626-Red', testingTier: 'gold-plus', roundName: 'Round 1', capColor: 'Red' },
-  { code: 'RT30', peptideName: 'Retatrutide', batchNumber: 'HLX-MIA-RT30-0626-GREY', testingTier: 'gold', roundName: 'Round 2', capColor: 'Grey' },
-  { code: 'RT30', peptideName: 'Retatrutide', batchNumber: 'HLX-MIA-RT30-0626-BLUE', testingTier: 'gold', roundName: 'Round 2', capColor: 'Blue' },
-  { code: 'RT10', peptideName: 'Retatrutide', batchNumber: 'HLX-MIA-RT10-0626', testingTier: 'platinum', roundName: 'Round 1', capColor: 'TBD' },
-  { code: 'MS40', peptideName: 'MOTS-c (human)', batchNumber: 'HLX-MIA-MS40-0626-PURPLE', testingTier: 'gold-plus', roundName: 'Round 2', capColor: 'Purple' },
-  { code: 'MS40', peptideName: 'MOTS-c (human)', batchNumber: 'HLX-MIA-MS40-0626-BLUE', testingTier: 'gold-plus', roundName: 'Round 2', capColor: 'Blue' },
-  { code: 'NJ1000', peptideName: 'NAD+', batchNumber: 'HLX-MIA-NAD1000-0626-GREY', testingTier: 'gold-plus', roundName: 'Round 2', capColor: 'Grey' },
-  { code: 'NJ1000', peptideName: 'NAD+', batchNumber: 'HLX-MIA-NAD1000-0626-BLUE', testingTier: 'gold-plus', roundName: 'Round 2', capColor: 'Blue' },
-  { code: 'KLOW80', peptideName: 'KLOW (TB-500+BPC-157+KPV+GHK-Cu)', batchNumber: 'HLX-MIA-KLOW80-0626-BLUE', testingTier: 'gold-plus', roundName: 'Round 2', capColor: 'Blue' },
-  { code: 'KLOW80', peptideName: 'KLOW (TB-500+BPC-157+KPV+GHK-Cu)', batchNumber: 'HLX-MIA-KLOW80-0626-PURPLE', testingTier: 'gold-plus', roundName: 'Round 2', capColor: 'Purple' },
-  { code: 'CP10', peptideName: 'CJC-1295/IPA', batchNumber: 'HLX-MIA-CJIP10-0626', testingTier: 'platinum', roundName: 'Round 2', capColor: 'TBD' },
-  { code: '2S10', peptideName: 'SS-31', batchNumber: 'HLX-MIA-2S10-0626-WHITE', testingTier: 'gold-plus', roundName: 'Round 1', capColor: 'White' },
-  { code: '2S10', peptideName: 'SS-31', batchNumber: 'HLX-MIA-2S10-0626-BLUE', testingTier: 'gold-plus', roundName: 'Round 1', capColor: 'Blue' },
-  { code: 'SX5', peptideName: 'Semax', batchNumber: 'HLX-MIA-SEM5-0626', testingTier: 'gold', roundName: 'Round 1', capColor: 'TBD' },
-  { code: 'TR20', peptideName: 'Tirzepatide', batchNumber: 'HLX-MIA-TR20-0626-BLUE', testingTier: 'gold', roundName: 'Round 2', capColor: 'Blue' },
-  { code: 'TR20', peptideName: 'Tirzepatide', batchNumber: 'HLX-MIA-TR20-0626-PINK', testingTier: 'gold', roundName: 'Round 2', capColor: 'Pink' },
-  { code: 'ET10', peptideName: 'Epitalon', batchNumber: 'HLX-MIA-ET10-0626', testingTier: 'gold', roundName: 'Round 1', capColor: 'Blue' },
-  { code: '2S50', peptideName: 'SS-31', batchNumber: 'HLX-MIA-2S50-0626', testingTier: 'gold-plus', roundName: 'Round 2', capColor: 'TBD' },
-  { code: 'PN10', peptideName: 'Pinealon', batchNumber: 'HLX-MIA-PN10-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-  { code: 'TR15', peptideName: 'Tirzepatide', batchNumber: 'HLX-MIA-TR15-0626', testingTier: 'platinum', roundName: 'Round 2', capColor: 'Pink' },
-  { code: 'AD5', peptideName: 'AOD9604', batchNumber: 'HLX-MIA-AD5-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-  { code: '5OAM', peptideName: '5-Amino-1MQ', batchNumber: 'HLX-MIA-5OAM-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-  { code: 'NJ500', peptideName: 'NAD+', batchNumber: 'HLX-MIA-NAD500-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-  { code: 'IP5', peptideName: 'IPA (Ipamorelin)', batchNumber: 'HLX-MIA-IP5-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-  { code: 'SML10', peptideName: 'Sermorelin acetate', batchNumber: 'HLX-MIA-SML10-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-  { code: 'KS10', peptideName: 'Kisspeptin-10', batchNumber: 'HLX-MIA-KS10-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-  { code: 'TA5', peptideName: 'Thymosin alpha-1', batchNumber: 'HLX-MIA-TA5-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-  { code: 'P41', peptideName: 'PT-141', batchNumber: 'HLX-MIA-P41-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-  { code: 'OT5', peptideName: 'Oxytocin acetate', batchNumber: 'HLX-MIA-OT5-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-  { code: 'TR10', peptideName: 'Tirzepatide', batchNumber: 'HLX-MIA-TR10-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'Blue' },
-  { code: 'ARA', peptideName: 'ARA290 (Cibinetide)', batchNumber: 'HLX-MIA-ARA-0626', testingTier: 'gold', roundName: 'Round 2', capColor: 'TBD' },
-] satisfies CoaTrackerRow[];
-
-const coaResults = coaTrackerRows.map(createCoaResult).sort((first, second) =>
-  first.batchNumber.localeCompare(second.batchNumber, undefined, { numeric: true, sensitivity: 'base' }),
-);
-
 const navItems = publicPageItems;
 const configuredDisabledPages =
   typeof __HELIX_DISABLED_PAGES__ === 'undefined' ? [] : __HELIX_DISABLED_PAGES__;
@@ -466,7 +472,7 @@ function App() {
         {activePage === 'home' && <HomePage />}
         {activePage === 'order-form' && <OrderFormPage />}
         {activePage === 'testing' && <TestingPage />}
-        {activePage === 'coas' && <CoasPage />}
+        {activePage === 'coas' && <CoasPage isAdmin={adminSession.isAuthenticated} />}
         {activePage === 'labels' && <LabelsPage isAdmin={adminSession.isAuthenticated} />}
         {activePage === 'faqs' && <FaqsPage />}
         {(activePage === 'hxadmin' || activePage === 'hxowner') && (
@@ -1154,19 +1160,42 @@ function TestingIcon({ type }: { type: TestingIconType }) {
   );
 }
 
-function CoasPage() {
+function CoasPage({ isAdmin }: { isAdmin: boolean }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [peptideFilter, setPeptideFilter] = useState('all');
   const [selectedCoaId, setSelectedCoaId] = useState(getCoaHashSelection);
+  const [coaResults, setCoaResults] = useState<CoaResult[]>([]);
+  const [rounds, setRounds] = useState<Round[]>([]);
+  const [coaStatus, setCoaStatus] = useState('');
+  const [isSubmittingCoa, setIsSubmittingCoa] = useState(false);
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [batchRoundId, setBatchRoundId] = useState('');
+  const [batchRows, setBatchRows] = useState<CoaBatchFormRow[]>([]);
+  const [batchImportStatus, setBatchImportStatus] = useState('');
+  const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
+  const [bulkUploadDrafts, setBulkUploadDrafts] = useState<CoaUploadDraft[]>([]);
+  const [editingCoa, setEditingCoa] = useState<CoaResult | null>(null);
+  const [coaEditForm, setCoaEditForm] = useState<CoaEditForm>(createEmptyCoaEditForm());
+  const [attachingCoa, setAttachingCoa] = useState<CoaResult | null>(null);
+  const [attachCoaFile, setAttachCoaFile] = useState<File | null>(null);
+  const sortedCoaResults = useMemo(() => sortCoaResults(coaResults), [coaResults]);
   const peptideOptions = useMemo(
-    () => [...new Set(coaResults.map((result) => result.peptideName))].sort((first, second) => first.localeCompare(second)),
-    [],
+    () => [...new Set(sortedCoaResults.map((result) => result.peptideName).filter(Boolean))].sort((first, second) => first.localeCompare(second)),
+    [sortedCoaResults],
   );
   const filteredResults = useMemo(
-    () => filterCoaResults(coaResults, searchTerm, peptideFilter),
-    [searchTerm, peptideFilter],
+    () => filterCoaResults(sortedCoaResults, searchTerm, peptideFilter),
+    [sortedCoaResults, searchTerm, peptideFilter],
   );
-  const selectedCoaResult = coaResults.find((result) => result.id === selectedCoaId) ?? null;
+  const selectedCoaResult = sortedCoaResults.find((result) => result.id === selectedCoaId) ?? null;
+  const selectedBatchRound = rounds.find((round) => round.id === batchRoundId) ?? rounds[0] ?? null;
+  const selectableBatchRoundPeptides = useMemo(
+    () => sortRoundPeptidesByVendorCode(
+      selectedBatchRound?.peptides.filter((peptide) => peptide.peptideId && peptide.testingTier !== 'none') ?? [],
+    ),
+    [selectedBatchRound],
+  );
+  const editRound = rounds.find((round) => round.id === coaEditForm.roundId) ?? null;
 
   useEffect(() => {
     const handleHashChange = () => setSelectedCoaId(getCoaHashSelection());
@@ -1178,6 +1207,26 @@ function CoasPage() {
       window.removeEventListener('popstate', handleHashChange);
     };
   }, []);
+
+  useEffect(() => {
+    void refreshCoaData();
+  }, []);
+
+  const refreshCoaData = async () => {
+    try {
+      const [nextCoas, nextRounds] = await Promise.all([
+        fetchCoaResults(),
+        fetchRounds(),
+      ]);
+
+      setCoaResults(nextCoas);
+      setRounds(sortRoundsForDisplay(nextRounds));
+      setCoaStatus('');
+    } catch (error) {
+      console.error(error);
+      setCoaStatus('COA data could not be loaded.');
+    }
+  };
 
   const selectCoaResult = (resultId: string) => {
     const nextHash = `#${encodeURIComponent(resultId)}`;
@@ -1194,6 +1243,250 @@ function CoasPage() {
     setSelectedCoaId('');
   };
 
+  const openBatchModal = () => {
+    const firstRound = rounds[0] ?? null;
+
+    setBatchRoundId(firstRound?.id ?? '');
+    setBatchRows([createCoaBatchFormRow()]);
+    setBatchImportStatus('');
+    setCoaStatus('');
+    setIsBatchModalOpen(true);
+  };
+
+  const updateBatchRow = (rowId: string, fields: Partial<CoaBatchFormRow>) => {
+    setBatchRows((currentRows) =>
+      currentRows.map((row) => (row.id === rowId ? { ...row, ...fields } : row)),
+    );
+  };
+
+  const loadBatchNumberFile = async (file: File | null) => {
+    if (!file) {
+      return;
+    }
+
+    if (!selectedBatchRound) {
+      setBatchImportStatus('Choose a round before importing batch numbers.');
+      return;
+    }
+
+    setIsSubmittingCoa(true);
+    setBatchImportStatus('Importing batch numbers...');
+
+    try {
+      const importedRows = await parseCoaBatchNumberFile(file);
+      const nextRows = importedRows.map((row) => {
+        const roundPeptide = findRoundPeptideForCoaBatchImport(row, selectableBatchRoundPeptides);
+
+        return {
+          ...createCoaBatchFormRow(),
+          roundPeptideId: roundPeptide?.id ?? '',
+          batchNumber: row.batchNumber,
+          capColor: row.capColor,
+          code: row.code || roundPeptide?.vendorCode || '',
+        };
+      });
+
+      if (nextRows.length === 0) {
+        setBatchImportStatus('No batch rows were found in that file.');
+        return;
+      }
+
+      setBatchRows(nextRows);
+      setBatchImportStatus(`${nextRows.length} batch ${nextRows.length === 1 ? 'row' : 'rows'} imported.`);
+    } catch (error) {
+      console.error(error);
+      setBatchImportStatus('Batch number file could not be imported.');
+    } finally {
+      setIsSubmittingCoa(false);
+    }
+  };
+
+  const saveBatchRows = async () => {
+    if (!selectedBatchRound) {
+      setCoaStatus('Choose a round first.');
+      return;
+    }
+
+    const validRows = batchRows.filter((row) => row.roundPeptideId && row.batchNumber.trim());
+
+    if (validRows.length === 0) {
+      setCoaStatus('Add at least one linked batch number.');
+      return;
+    }
+
+    setIsSubmittingCoa(true);
+
+    try {
+      let nextCoas = coaResults;
+
+      for (const row of validRows) {
+        const roundPeptide = selectedBatchRound.peptides.find((peptide) => peptide.id === row.roundPeptideId);
+
+        if (!roundPeptide) {
+          continue;
+        }
+
+        const asset = row.file ? await uploadCoaPdf(row.file) : {};
+        nextCoas = await saveCoaEntry({
+          ...createCoaEntryFromRoundRow(selectedBatchRound, roundPeptide, row),
+          ...asset,
+        });
+      }
+
+      setCoaResults(nextCoas);
+      setIsBatchModalOpen(false);
+      setCoaStatus(`${validRows.length} batch ${validRows.length === 1 ? 'entry' : 'entries'} saved.`);
+    } catch (error) {
+      console.error(error);
+      setCoaStatus('Batch entries could not be saved.');
+    } finally {
+      setIsSubmittingCoa(false);
+    }
+  };
+
+  const openBulkUploadModal = () => {
+    setBulkUploadDrafts([]);
+    setCoaStatus('');
+    setIsBulkUploadModalOpen(true);
+  };
+
+  const loadBulkCoaFiles = (files: FileList | null) => {
+    const nextFiles = Array.from(files ?? []).filter((file) => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
+
+    setBulkUploadDrafts(nextFiles.map((file) => ({
+      id: `${file.name}-${file.lastModified}-${file.size}`,
+      file,
+      matchedCoaId: findCoaMatchForFile(file, coaResults)?.id ?? '',
+    })));
+  };
+
+  const saveBulkCoaUploads = async () => {
+    const uploadRows = bulkUploadDrafts.filter((draft) => draft.matchedCoaId);
+
+    if (uploadRows.length === 0) {
+      setCoaStatus('Match at least one PDF to a COA entry.');
+      return;
+    }
+
+    setIsSubmittingCoa(true);
+
+    try {
+      let nextCoas = coaResults;
+
+      for (const draft of uploadRows) {
+        const currentCoa = nextCoas.find((coa) => coa.id === draft.matchedCoaId);
+
+        if (!currentCoa) {
+          continue;
+        }
+
+        const asset = await uploadCoaPdf(draft.file);
+        nextCoas = await saveCoaEntry({ ...currentCoa, ...asset });
+      }
+
+      setCoaResults(nextCoas);
+      setIsBulkUploadModalOpen(false);
+      setCoaStatus(`${uploadRows.length} COA ${uploadRows.length === 1 ? 'PDF' : 'PDFs'} attached.`);
+    } catch (error) {
+      console.error(error);
+      setCoaStatus('COA PDFs could not be uploaded.');
+    } finally {
+      setIsSubmittingCoa(false);
+    }
+  };
+
+  const openEditCoaModal = (result: CoaResult) => {
+    setEditingCoa(result);
+    setCoaEditForm(createCoaEditForm(result));
+    setCoaStatus('');
+  };
+
+  const saveEditedCoa = async () => {
+    if (!editingCoa) {
+      return;
+    }
+
+    const round = rounds.find((currentRound) => currentRound.id === coaEditForm.roundId);
+    const roundPeptide = round?.peptides.find((row) => row.id === coaEditForm.roundPeptideId);
+
+    if (!round || !roundPeptide || !coaEditForm.batchNumber.trim()) {
+      setCoaStatus('Choose a linked round peptide and batch number.');
+      return;
+    }
+
+    setIsSubmittingCoa(true);
+
+    try {
+      const asset = coaEditForm.file ? await uploadCoaPdf(coaEditForm.file) : {};
+      const nextCoas = await saveCoaEntry({
+        ...editingCoa,
+      ...createCoaEntryFromRoundRow(round, roundPeptide, {
+        id: editingCoa.id,
+        batchNumber: coaEditForm.batchNumber,
+        capColor: coaEditForm.capColor,
+        code: coaEditForm.code,
+      }),
+        dateTested: coaEditForm.dateTested,
+        averageNetContent: coaEditForm.averageNetContent,
+        purity: coaEditForm.purity,
+        endotoxins: coaEditForm.endotoxins,
+        heavyMetals: coaEditForm.heavyMetals,
+        sterility: coaEditForm.sterility,
+        ...asset,
+      });
+
+      setCoaResults(nextCoas);
+      setEditingCoa(null);
+      setCoaStatus('COA entry saved.');
+    } catch (error) {
+      console.error(error);
+      setCoaStatus('COA entry could not be saved.');
+    } finally {
+      setIsSubmittingCoa(false);
+    }
+  };
+
+  const deleteEditedCoa = async () => {
+    if (!editingCoa || !window.confirm(`Delete COA entry "${editingCoa.batchNumber}"? This cannot be undone.`)) {
+      return;
+    }
+
+    setIsSubmittingCoa(true);
+
+    try {
+      setCoaResults(await deleteCoaEntry(editingCoa.id));
+      setEditingCoa(null);
+      setCoaStatus('COA entry deleted.');
+    } catch (error) {
+      console.error(error);
+      setCoaStatus('COA entry could not be deleted.');
+    } finally {
+      setIsSubmittingCoa(false);
+    }
+  };
+
+  const saveAttachCoa = async () => {
+    if (!attachingCoa || !attachCoaFile) {
+      setCoaStatus('Choose a PDF first.');
+      return;
+    }
+
+    setIsSubmittingCoa(true);
+
+    try {
+      const asset = await uploadCoaPdf(attachCoaFile);
+      setCoaResults(await saveCoaEntry({ ...attachingCoa, ...asset }));
+      setAttachingCoa(null);
+      setAttachCoaFile(null);
+      setCoaStatus('COA PDF attached.');
+    } catch (error) {
+      console.error(error);
+      setCoaStatus('COA PDF could not be attached.');
+    } finally {
+      setIsSubmittingCoa(false);
+    }
+  };
+
   return (
     <section className="coa-page" aria-labelledby="coa-title">
       <div className="section__content coa-page__content">
@@ -1203,7 +1496,19 @@ function CoasPage() {
             <h1 id="coa-title">Testing results</h1>
           </div>
           <p>Every batch is independently tested. Select a batch to view the full result summary.</p>
+          {isAdmin && (
+            <div className="coa-admin-actions">
+              <button className="coa-admin-primary" type="button" onClick={openBatchModal}>
+                Add batch numbers
+              </button>
+              <button type="button" onClick={openBulkUploadModal}>
+                Add COAs
+              </button>
+            </div>
+          )}
         </header>
+
+        {coaStatus && <p className="coa-admin-status">{coaStatus}</p>}
 
         {!selectedCoaId && (
           <>
@@ -1232,7 +1537,7 @@ function CoasPage() {
             </div>
 
             <div className="coa-results-summary" id="coa-results-count">
-              Showing {filteredResults.length} of {coaResults.length} results
+              Showing {filteredResults.length} of {sortedCoaResults.length} results
             </div>
 
             <div className="coa-table-shell" tabIndex={0} aria-label="Scrollable COA results table">
@@ -1250,6 +1555,7 @@ function CoasPage() {
                   <col className="coa-col-heavy" />
                   <col className="coa-col-sterility" />
                   <col className="coa-col-link" />
+                  {isAdmin && <col className="coa-col-admin" />}
                 </colgroup>
                 <thead>
                   <tr>
@@ -1265,6 +1571,7 @@ function CoasPage() {
                     <th scope="col">Heavy Metals</th>
                     <th scope="col">Sterility</th>
                     <th scope="col">COA</th>
+                    {isAdmin && <th scope="col">Admin</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1285,7 +1592,7 @@ function CoasPage() {
                         }}
                       >
                         <td data-label="Peptide Name">{result.peptideName}</td>
-                        <td data-label="Mass">{result.mass}</td>
+                        <td data-label="Mass">{formatMassWithUnits(result.mass)}</td>
                         <td data-label="Batch #">
                           <code>{result.batchNumber}</code>
                         </td>
@@ -1312,22 +1619,51 @@ function CoasPage() {
                           <span className={getCoaStatusClassName(result.sterility)}>{result.sterility}</span>
                         </td>
                         <td data-label="COA">
-                          <a
-                            className="coa-link"
-                            href={result.coaUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            aria-label={`Open COA for ${result.batchNumber}`}
-                            onClick={(event) => event.stopPropagation()}
-                          >
-                            View
-                          </a>
+                          {result.coaBlobKey ? (
+                            <a
+                              className="coa-link"
+                              href={getCoaPdfUrl(result)}
+                              target="_blank"
+                              rel="noreferrer"
+                              aria-label={`Open COA for ${result.batchNumber}`}
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              View
+                            </a>
+                          ) : (
+                            <span className="coa-pill coa-pill--pending">Pending</span>
+                          )}
                         </td>
+                        {isAdmin && (
+                          <td data-label="Admin">
+                            <div className="coa-row-actions">
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setAttachingCoa(result);
+                                  setAttachCoaFile(null);
+                                }}
+                              >
+                                Add COA
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openEditCoaModal(result);
+                                }}
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     ))
                   ) : (
                     <tr className="coa-empty-row">
-                      <td colSpan={12}>No COAs match the current filters.</td>
+                      <td colSpan={isAdmin ? 13 : 12}>No COAs match the current filters.</td>
                     </tr>
                   )}
                 </tbody>
@@ -1337,7 +1673,16 @@ function CoasPage() {
         )}
 
         {selectedCoaResult ? (
-          <CoaBatchDetail result={selectedCoaResult} onClear={clearSelectedCoaResult} />
+          <CoaBatchDetail
+            result={selectedCoaResult}
+            isAdmin={isAdmin}
+            onAttach={(result) => {
+              setAttachingCoa(result);
+              setAttachCoaFile(null);
+            }}
+            onClear={clearSelectedCoaResult}
+            onEdit={openEditCoaModal}
+          />
         ) : selectedCoaId ? (
           <div className="coa-detail coa-detail--empty" role="status">
             <div>
@@ -1350,15 +1695,194 @@ function CoasPage() {
             </button>
           </div>
         ) : null}
+
+        {isBatchModalOpen && (
+          <CoaModal title="Add batch numbers" onClose={() => setIsBatchModalOpen(false)}>
+            <div className="coa-modal-form">
+              <label className="coa-modal-field">
+                <span>Round</span>
+                <select value={batchRoundId} onChange={(event) => setBatchRoundId(event.target.value)}>
+                  {rounds.map((round) => (
+                    <option value={round.id} key={round.id}>
+                      {round.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="coa-modal-field">
+                <span>Bulk batch upload</span>
+                <input
+                  type="file"
+                  accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  disabled={isSubmittingCoa}
+                  onChange={(event) => {
+                    void loadBatchNumberFile(event.target.files?.[0] ?? null);
+                    event.currentTarget.value = '';
+                  }}
+                />
+              </label>
+              {batchImportStatus && <p className="coa-modal-note">{batchImportStatus}</p>}
+              <div className="coa-entry-editor">
+                {batchRows.map((row) => {
+                  const roundPeptide = selectedBatchRound?.peptides.find((peptide) => peptide.id === row.roundPeptideId) ?? null;
+
+                  return (
+                    <div className="coa-entry-row" key={row.id}>
+                      <label>
+                        <span>Peptide</span>
+                        <select
+                          value={row.roundPeptideId}
+                          onChange={(event) => {
+                            const peptide = selectedBatchRound?.peptides.find((currentPeptide) => currentPeptide.id === event.target.value);
+                            updateBatchRow(row.id, {
+                              roundPeptideId: event.target.value,
+                              code: peptide?.vendorCode ?? row.code,
+                            });
+                          }}
+                        >
+                          <option value="">Choose peptide</option>
+                          {selectableBatchRoundPeptides
+                            .map((peptide) => (
+                              <option value={peptide.id} key={peptide.id}>
+                                {peptide.peptideName} - {peptide.vendorCode || peptide.mass}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Batch #</span>
+                        <input value={row.batchNumber} onChange={(event) => updateBatchRow(row.id, { batchNumber: event.target.value })} />
+                      </label>
+                      <label>
+                        <span>Code</span>
+                        <input value={row.code} onChange={(event) => updateBatchRow(row.id, { code: event.target.value })} />
+                      </label>
+                      <label>
+                        <span>Cap color</span>
+                        <input value={row.capColor} onChange={(event) => updateBatchRow(row.id, { capColor: event.target.value })} />
+                      </label>
+                      <label>
+                        <span>COA PDF</span>
+                        <input type="file" accept="application/pdf,.pdf" onChange={(event) => updateBatchRow(row.id, { file: event.target.files?.[0] ?? null })} />
+                      </label>
+                      <div className="coa-row-derived">
+                        <span>{roundPeptide ? formatMassWithUnits(roundPeptide.mass) : 'Mass'}</span>
+                        <span>{roundPeptide ? formatTestingTierLabel(roundPeptide.testingTier) : 'Tier'}</span>
+                      </div>
+                      <button type="button" onClick={() => setBatchRows((currentRows) => currentRows.filter((currentRow) => currentRow.id !== row.id))}>
+                        Delete
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <button type="button" onClick={() => setBatchRows((currentRows) => [...currentRows, createCoaBatchFormRow()])}>
+                Add Row
+              </button>
+              <div className="coa-modal-actions">
+                <button type="button" onClick={() => setIsBatchModalOpen(false)}>Cancel</button>
+                <button className="coa-admin-primary" type="button" disabled={isSubmittingCoa} onClick={() => void saveBatchRows()}>
+                  Save batch numbers
+                </button>
+              </div>
+            </div>
+          </CoaModal>
+        )}
+
+        {isBulkUploadModalOpen && (
+          <CoaModal title="Add COAs" onClose={() => setIsBulkUploadModalOpen(false)}>
+            <div className="coa-modal-form">
+              <label className="coa-modal-field">
+                <span>PDF files</span>
+                <input type="file" accept="application/pdf,.pdf" multiple onChange={(event) => loadBulkCoaFiles(event.target.files)} />
+              </label>
+              <div className="coa-upload-list">
+                {bulkUploadDrafts.map((draft) => (
+                  <label className="coa-upload-row" key={draft.id}>
+                    <span>{draft.file.name}</span>
+                    <select
+                      value={draft.matchedCoaId}
+                      onChange={(event) => setBulkUploadDrafts((currentDrafts) =>
+                        currentDrafts.map((currentDraft) => currentDraft.id === draft.id ? { ...currentDraft, matchedCoaId: event.target.value } : currentDraft),
+                      )}
+                    >
+                      <option value="">Unmatched</option>
+                      {sortedCoaResults.map((result) => (
+                        <option value={result.id} key={result.id}>
+                          {result.batchNumber} - {result.peptideName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+              <div className="coa-modal-actions">
+                <button type="button" onClick={() => setIsBulkUploadModalOpen(false)}>Cancel</button>
+                <button className="coa-admin-primary" type="button" disabled={isSubmittingCoa || bulkUploadDrafts.length === 0} onClick={() => void saveBulkCoaUploads()}>
+                  Attach PDFs
+                </button>
+              </div>
+            </div>
+          </CoaModal>
+        )}
+
+        {editingCoa && (
+          <CoaModal title={`Edit ${editingCoa.batchNumber}`} onClose={() => setEditingCoa(null)}>
+            <CoaEditFields
+              form={coaEditForm}
+              rounds={rounds}
+              selectedRound={editRound}
+              onChange={setCoaEditForm}
+            />
+            <div className="coa-modal-actions">
+              <button className="coa-delete-button" type="button" disabled={isSubmittingCoa} onClick={() => void deleteEditedCoa()}>
+                Delete
+              </button>
+              <button type="button" onClick={() => setEditingCoa(null)}>Cancel</button>
+              <button className="coa-admin-primary" type="button" disabled={isSubmittingCoa} onClick={() => void saveEditedCoa()}>
+                Save
+              </button>
+            </div>
+          </CoaModal>
+        )}
+
+        {attachingCoa && (
+          <CoaModal title={`Add COA for ${attachingCoa.batchNumber}`} onClose={() => setAttachingCoa(null)}>
+            <div className="coa-modal-form">
+              <label className="coa-modal-field">
+                <span>PDF file</span>
+                <input type="file" accept="application/pdf,.pdf" onChange={(event) => setAttachCoaFile(event.target.files?.[0] ?? null)} />
+              </label>
+              <div className="coa-modal-actions">
+                <button type="button" onClick={() => setAttachingCoa(null)}>Cancel</button>
+                <button className="coa-admin-primary" type="button" disabled={isSubmittingCoa || !attachCoaFile} onClick={() => void saveAttachCoa()}>
+                  Save COA
+                </button>
+              </div>
+            </div>
+          </CoaModal>
+        )}
       </div>
     </section>
   );
 }
 
-function CoaBatchDetail({ result, onClear }: { result: CoaResult; onClear: () => void }) {
+function CoaBatchDetail({
+  result,
+  isAdmin,
+  onAttach,
+  onClear,
+  onEdit,
+}: {
+  result: CoaResult;
+  isAdmin: boolean;
+  onAttach: (result: CoaResult) => void;
+  onClear: () => void;
+  onEdit: (result: CoaResult) => void;
+}) {
   const detailRows = [
     { label: 'Peptide Name', value: result.peptideName },
-    { label: 'Mass', value: result.mass },
+    { label: 'Mass', value: formatMassWithUnits(result.mass) },
     { label: 'Batch #', value: result.batchNumber },
     { label: 'Round', value: result.roundName },
     { label: 'Date Tested', value: result.dateTested },
@@ -1378,16 +1902,30 @@ function CoaBatchDetail({ result, onClear }: { result: CoaResult; onClear: () =>
           <p className="eyebrow">Batch detail</p>
           <h2 id="coa-detail-title">{result.batchNumber}</h2>
           <p>
-            {result.peptideName} {result.mass} tested at the {formatTestingTierLabel(result.testingTier)} tier.
+            {result.peptideName} {formatMassWithUnits(result.mass)} tested at the {formatTestingTierLabel(result.testingTier)} tier.
           </p>
         </div>
         <div className="coa-detail__actions">
           <button type="button" onClick={onClear}>
             Back to all results
           </button>
-          <a href={result.coaUrl} target="_blank" rel="noreferrer">
-            Open COA
-          </a>
+          {result.coaBlobKey ? (
+            <a href={getCoaPdfUrl(result)} target="_blank" rel="noreferrer">
+              Open COA
+            </a>
+          ) : (
+            <span className="coa-pill coa-pill--pending">Pending</span>
+          )}
+          {isAdmin && (
+            <>
+              <button type="button" onClick={() => onAttach(result)}>
+                Add COA
+              </button>
+              <button type="button" onClick={() => onEdit(result)}>
+                Edit
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -1427,6 +1965,120 @@ function CoaBatchDetail({ result, onClear }: { result: CoaResult; onClear: () =>
         </dl>
       </div>
     </article>
+  );
+}
+
+function CoaModal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="coa-modal-backdrop" role="presentation">
+      <section className="coa-modal" role="dialog" aria-modal="true" aria-labelledby="coa-modal-title">
+        <div className="coa-modal__header">
+          <h2 id="coa-modal-title">{title}</h2>
+          <button type="button" aria-label="Close" onClick={onClose}>
+            x
+          </button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function CoaEditFields({
+  form,
+  rounds,
+  selectedRound,
+  onChange,
+}: {
+  form: CoaEditForm;
+  rounds: Round[];
+  selectedRound: Round | null;
+  onChange: (form: CoaEditForm) => void;
+}) {
+  return (
+    <div className="coa-modal-form">
+      <div className="coa-modal-grid">
+        <label className="coa-modal-field">
+          <span>Round</span>
+          <select
+            value={form.roundId}
+            onChange={(event) => onChange({
+              ...form,
+              roundId: event.target.value,
+              roundPeptideId: '',
+            })}
+          >
+            <option value="">Choose round</option>
+            {rounds.map((round) => (
+              <option value={round.id} key={round.id}>
+                {round.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="coa-modal-field">
+          <span>Peptide</span>
+          <select
+            value={form.roundPeptideId}
+            onChange={(event) => {
+              const peptide = selectedRound?.peptides.find((row) => row.id === event.target.value);
+              onChange({
+                ...form,
+                roundPeptideId: event.target.value,
+                code: peptide?.vendorCode ?? form.code,
+              });
+            }}
+          >
+            <option value="">Choose peptide</option>
+            {sortRoundPeptidesByVendorCode(selectedRound?.peptides
+              .filter((row) => row.peptideId && row.testingTier !== 'none') ?? [])
+              .map((row) => (
+                <option value={row.id} key={row.id}>
+                  {row.peptideName} - {row.vendorCode || row.mass}
+                </option>
+              ))}
+          </select>
+        </label>
+        <CoaTextInput label="Batch #" value={form.batchNumber} onChange={(value) => onChange({ ...form, batchNumber: value })} />
+        <CoaTextInput label="Code" value={form.code} onChange={(value) => onChange({ ...form, code: value })} />
+        <CoaTextInput label="Cap color" value={form.capColor} onChange={(value) => onChange({ ...form, capColor: value })} />
+        <CoaTextInput label="Date tested" value={form.dateTested} onChange={(value) => onChange({ ...form, dateTested: value })} />
+        <CoaTextInput label="Avg net content" value={form.averageNetContent} onChange={(value) => onChange({ ...form, averageNetContent: value })} />
+        <CoaTextInput label="Purity" value={form.purity} onChange={(value) => onChange({ ...form, purity: value })} />
+        <CoaTextInput label="Endotoxins" value={form.endotoxins} onChange={(value) => onChange({ ...form, endotoxins: value })} />
+        <CoaTextInput label="Heavy metals" value={form.heavyMetals} onChange={(value) => onChange({ ...form, heavyMetals: value })} />
+        <CoaTextInput label="Sterility" value={form.sterility} onChange={(value) => onChange({ ...form, sterility: value })} />
+        <label className="coa-modal-field">
+          <span>COA PDF</span>
+          <input type="file" accept="application/pdf,.pdf" onChange={(event) => onChange({ ...form, file: event.target.files?.[0] ?? null })} />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function CoaTextInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="coa-modal-field">
+      <span>{label}</span>
+      <input value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
   );
 }
 
@@ -1477,28 +2129,6 @@ function normalizeCoaSearchText(value: string) {
     .replace(/\s+/g, ' ');
 }
 
-function createCoaResult(row: CoaTrackerRow, index: number): CoaResult {
-  const mass = getCoaDisplayMass(row.code);
-  const id = createCoaId(row.batchNumber);
-
-  return {
-    id,
-    peptideName: row.peptideName,
-    mass,
-    batchNumber: row.batchNumber,
-    dateTested: row.roundName === 'Round 1' ? 'Jun 27, 2026' : 'Jul 2, 2026',
-    roundName: row.roundName,
-    testingTier: row.testingTier,
-    averageNetContent: formatAverageNetContent(mass, index),
-    purity: formatFillerPurity(index),
-    endotoxins: 'Pass',
-    heavyMetals: 'Pass',
-    sterility: row.testingTier === 'bronze' ? 'Pending' : 'Pass',
-    capColor: row.capColor,
-    coaUrl: `/coas/mock/${id}.pdf`,
-  };
-}
-
 function createCoaId(batchNumber: string) {
   return batchNumber
     .trim()
@@ -1507,42 +2137,349 @@ function createCoaId(batchNumber: string) {
     .replace(/^-+|-+$/g, '');
 }
 
-function getCoaDisplayMass(code: string) {
-  const explicitMasses: Record<string, string> = {
-    '5OAM': '5 mg',
-    ARA: 'TBD',
-    P41: 'TBD',
+function sortCoaResults(results: CoaResult[]) {
+  return [...results].sort((first, second) =>
+    first.batchNumber.localeCompare(second.batchNumber, undefined, { numeric: true, sensitivity: 'base' }),
+  );
+}
+
+function normalizeCoaResult(value: unknown): CoaResult | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const coa = value as Partial<CoaResult>;
+  const id = sanitizeClientText(coa.id);
+  const batchNumber = sanitizeClientText(coa.batchNumber);
+
+  if (!id || !batchNumber) {
+    return null;
+  }
+
+  return {
+    id,
+    roundId: sanitizeClientText(coa.roundId),
+    roundName: sanitizeClientText(coa.roundName),
+    roundPeptideId: sanitizeClientText(coa.roundPeptideId),
+    peptideId: sanitizeClientText(coa.peptideId),
+    peptideName: sanitizeClientText(coa.peptideName),
+    code: sanitizeClientText(coa.code),
+    batchNumber,
+    capColor: sanitizeClientText(coa.capColor) || 'TBD',
+    mass: sanitizeClientText(coa.mass),
+    testingTier: normalizeClientTestingTier(coa.testingTier),
+    dateTested: sanitizeClientText(coa.dateTested),
+    averageNetContent: sanitizeClientText(coa.averageNetContent) || 'Pending',
+    purity: sanitizeClientText(coa.purity) || 'Pending',
+    endotoxins: sanitizeClientText(coa.endotoxins) || 'Pending',
+    heavyMetals: sanitizeClientText(coa.heavyMetals) || 'Pending',
+    sterility: sanitizeClientText(coa.sterility) || 'Pending',
+    coaFileName: sanitizeClientText(coa.coaFileName),
+    coaMimeType: sanitizeClientText(coa.coaMimeType),
+    coaBlobKey: sanitizeClientText(coa.coaBlobKey),
+    coaUploadedAt: sanitizeClientText(coa.coaUploadedAt),
+    createdAt: sanitizeClientText(coa.createdAt),
+    updatedAt: sanitizeClientText(coa.updatedAt),
   };
+}
 
-  if (explicitMasses[code]) {
-    return explicitMasses[code];
+function normalizeClientTestingTier(value: unknown): TestingTierId {
+  return value === 'platinum' || value === 'gold' || value === 'gold-plus' || value === 'bronze'
+    ? value
+    : 'none';
+}
+
+function formatTestingTierLabel(tier: TestingTierId) {
+  if (tier === 'none') {
+    return 'None';
   }
 
-  const match = code.match(/\d+$/);
-  return match ? `${Number(match[0])} mg` : 'TBD';
-}
-
-function formatAverageNetContent(mass: string, index: number) {
-  const massValue = Number.parseFloat(mass);
-
-  if (!Number.isFinite(massValue)) {
-    return 'TBD';
-  }
-
-  const multiplier = 1 + (((index % 7) - 2) * 0.006);
-  return `${(massValue * multiplier).toFixed(2)} mg`;
-}
-
-function formatFillerPurity(index: number) {
-  return `${(98.76 + ((index * 17) % 91) / 100).toFixed(2)}%`;
-}
-
-function formatTestingTierLabel(tier: Exclude<TestingTierId, 'none'>) {
   if (tier === 'gold-plus') {
     return 'Gold Plus';
   }
 
   return tier.charAt(0).toUpperCase() + tier.slice(1);
+}
+
+function formatMassWithUnits(value: string) {
+  const cleanValue = sanitizeClientText(value);
+
+  if (!cleanValue) {
+    return '';
+  }
+
+  return /[a-z]/i.test(cleanValue) ? cleanValue : `${cleanValue} mg`;
+}
+
+function getCoaPdfUrl(result: CoaResult) {
+  return `/api/coas/${encodeURIComponent(result.id)}/pdf`;
+}
+
+async function fetchCoaResults() {
+  const response = await fetch('/api/data/coas');
+
+  if (!response.ok) {
+    throw new Error('COAs could not be loaded.');
+  }
+
+  const records = (await response.json()) as unknown;
+  return Array.isArray(records)
+    ? records.map(normalizeCoaResult).filter((result): result is CoaResult => Boolean(result))
+    : [];
+}
+
+async function saveCoaEntry(entry: CoaResult) {
+  const response = await fetch(`/api/admin/data/coas/${encodeURIComponent(entry.id)}`, {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(entry),
+  });
+
+  if (!response.ok) {
+    throw new Error('COA entry could not be saved.');
+  }
+
+  const records = (await response.json()) as unknown;
+  return Array.isArray(records)
+    ? records.map(normalizeCoaResult).filter((result): result is CoaResult => Boolean(result))
+    : [];
+}
+
+async function deleteCoaEntry(entryId: string) {
+  const response = await fetch(`/api/admin/data/coas/${encodeURIComponent(entryId)}`, {
+    method: 'DELETE',
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error('COA entry could not be deleted.');
+  }
+
+  const records = (await response.json()) as unknown;
+  return Array.isArray(records)
+    ? records.map(normalizeCoaResult).filter((result): result is CoaResult => Boolean(result))
+    : [];
+}
+
+async function uploadCoaPdf(file: File): Promise<CoaPdfAsset> {
+  const response = await fetch('/api/admin/assets/coa-pdf', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      fileName: file.name,
+      mimeType: file.type || 'application/pdf',
+      base64: await fileToBase64(file),
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('COA PDF could not be uploaded.');
+  }
+
+  return (await response.json()) as CoaPdfAsset;
+}
+
+async function parseCoaBatchNumberFile(file: File): Promise<CoaBatchImportRow[]> {
+  const response = await fetch('/api/admin/coas/parse-batch-numbers', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      source: {
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        base64: await fileToBase64(file),
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Batch number file could not be parsed.');
+  }
+
+  const payload = (await response.json()) as { rows?: unknown };
+  return Array.isArray(payload.rows)
+    ? payload.rows.map(normalizeCoaBatchImportRow).filter((row): row is CoaBatchImportRow => Boolean(row))
+    : [];
+}
+
+function normalizeCoaBatchImportRow(value: unknown): CoaBatchImportRow | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const row = value as Partial<CoaBatchImportRow>;
+  const batchNumber = sanitizeClientText(row.batchNumber);
+
+  if (!batchNumber) {
+    return null;
+  }
+
+  return {
+    peptideName: sanitizeClientText(row.peptideName),
+    batchNumber,
+    code: sanitizeClientText(row.code),
+    capColor: sanitizeClientText(row.capColor),
+  };
+}
+
+function createCoaBatchFormRow(): CoaBatchFormRow {
+  return {
+    id: `coa-row-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    roundPeptideId: '',
+    batchNumber: '',
+    capColor: '',
+    code: '',
+    file: null,
+  };
+}
+
+function findRoundPeptideForCoaBatchImport(row: CoaBatchImportRow, roundPeptides: RoundPeptide[]) {
+  const normalizedCode = normalizeBatchMatchText(row.code);
+  const normalizedPeptideName = normalizeCoaSearchText(row.peptideName);
+  const normalizedBatch = normalizeBatchMatchText(row.batchNumber);
+
+  if (normalizedCode) {
+    const codeMatch = roundPeptides.find((peptide) => normalizeBatchMatchText(peptide.vendorCode) === normalizedCode);
+
+    if (codeMatch) {
+      return codeMatch;
+    }
+  }
+
+  if (normalizedBatch) {
+    const batchCodeMatch = roundPeptides.find((peptide) => {
+      const vendorCode = normalizeBatchMatchText(peptide.vendorCode);
+      return vendorCode && normalizedBatch.includes(vendorCode);
+    });
+
+    if (batchCodeMatch) {
+      return batchCodeMatch;
+    }
+  }
+
+  if (normalizedPeptideName) {
+    return roundPeptides.find((peptide) => normalizeCoaSearchText(peptide.peptideName) === normalizedPeptideName) ?? null;
+  }
+
+  return null;
+}
+
+function sortRoundPeptidesByVendorCode(rows: RoundPeptide[]) {
+  return [...rows].sort((first, second) => {
+    const vendorCodeComparison = first.vendorCode.localeCompare(second.vendorCode, undefined, {
+      sensitivity: 'base',
+      numeric: true,
+    });
+
+    if (vendorCodeComparison !== 0) {
+      return vendorCodeComparison;
+    }
+
+    return first.peptideName.localeCompare(second.peptideName, undefined, { sensitivity: 'base', numeric: true });
+  });
+}
+
+function createEmptyCoaEditForm(): CoaEditForm {
+  return {
+    roundId: '',
+    roundPeptideId: '',
+    batchNumber: '',
+    capColor: '',
+    code: '',
+    dateTested: '',
+    averageNetContent: 'Pending',
+    purity: 'Pending',
+    endotoxins: 'Pending',
+    heavyMetals: 'Pending',
+    sterility: 'Pending',
+    file: null,
+  };
+}
+
+function createCoaEditForm(result: CoaResult): CoaEditForm {
+  return {
+    roundId: result.roundId,
+    roundPeptideId: result.roundPeptideId,
+    batchNumber: result.batchNumber,
+    capColor: result.capColor,
+    code: result.code,
+    dateTested: result.dateTested,
+    averageNetContent: result.averageNetContent,
+    purity: result.purity,
+    endotoxins: result.endotoxins,
+    heavyMetals: result.heavyMetals,
+    sterility: result.sterility,
+    file: null,
+  };
+}
+
+function createCoaEntryFromRoundRow(
+  round: Round,
+  roundPeptide: RoundPeptide,
+  formRow: Pick<CoaBatchFormRow, 'batchNumber' | 'capColor' | 'code'> & { id?: string },
+): CoaResult {
+  const id = formRow.id && !formRow.id.startsWith('coa-row-')
+    ? formRow.id
+    : createCoaId(formRow.batchNumber);
+
+  return {
+    id,
+    roundId: round.id,
+    roundName: round.name,
+    roundPeptideId: roundPeptide.id,
+    peptideId: roundPeptide.peptideId,
+    peptideName: roundPeptide.peptideName,
+    code: sanitizeClientText(formRow.code || roundPeptide.vendorCode),
+    batchNumber: sanitizeClientText(formRow.batchNumber),
+    capColor: sanitizeClientText(formRow.capColor) || 'TBD',
+    mass: roundPeptide.mass,
+    testingTier: roundPeptide.testingTier,
+    dateTested: '',
+    averageNetContent: 'Pending',
+    purity: 'Pending',
+    endotoxins: 'Pending',
+    heavyMetals: 'Pending',
+    sterility: 'Pending',
+  };
+}
+
+function findCoaMatchForFile(file: File, results: CoaResult[]) {
+  const fileName = normalizeBatchMatchText(file.name.replace(/\.pdf$/i, ''));
+
+  return results.find((result) => {
+    const batch = normalizeBatchMatchText(result.batchNumber);
+    return batch && fileName.includes(batch);
+  }) ?? null;
+}
+
+function normalizeBatchMatchText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function sanitizeClientText(value: unknown) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function fileToBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const result = String(reader.result ?? '');
+      resolve(result.includes(',') ? result.split(',')[1] : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('File could not be read.'));
+    reader.readAsDataURL(file);
+  });
 }
 
 function getCoaStatusClassName(value: string) {
