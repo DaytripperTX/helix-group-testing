@@ -337,6 +337,41 @@ main {
   gap: 10px;
 }
 
+.admin-table-search {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  color: #334152;
+  font-size: 0.82rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.admin-table-search input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd9e2;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #ffffff;
+  color: #07101f;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 760;
+  text-transform: none;
+}
+
+.admin-table-search input:focus-visible {
+  border-color: #00aeb8;
+  box-shadow: 0 0 0 3px rgba(0, 191, 216, 0.16);
+  outline: none;
+}
+
+.admin-table-search--inline {
+  width: min(360px, 100%);
+  margin: 0;
+}
+
 .admin-row {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(180px, 0.75fr) auto;
@@ -739,6 +774,7 @@ main {
 
 .admin-round-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -4637,7 +4673,7 @@ h2 {
   line-height: 1.05;
 }
 
-.coa-page__header p:last-child {
+.coa-page__header > p {
   max-width: 560px;
   margin: 0 0 4px;
   color: #536173;
@@ -4648,6 +4684,7 @@ h2 {
 .coa-admin-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-end;
   justify-content: flex-end;
   gap: 8px;
   grid-row: span 2;
@@ -4667,37 +4704,91 @@ h2 {
   font-weight: 900;
 }
 
+.coa-admin-round-select {
+  display: grid;
+  min-width: 154px;
+  gap: 4px;
+  text-align: left;
+}
+
+.coa-admin-round-select span {
+  color: #4b5a70;
+  font-size: 0.68rem;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.coa-admin-round-select select {
+  min-height: 38px;
+  border: 1px solid #b7c4ff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #f5f7ff;
+  color: #3730a3;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+}
+
+.coa-admin-actions button,
+.coa-row-actions button {
+  border-color: #b7c4ff;
+  background: #eef2ff;
+  color: #3730a3;
+}
+
 .coa-admin-actions button:hover,
 .coa-admin-actions button:focus-visible,
 .coa-row-actions button:hover,
 .coa-row-actions button:focus-visible,
+.coa-admin-round-select select:hover,
+.coa-admin-round-select select:focus-visible,
 .coa-modal-actions button:hover,
 .coa-modal-actions button:focus-visible {
-  border-color: #00aeb8;
-  background: #eafbff;
-  color: #006f78;
+  border-color: #6366f1;
+  background: #e0e7ff;
+  color: #312e81;
   outline: none;
 }
 
 .coa-admin-actions .coa-admin-primary,
 .coa-admin-primary {
-  border-color: #07101f;
-  background: #07101f;
+  border-color: #4f46e5;
+  background: #4338ca;
   color: #ffffff;
+  box-shadow: 0 8px 18px rgba(67, 56, 202, 0.18);
 }
 
 .coa-admin-primary:hover,
 .coa-admin-primary:focus-visible {
-  border-color: #006f78;
-  background: #006f78;
+  border-color: #312e81;
+  background: #312e81;
   color: #ffffff;
 }
 
+.coa-admin-danger {
+  border-color: #dc2626 !important;
+  background: #fee2e2 !important;
+  color: #991b1b !important;
+  box-shadow: none !important;
+}
+
+.coa-admin-danger:hover,
+.coa-admin-danger:focus-visible {
+  border-color: #991b1b !important;
+  background: #fecaca !important;
+  color: #7f1d1d !important;
+}
+
 .coa-admin-primary:disabled,
+.coa-admin-danger:disabled,
+.coa-admin-round-select select:disabled,
 .coa-modal-actions button:disabled {
-  border-color: #cbd7e4;
-  background: #cbd7e4;
-  color: #657184;
+  border-color: #cbd7e4 !important;
+  background: #cbd7e4 !important;
+  color: #657184 !important;
+  box-shadow: none !important;
   cursor: not-allowed;
 }
 
@@ -5355,14 +5446,24 @@ h2 {
 
 .coa-entry-row > button,
 .coa-delete-button {
-  border: 1px solid #f0b8aa;
+  border: 1px solid #dc2626;
   border-radius: 8px;
   padding: 9px 10px;
-  background: #fff4f1;
-  color: #9a341e;
+  background: #fee2e2;
+  color: #991b1b;
   cursor: pointer;
   font: inherit;
   font-weight: 900;
+}
+
+.coa-entry-row > button:hover,
+.coa-entry-row > button:focus-visible,
+.coa-delete-button:hover,
+.coa-delete-button:focus-visible {
+  border-color: #991b1b;
+  background: #fecaca;
+  color: #7f1d1d;
+  outline: none;
 }
 
 .coa-upload-row {
@@ -5376,6 +5477,21 @@ h2 {
   justify-content: flex-end;
   gap: 8px;
   padding: 0 20px 20px;
+}
+
+.coa-modal-actions .coa-delete-button {
+  border-color: #dc2626;
+  background: #fee2e2;
+  color: #991b1b;
+  box-shadow: none;
+}
+
+.coa-modal-actions .coa-delete-button:hover,
+.coa-modal-actions .coa-delete-button:focus-visible {
+  border-color: #991b1b;
+  background: #fecaca;
+  color: #7f1d1d;
+  outline: none;
 }
 
 .field-grid {

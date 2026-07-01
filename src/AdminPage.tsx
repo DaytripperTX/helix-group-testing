@@ -1,5 +1,6 @@
 import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  hydrateVendorDefaultRounds,
   sortRoundsForDisplay,
   type Round,
   type RoundPeptide,
@@ -267,6 +268,7 @@ function AdminPage({
   const [peptideModalOrigin, setPeptideModalOrigin] = useState<PeptideModalOrigin>(null);
   const [editingRound, setEditingRound] = useState<Round | null>(null);
   const [roundForm, setRoundForm] = useState<RoundForm>(emptyRoundForm);
+  const [roundModalSearch, setRoundModalSearch] = useState('');
   const [roundPeptideSort, setRoundPeptideSort] = useState<RoundPeptideSort | null>({ key: 'vendorCode', direction: 'asc' });
   const [isRoundModalOpen, setIsRoundModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
@@ -280,6 +282,8 @@ function AdminPage({
   const [priceListFile, setPriceListFile] = useState<File | null>(null);
   const [priceListUrl, setPriceListUrl] = useState('');
   const [priceListStatus, setPriceListStatus] = useState('');
+  const [priceListSearch, setPriceListSearch] = useState('');
+  const [peptideSearch, setPeptideSearch] = useState('');
   const [roundPriceListFile, setRoundPriceListFile] = useState<File | null>(null);
   const [roundPriceListUrl, setRoundPriceListUrl] = useState('');
   const [roundPriceListStatus, setRoundPriceListStatus] = useState('');
@@ -308,6 +312,26 @@ function AdminPage({
     return () => window.clearTimeout(timeoutId);
   }, [savedPriceListVendorId]);
 
+  useEffect(() => {
+    if (!isRoundModalOpen) {
+      return;
+    }
+
+    setRoundForm((currentForm) => {
+      if (currentForm.priceSourceMode !== 'vendor-default' || !currentForm.vendorId) {
+        return currentForm;
+      }
+
+      const latestSnapshot = getSavedVendorPriceListSnapshot(priceLists, currentForm.vendorId);
+
+      return {
+        ...currentForm,
+        priceListSnapshot: latestSnapshot,
+        peptides: reconcileRoundRowsWithPriceListSnapshot(currentForm.peptides, latestSnapshot, peptides),
+      };
+    });
+  }, [isRoundModalOpen, priceLists, peptides]);
+
   const sortedVendors = useMemo(
     () => [...vendors].sort((first, second) => first.name.localeCompare(second.name)),
     [vendors],
@@ -316,6 +340,17 @@ function AdminPage({
     () => [...peptides].sort((first, second) => first.name.localeCompare(second.name)),
     [peptides],
   );
+  const filteredPeptides = useMemo(
+    () => sortedPeptides.filter((peptide) => matchesAdminSearch(peptideSearch, [
+      peptide.name,
+      normalizePeptideKind(peptide.kind),
+      peptide.categories.join(' '),
+      peptide.description,
+      formatBlendComponents(peptide.components),
+      getPeptideWikiSearchText(peptide),
+    ])),
+    [sortedPeptides, peptideSearch],
+  );
   const sortedRounds = useMemo(
     () => sortRoundsForDisplay(rounds),
     [rounds],
@@ -323,6 +358,33 @@ function AdminPage({
   const sortedRoundPeptideRows = useMemo(
     () => sortRoundPeptideRows(roundForm.peptides, roundPeptideSort),
     [roundForm.peptides, roundPeptideSort],
+  );
+  const filteredRoundPeptideRows = useMemo(
+    () => sortedRoundPeptideRows.filter((row) => matchesAdminSearch(roundModalSearch, [
+      row.peptideName,
+      row.vendorCode,
+      String(row.vendorPrice ?? ''),
+      row.mass,
+      row.testingTier,
+      row.additionalTesting,
+      row.capColor,
+      row.notes,
+      String(row.participantCount),
+      String(row.totalOrdered),
+    ])),
+    [sortedRoundPeptideRows, roundModalSearch],
+  );
+  const filteredPriceListItems = useMemo(
+    () => (priceListDraft?.items ?? []).filter((item) => matchesAdminSearch(priceListSearch, [
+      item.vendorCode,
+      item.productName,
+      item.mass,
+      String(item.price ?? ''),
+      String(item.vialsPerPack),
+      formatPeptideLinks(item.peptideIds, peptides),
+      item.needsReview ? 'needs review' : '',
+    ])),
+    [priceListDraft, priceListSearch, peptides],
   );
   const sortedAdminNotes = useMemo(
     () => [...adminNotes].sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime()),
@@ -340,7 +402,7 @@ function AdminPage({
     ]);
 
     setVendors(nextVendors);
-    setRounds(nextRounds);
+    setRounds(hydrateVendorDefaultRounds(nextRounds, nextPriceLists, nextPeptides));
     setPeptides(nextPeptides);
     setPriceLists(nextPriceLists);
     setPeptideCategories(nextPeptideCategories);
@@ -468,6 +530,7 @@ function AdminPage({
     setPriceListDraft(existingPriceList);
     setPriceListFile(null);
     setPriceListUrl(vendor.priceSheet?.type === 'google-sheet' ? vendor.priceSheet.url : '');
+    setPriceListSearch('');
     setPriceListStatus(
       existingPriceList
         ? `${existingPriceList.items.length} saved rows.`
@@ -613,6 +676,7 @@ function AdminPage({
       }
 
       setPriceLists(nextPriceLists);
+      setRounds((currentRounds) => hydrateVendorDefaultRounds(currentRounds, nextPriceLists, peptides));
       setPriceListDraft(nextDraft);
       setPriceListStatus('');
       setPriceListFile(null);
@@ -657,6 +721,7 @@ function AdminPage({
       const nextPriceLists = await deleteCollectionItem<VendorPriceList>('vendor-price-lists', priceListDraft.id);
 
       setPriceLists(nextPriceLists);
+      setRounds((currentRounds) => hydrateVendorDefaultRounds(currentRounds, nextPriceLists, peptides));
       setPriceListDraft(null);
       setPriceListFile(null);
       setPriceListUrl('');
@@ -678,11 +743,17 @@ function AdminPage({
     setRoundPriceListFile(null);
     setRoundPriceListUrl('');
     setRoundPriceListStatus('');
+    setRoundModalSearch('');
     setIsRoundModalOpen(true);
     setStatus('');
   };
 
   const openEditRoundModal = (round: Round) => {
+    const priceListSnapshot = round.priceSourceMode === 'vendor-default'
+      ? getSavedVendorPriceListSnapshot(priceLists, round.vendorId) ?? round.priceListSnapshot
+      : round.priceListSnapshot;
+    const roundPeptides = reconcileRoundRowsWithPriceListSnapshot(round.peptides, priceListSnapshot, peptides);
+
     setEditingRound(round);
     setRoundForm({
       name: round.name,
@@ -695,14 +766,15 @@ function AdminPage({
       participants: String(round.participants || ''),
       roundDiscountPercent: String(round.roundDiscountPercent || ''),
       priceSourceMode: round.priceSourceMode,
-      priceListSnapshot: round.priceListSnapshot,
-      peptides: round.peptides.map((row) => normalizeRoundPeptideDraftRow(row, peptides, round.priceListSnapshot)),
+      priceListSnapshot,
+      peptides: roundPeptides,
     });
     setRoundPriceListFile(null);
-    setRoundPriceListUrl(round.priceListSnapshot?.source?.type === 'google-sheet' ? round.priceListSnapshot.source.url : '');
+    setRoundPriceListUrl(priceListSnapshot?.source?.type === 'google-sheet' ? priceListSnapshot.source.url : '');
+    setRoundModalSearch('');
     setRoundPriceListStatus(
-      round.priceListSnapshot
-        ? `${round.priceListSnapshot.items.length} price rows in this round snapshot.`
+      priceListSnapshot
+        ? `${priceListSnapshot.items.length} price rows in this round snapshot.`
         : 'Use the default vendor list, parse a round-specific sheet, or enter rows manually.',
     );
     setIsRoundModalOpen(true);
@@ -714,10 +786,16 @@ function AdminPage({
       ...currentForm,
       vendorId,
       priceSourceMode: currentForm.priceSourceMode === 'vendor-default' ? 'vendor-default' : currentForm.priceSourceMode,
-      priceListSnapshot:
-        currentForm.priceSourceMode === 'vendor-default'
-          ? getSavedVendorPriceListSnapshot(priceLists, vendorId)
-          : currentForm.priceListSnapshot,
+      ...(currentForm.priceSourceMode === 'vendor-default'
+        ? (() => {
+            const priceListSnapshot = getSavedVendorPriceListSnapshot(priceLists, vendorId);
+
+            return {
+              priceListSnapshot,
+              peptides: reconcileRoundRowsWithPriceListSnapshot(currentForm.peptides, priceListSnapshot, peptides),
+            };
+          })()
+        : { priceListSnapshot: currentForm.priceListSnapshot }),
     }));
   };
 
@@ -725,12 +803,18 @@ function AdminPage({
     setRoundForm((currentForm) => ({
       ...currentForm,
       priceSourceMode,
-      priceListSnapshot:
-        priceSourceMode === 'vendor-default'
-          ? getSavedVendorPriceListSnapshot(priceLists, currentForm.vendorId)
-          : priceSourceMode === 'none'
-            ? null
-            : currentForm.priceListSnapshot,
+      ...(priceSourceMode === 'vendor-default'
+        ? (() => {
+            const priceListSnapshot = getSavedVendorPriceListSnapshot(priceLists, currentForm.vendorId);
+
+            return {
+              priceListSnapshot,
+              peptides: reconcileRoundRowsWithPriceListSnapshot(currentForm.peptides, priceListSnapshot, peptides),
+            };
+          })()
+        : {
+            priceListSnapshot: priceSourceMode === 'none' ? null : currentForm.priceListSnapshot,
+          }),
     }));
     setRoundPriceListStatus(
       priceSourceMode === 'vendor-default'
@@ -1642,8 +1726,17 @@ function AdminPage({
                 />
               </div>
             )}
+            <label className="admin-table-search">
+              <span>Search peptide dictionary</span>
+              <input
+                type="search"
+                value={peptideSearch}
+                placeholder="Search name, category, type, wiki link..."
+                onChange={(event) => setPeptideSearch(event.target.value)}
+              />
+            </label>
             <div className="admin-table">
-              {sortedPeptides.map((peptide) => (
+              {filteredPeptides.map((peptide) => (
                 <article className="admin-row" key={peptide.id}>
                   <div>
                     <strong>
@@ -1670,6 +1763,7 @@ function AdminPage({
                 </article>
               ))}
               {peptides.length === 0 && <p className="admin-empty">No peptides yet.</p>}
+              {peptides.length > 0 && filteredPeptides.length === 0 && <p className="admin-empty">No peptides match that search.</p>}
             </div>
           </section>
         )}
@@ -1866,9 +1960,18 @@ function AdminPage({
 
             <div className="admin-round-toolbar">
               <div>
-                <strong>{roundForm.peptides.length} peptide rows</strong>
+                <strong>{filteredRoundPeptideRows.length} of {roundForm.peptides.length} peptide rows</strong>
                 <span>{getRoundFormTierSummary(roundForm.peptides)}</span>
               </div>
+              <label className="admin-table-search admin-table-search--inline">
+                <span>Search rows</span>
+                <input
+                  type="search"
+                  value={roundModalSearch}
+                  placeholder="Search peptide, code, mass, tier..."
+                  onChange={(event) => setRoundModalSearch(event.target.value)}
+                />
+              </label>
               <div className="admin-round-toolbar__actions">
                 <button type="button" onClick={addRoundPeptideRow}>
                   Add Peptide Row
@@ -1903,7 +2006,7 @@ function AdminPage({
                 <RoundPeptideSortButton sortKey="notes" label="Notes" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
                 <span />
               </div>
-              {sortedRoundPeptideRows.map((row) => {
+              {filteredRoundPeptideRows.map((row) => {
                 const rowLinkedPeptide = peptides.find((peptide) => peptide.id === row.peptideId) ?? null;
                 const rowPeptideSelectValue = rowLinkedPeptide?.id ?? '';
 
@@ -1993,6 +2096,7 @@ function AdminPage({
                 );
               })}
               {roundForm.peptides.length === 0 && <p className="admin-empty">No peptide rows yet.</p>}
+              {roundForm.peptides.length > 0 && filteredRoundPeptideRows.length === 0 && <p className="admin-empty">No round rows match that search.</p>}
             </div>
 
             <div className="admin-modal__actions">
@@ -2284,9 +2388,18 @@ function AdminPage({
               <>
                 <div className="admin-price-toolbar">
                   <div className="admin-price-meta">
-                    <span>{priceListDraft.items.length} rows</span>
+                    <span>{filteredPriceListItems.length} of {priceListDraft.items.length} rows</span>
                     <span>Parsed {formatDateTime(priceListDraft.parsedAt)}</span>
                   </div>
+                  <label className="admin-table-search admin-table-search--inline">
+                    <span>Search price rows</span>
+                    <input
+                      type="search"
+                      value={priceListSearch}
+                      placeholder="Search code, product, mass, peptide..."
+                      onChange={(event) => setPriceListSearch(event.target.value)}
+                    />
+                  </label>
                   <button className="admin-delete-button" type="button" onClick={() => void deleteVendorPriceList()}>
                     Delete Entire Price List
                   </button>
@@ -2301,7 +2414,7 @@ function AdminPage({
                     <span>Peptides</span>
                     <span />
                   </div>
-                  {priceListDraft.items.map((item) => (
+                  {filteredPriceListItems.map((item) => (
                     <div className={item.needsReview ? 'admin-price-row has-review' : 'admin-price-row'} key={item.id}>
                       <input value={item.vendorCode} onChange={(event) => updatePriceListItem(item.id, 'vendorCode', event.target.value)} />
                       <input value={item.productName} onChange={(event) => updatePriceListItem(item.id, 'productName', event.target.value)} />
@@ -2333,6 +2446,9 @@ function AdminPage({
                       </button>
                     </div>
                   ))}
+                  {priceListDraft.items.length > 0 && filteredPriceListItems.length === 0 && (
+                    <p className="admin-empty">No price rows match that search.</p>
+                  )}
                 </div>
               </>
             )}
@@ -2907,6 +3023,16 @@ function compareText(first: string, second: string) {
   return first.localeCompare(second, undefined, { sensitivity: 'base', numeric: true });
 }
 
+function matchesAdminSearch(searchTerm: string, values: Array<string | number | null | undefined>) {
+  const normalizedSearchTerm = normalizeName(searchTerm);
+
+  if (!normalizedSearchTerm) {
+    return true;
+  }
+
+  return values.some((value) => normalizeName(String(value ?? '')).includes(normalizedSearchTerm));
+}
+
 function compareNumbers(first: number, second: number) {
   return first - second;
 }
@@ -3156,6 +3282,12 @@ function formatWikiLinks(peptide: Peptide): ReactNode {
       {link.status === 'suggested' ? ' (suggested)' : ''}
     </a>
   ));
+}
+
+function getPeptideWikiSearchText(peptide: Peptide) {
+  return normalizeWikiLinks(peptide)
+    .map((link) => `${getWikiSourceLabel(link.source)} ${link.status} ${link.url}`)
+    .join(' ');
 }
 
 function normalizeNoteTags(tags: AdminRole[]) {
@@ -3581,6 +3713,63 @@ function normalizeRoundPeptideDraftRow(
     peptideId: linkedPeptide?.id ?? '',
     peptideName: linkedPeptide?.name ?? sourceName,
   };
+}
+
+function reconcileRoundRowsWithPriceListSnapshot(
+  rows: RoundPeptide[],
+  priceListSnapshot: RoundPriceListSnapshot | null,
+  peptides: Peptide[],
+): RoundPeptide[] {
+  return rows.map((row) => {
+    const priceListItem = findUpdatedRoundPriceListItem(row, priceListSnapshot);
+
+    if (!priceListItem) {
+      return normalizeRoundPeptideDraftRow(row, peptides, priceListSnapshot);
+    }
+
+    return normalizeRoundPeptideDraftRow({
+      ...row,
+      priceListItemId: priceListItem.id,
+      vendorCode: priceListItem.vendorCode,
+      mass: priceListItem.mass,
+      vendorPrice: row.vendorPriceOverridden ? row.vendorPrice : priceListItem.price,
+    }, peptides, priceListSnapshot);
+  });
+}
+
+function findUpdatedRoundPriceListItem(
+  row: RoundPeptide,
+  priceListSnapshot: RoundPriceListSnapshot | null,
+) {
+  if (!priceListSnapshot) {
+    return null;
+  }
+
+  const exactItem = row.priceListItemId
+    ? priceListSnapshot.items.find((item) => item.id === row.priceListItemId)
+    : null;
+
+  if (exactItem) {
+    return exactItem;
+  }
+
+  const normalizedVendorCode = normalizeName(row.vendorCode);
+
+  if (normalizedVendorCode) {
+    const codeMatch = priceListSnapshot.items.find((item) => normalizeName(item.vendorCode) === normalizedVendorCode);
+
+    if (codeMatch) {
+      return codeMatch;
+    }
+  }
+
+  const normalizedProductName = normalizeName(row.peptideName);
+  const normalizedMass = normalizeName(row.mass);
+
+  return priceListSnapshot.items.find((item) =>
+    normalizeName(item.productName) === normalizedProductName
+    && (!normalizedMass || normalizeName(item.mass) === normalizedMass),
+  ) ?? null;
 }
 
 function normalizeRoundPeptideFormRow(

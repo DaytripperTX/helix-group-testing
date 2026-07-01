@@ -1168,6 +1168,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
   const [rounds, setRounds] = useState<Round[]>([]);
   const [coaStatus, setCoaStatus] = useState('');
   const [isSubmittingCoa, setIsSubmittingCoa] = useState(false);
+  const [adminRoundId, setAdminRoundId] = useState('');
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [batchRoundId, setBatchRoundId] = useState('');
   const [batchRows, setBatchRows] = useState<CoaBatchFormRow[]>([]);
@@ -1188,10 +1189,11 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
     [sortedCoaResults, searchTerm, peptideFilter],
   );
   const selectedCoaResult = sortedCoaResults.find((result) => result.id === selectedCoaId) ?? null;
+  const selectedAdminRound = rounds.find((round) => round.id === adminRoundId) ?? rounds[0] ?? null;
   const selectedBatchRound = rounds.find((round) => round.id === batchRoundId) ?? rounds[0] ?? null;
   const selectableBatchRoundPeptides = useMemo(
     () => sortRoundPeptidesByVendorCode(
-      selectedBatchRound?.peptides.filter((peptide) => peptide.peptideId && peptide.testingTier !== 'none') ?? [],
+      selectedBatchRound?.peptides.filter((peptide) => peptide.peptideId || peptide.vendorCode) ?? [],
     ),
     [selectedBatchRound],
   );
@@ -1219,8 +1221,15 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
         fetchRounds(),
       ]);
 
+      const sortedRounds = sortRoundsForDisplay(nextRounds);
+
       setCoaResults(nextCoas);
-      setRounds(sortRoundsForDisplay(nextRounds));
+      setRounds(sortedRounds);
+      setAdminRoundId((currentRoundId) =>
+        currentRoundId && sortedRounds.some((round) => round.id === currentRoundId)
+          ? currentRoundId
+          : sortedRounds[0]?.id ?? '',
+      );
       setCoaStatus('');
     } catch (error) {
       console.error(error);
@@ -1243,14 +1252,30 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
     setSelectedCoaId('');
   };
 
-  const openBatchModal = () => {
-    const firstRound = rounds[0] ?? null;
-
-    setBatchRoundId(firstRound?.id ?? '');
-    setBatchRows([createCoaBatchFormRow()]);
-    setBatchImportStatus('');
+  const openBatchModal = async () => {
+    setIsSubmittingCoa(true);
     setCoaStatus('');
-    setIsBatchModalOpen(true);
+    setBatchImportStatus('');
+
+    try {
+      const nextRounds = sortRoundsForDisplay(await fetchRounds());
+      const firstRound = nextRounds[0] ?? null;
+
+      setRounds(nextRounds);
+      setAdminRoundId((currentRoundId) =>
+        currentRoundId && nextRounds.some((round) => round.id === currentRoundId)
+          ? currentRoundId
+          : firstRound?.id ?? '',
+      );
+      setBatchRoundId(firstRound?.id ?? '');
+      setBatchRows([createCoaBatchFormRow()]);
+      setIsBatchModalOpen(true);
+    } catch (error) {
+      console.error(error);
+      setCoaStatus('Round data could not be refreshed.');
+    } finally {
+      setIsSubmittingCoa(false);
+    }
   };
 
   const updateBatchRow = (rowId: string, fields: Partial<CoaBatchFormRow>) => {
@@ -1455,11 +1480,57 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
 
     try {
       setCoaResults(await deleteCoaEntry(editingCoa.id));
+      if (selectedCoaId === editingCoa.id) {
+        clearSelectedCoaResult();
+      }
       setEditingCoa(null);
       setCoaStatus('COA entry deleted.');
     } catch (error) {
       console.error(error);
       setCoaStatus('COA entry could not be deleted.');
+    } finally {
+      setIsSubmittingCoa(false);
+    }
+  };
+
+  const deleteAllCoasForSelectedRound = async () => {
+    if (!selectedAdminRound) {
+      setCoaStatus('Choose a round first.');
+      return;
+    }
+
+    const entriesToDelete = coaResults.filter((result) => result.roundId === selectedAdminRound.id);
+
+    if (entriesToDelete.length === 0) {
+      setCoaStatus(`No COA entries found for ${selectedAdminRound.name}.`);
+      return;
+    }
+
+    const entryLabel = entriesToDelete.length === 1 ? 'entry' : 'entries';
+
+    if (!window.confirm(`Delete ${entriesToDelete.length} COA ${entryLabel} from ${selectedAdminRound.name}? This cannot be undone.`)) {
+      return;
+    }
+
+    setIsSubmittingCoa(true);
+
+    try {
+      let nextCoas = coaResults;
+
+      for (const entry of entriesToDelete) {
+        nextCoas = await deleteCoaEntry(entry.id);
+      }
+
+      setCoaResults(nextCoas);
+
+      if (selectedCoaId && entriesToDelete.some((entry) => entry.id === selectedCoaId)) {
+        clearSelectedCoaResult();
+      }
+
+      setCoaStatus(`${entriesToDelete.length} COA ${entryLabel} deleted from ${selectedAdminRound.name}.`);
+    } catch (error) {
+      console.error(error);
+      setCoaStatus('COA entries could not be deleted.');
     } finally {
       setIsSubmittingCoa(false);
     }
@@ -1498,11 +1569,29 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
           <p>Every batch is independently tested. Select a batch to view the full result summary.</p>
           {isAdmin && (
             <div className="coa-admin-actions">
-              <button className="coa-admin-primary" type="button" onClick={openBatchModal}>
+              <label className="coa-admin-round-select">
+                <span>Admin round</span>
+                <select value={selectedAdminRound?.id ?? ''} disabled={isSubmittingCoa || rounds.length === 0} onChange={(event) => setAdminRoundId(event.target.value)}>
+                  {rounds.map((round) => (
+                    <option value={round.id} key={round.id}>
+                      {round.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button className="coa-admin-primary" type="button" disabled={isSubmittingCoa} onClick={() => void openBatchModal()}>
                 Add batch numbers
               </button>
               <button type="button" onClick={openBulkUploadModal}>
                 Add COAs
+              </button>
+              <button
+                className="coa-admin-danger"
+                type="button"
+                disabled={isSubmittingCoa || !selectedAdminRound}
+                onClick={() => void deleteAllCoasForSelectedRound()}
+              >
+                Delete all
               </button>
             </div>
           )}
@@ -2039,7 +2128,7 @@ function CoaEditFields({
           >
             <option value="">Choose peptide</option>
             {sortRoundPeptidesByVendorCode(selectedRound?.peptides
-              .filter((row) => row.peptideId && row.testingTier !== 'none') ?? [])
+              .filter((row) => row.peptideId || row.vendorCode) ?? [])
               .map((row) => (
                 <option value={row.id} key={row.id}>
                   {row.peptideName} - {row.vendorCode || row.mass}

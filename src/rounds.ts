@@ -60,17 +60,38 @@ export type Round = {
   updatedAt?: string;
 };
 
-export async function fetchRounds() {
-  const response = await fetch('/api/data/rounds');
+type PeptideDictionaryItem = {
+  id: string;
+  name: string;
+};
 
-  if (!response.ok) {
+export async function fetchRounds() {
+  const [roundsResponse, priceListsResponse, peptidesResponse] = await Promise.all([
+    fetch('/api/data/rounds'),
+    fetch('/api/data/vendor-price-lists'),
+    fetch('/api/data/peptides'),
+  ]);
+
+  if (!roundsResponse.ok) {
     throw new Error('Rounds could not be loaded.');
   }
 
-  const records = (await response.json()) as unknown;
-  return Array.isArray(records)
+  const records = (await roundsResponse.json()) as unknown;
+  const priceListRecords = priceListsResponse.ok ? (await priceListsResponse.json()) as unknown : [];
+  const peptideRecords = peptidesResponse.ok ? (await peptidesResponse.json()) as unknown : [];
+  const rounds = Array.isArray(records)
     ? records.map(normalizeRound).filter((round): round is Round => Boolean(round))
     : [];
+
+  return hydrateVendorDefaultRounds(
+    rounds,
+    Array.isArray(priceListRecords)
+      ? priceListRecords.map(normalizePriceListSnapshot).filter((snapshot): snapshot is RoundPriceListSnapshot => Boolean(snapshot))
+      : [],
+    Array.isArray(peptideRecords)
+      ? peptideRecords.map(normalizePeptideDictionaryItem).filter((peptide): peptide is PeptideDictionaryItem => Boolean(peptide))
+      : [],
+  );
 }
 
 export function getCurrentRounds(rounds: Round[]) {
@@ -106,6 +127,30 @@ export function parseRoundMassMg(mass: string) {
   const match = mass.match(/\d+(?:\.\d+)?/);
 
   return match ? Number.parseFloat(match[0]) : 0;
+}
+
+export function hydrateVendorDefaultRounds(
+  rounds: Round[],
+  priceLists: RoundPriceListSnapshot[],
+  peptides: PeptideDictionaryItem[] = [],
+) {
+  return rounds.map((round) => {
+    if (round.priceSourceMode !== 'vendor-default' || !round.vendorId) {
+      return round;
+    }
+
+    const latestSnapshot = priceLists.find((priceList) => priceList.vendorId === round.vendorId) ?? null;
+
+    if (!latestSnapshot) {
+      return round;
+    }
+
+    return {
+      ...round,
+      priceListSnapshot: latestSnapshot,
+      peptides: reconcileRoundPeptidesWithPriceList(round.peptides, latestSnapshot, peptides),
+    };
+  });
 }
 
 function normalizeRound(value: unknown): Round | null {
@@ -172,6 +217,88 @@ function normalizeRoundPeptide(value: unknown): RoundPeptide | null {
   };
 }
 
+function reconcileRoundPeptidesWithPriceList(
+  rows: RoundPeptide[],
+  priceListSnapshot: RoundPriceListSnapshot,
+  peptides: PeptideDictionaryItem[],
+) {
+  return rows.map((row) => {
+    const priceListItem = findUpdatedPriceListItem(row, priceListSnapshot);
+
+    if (!priceListItem) {
+      return row;
+    }
+
+    return {
+      ...row,
+      priceListItemId: priceListItem.id,
+      vendorCode: priceListItem.vendorCode,
+      peptideId: resolvePeptideId(row, priceListItem, peptides),
+      peptideName: resolvePeptideName(row, priceListItem, peptides),
+      mass: priceListItem.mass,
+      vendorPrice: row.vendorPriceOverridden ? row.vendorPrice : priceListItem.price,
+    };
+  });
+}
+
+function resolvePeptideId(
+  row: RoundPeptide,
+  priceListItem: RoundPriceListItem,
+  peptides: PeptideDictionaryItem[],
+) {
+  const linkedPeptideId = row.peptideId || priceListItem.peptideIds[0] || '';
+
+  if (linkedPeptideId) {
+    return linkedPeptideId;
+  }
+
+  return findPeptideByName(priceListItem.productName || row.peptideName, peptides)?.id ?? '';
+}
+
+function resolvePeptideName(
+  row: RoundPeptide,
+  priceListItem: RoundPriceListItem,
+  peptides: PeptideDictionaryItem[],
+) {
+  const peptideId = resolvePeptideId(row, priceListItem, peptides);
+  const peptide = peptideId
+    ? peptides.find((currentPeptide) => currentPeptide.id === peptideId)
+    : null;
+
+  return peptide?.name || row.peptideName || priceListItem.productName;
+}
+
+function findUpdatedPriceListItem(
+  row: RoundPeptide,
+  priceListSnapshot: RoundPriceListSnapshot,
+) {
+  const exactItem = row.priceListItemId
+    ? priceListSnapshot.items.find((item) => item.id === row.priceListItemId)
+    : null;
+
+  if (exactItem) {
+    return exactItem;
+  }
+
+  const normalizedVendorCode = normalizeMatchText(row.vendorCode);
+
+  if (normalizedVendorCode) {
+    const codeMatch = priceListSnapshot.items.find((item) => normalizeMatchText(item.vendorCode) === normalizedVendorCode);
+
+    if (codeMatch) {
+      return codeMatch;
+    }
+  }
+
+  const normalizedProductName = normalizeMatchText(row.peptideName);
+  const normalizedMass = normalizeMatchText(row.mass);
+
+  return priceListSnapshot.items.find((item) =>
+    normalizeMatchText(item.productName) === normalizedProductName
+    && (!normalizedMass || normalizeMatchText(item.mass) === normalizedMass),
+  ) ?? null;
+}
+
 function normalizePriceListSnapshot(value: unknown): RoundPriceListSnapshot | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
@@ -189,6 +316,18 @@ function normalizePriceListSnapshot(value: unknown): RoundPriceListSnapshot | nu
       ? snapshot.items.map(normalizePriceListItem).filter((item): item is RoundPriceListItem => Boolean(item))
       : [],
   };
+}
+
+function normalizePeptideDictionaryItem(value: unknown): PeptideDictionaryItem | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const peptide = value as Partial<PeptideDictionaryItem>;
+  const id = sanitizeString(peptide.id);
+  const name = sanitizeString(peptide.name);
+
+  return id && name ? { id, name } : null;
 }
 
 function normalizePriceSheet(value: unknown): VendorPriceSheet | null {
@@ -282,4 +421,18 @@ function normalizeNullableNumber(value: unknown) {
 
 function sanitizeString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeMatchText(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function findPeptideByName(name: string, peptides: PeptideDictionaryItem[]) {
+  const normalizedName = normalizeMatchText(name);
+
+  if (!normalizedName) {
+    return null;
+  }
+
+  return peptides.find((peptide) => normalizeMatchText(peptide.name) === normalizedName) ?? null;
 }
