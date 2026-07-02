@@ -290,8 +290,19 @@ function findUpdatedPriceListItem(
     }
   }
 
-  const normalizedProductName = normalizeMatchText(row.peptideName);
   const normalizedMass = normalizeMatchText(row.mass);
+  const peptideIdMatch = row.peptideId
+    ? priceListSnapshot.items.find((item) =>
+        item.peptideIds.includes(row.peptideId)
+        && (!normalizedMass || normalizeMatchText(item.mass) === normalizedMass),
+      )
+    : null;
+
+  if (peptideIdMatch) {
+    return peptideIdMatch;
+  }
+
+  const normalizedProductName = normalizeMatchText(row.peptideName);
 
   return priceListSnapshot.items.find((item) =>
     normalizeMatchText(item.productName) === normalizedProductName

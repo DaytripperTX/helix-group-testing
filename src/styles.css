@@ -1046,6 +1046,25 @@ main {
   margin: 0;
 }
 
+.admin-price-toolbar button {
+  border: 1px solid #c8d7e1;
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #ffffff;
+  color: #07101f;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+}
+
+.admin-price-toolbar button:hover,
+.admin-price-toolbar button:focus-visible {
+  border-color: #00aeb8;
+  background: #eafbff;
+  color: #006f78;
+  outline: none;
+}
+
 .admin-price-footer-actions {
   align-items: center;
 }
@@ -4804,17 +4823,19 @@ h2 {
 
 .coa-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(210px, 0.22fr);
+  grid-template-columns: minmax(170px, 0.22fr) minmax(0, 1fr) minmax(210px, 0.22fr);
   gap: 12px;
   align-items: end;
 }
 
+.coa-round-filter,
 .coa-search,
 .coa-filter {
   display: grid;
   gap: 7px;
 }
 
+.coa-round-filter span,
 .coa-search span,
 .coa-filter span {
   color: #536173;
@@ -4824,6 +4845,7 @@ h2 {
   text-transform: uppercase;
 }
 
+.coa-round-filter select,
 .coa-search input,
 .coa-filter select {
   width: 100%;
@@ -4838,6 +4860,7 @@ h2 {
   font-weight: 750;
 }
 
+.coa-round-filter select:focus,
 .coa-search input:focus,
 .coa-filter select:focus {
   border-color: #00aeb8;
@@ -6208,7 +6231,7 @@ h2 {
     font-size: 1.85rem;
   }
 
-  .coa-page__header p:last-child {
+  .coa-page__header > p {
     max-width: none;
   }
 

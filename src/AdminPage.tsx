@@ -359,6 +359,10 @@ function AdminPage({
     () => sortRoundPeptideRows(roundForm.peptides, roundPeptideSort),
     [roundForm.peptides, roundPeptideSort],
   );
+  const effectiveRoundPriceListSnapshot = useMemo(
+    () => roundForm.priceListSnapshot ?? getSavedVendorPriceListSnapshot(priceLists, roundForm.vendorId),
+    [priceLists, roundForm.priceListSnapshot, roundForm.vendorId],
+  );
   const filteredRoundPeptideRows = useMemo(
     () => sortedRoundPeptideRows.filter((row) => matchesAdminSearch(roundModalSearch, [
       row.peptideName,
@@ -572,6 +576,48 @@ function AdminPage({
     }
   };
 
+  const createManualPriceListDraft = (vendor: Vendor, existingItems: VendorPriceListItem[] = []): VendorPriceList => ({
+    id: createUniqueId(`${vendor.id}-price-list`, priceLists),
+    vendorId: vendor.id,
+    vendorName: vendor.name,
+    source: {
+      type: 'file',
+      fileName: 'manual-price-list.csv',
+      mimeType: 'text/csv',
+    },
+    items: existingItems,
+    parsedAt: new Date().toISOString(),
+  });
+
+  const addManualPriceListRow = () => {
+    if (!priceListVendor) {
+      return;
+    }
+
+    setPriceListDraft((currentDraft) => {
+      const draft = currentDraft ?? createManualPriceListDraft(priceListVendor);
+      const rowNumber = draft.items.length + 1;
+      const nextItem: VendorPriceListItem = {
+        id: createUniqueId(`manual-price-row-${rowNumber}`, draft.items),
+        vendorCode: '',
+        productName: '',
+        mass: '',
+        price: null,
+        vialsPerPack: 1,
+        peptideIds: [],
+        needsReview: true,
+      };
+
+      return {
+        ...draft,
+        parsedAt: new Date().toISOString(),
+        items: [...draft.items, nextItem],
+      };
+    });
+    setPriceListSearch('');
+    setPriceListStatus('Manual row added. Fill it in, then save the price list.');
+  };
+
   const updatePriceListItem = (
     itemId: string,
     field: keyof Pick<VendorPriceListItem, 'vendorCode' | 'productName' | 'mass' | 'price' | 'vialsPerPack'>,
@@ -664,6 +710,7 @@ function AdminPage({
       const nextPriceLists = await saveCollectionItem<VendorPriceList>('vendor-price-lists', nextDraft);
       const currentVendor = vendors.find((vendor) => vendor.id === priceListDraft.vendorId) ?? priceListVendor;
       let nextVendors = vendors;
+      let nextRounds = hydrateVendorDefaultRounds(rounds, nextPriceLists, peptides);
 
       if (currentVendor && isVendorPriceSheetSource(savedSource)) {
         const nextVendor = {
@@ -675,8 +722,12 @@ function AdminPage({
         setPriceListVendor(nextVendor);
       }
 
+      for (const round of nextRounds.filter((round) => round.vendorId === priceListDraft.vendorId && round.priceSourceMode === 'vendor-default')) {
+        nextRounds = await saveCollectionItem<Round>('rounds', round);
+      }
+
       setPriceLists(nextPriceLists);
-      setRounds((currentRounds) => hydrateVendorDefaultRounds(currentRounds, nextPriceLists, peptides));
+      setRounds(hydrateVendorDefaultRounds(nextRounds, nextPriceLists, peptides));
       setPriceListDraft(nextDraft);
       setPriceListStatus('');
       setPriceListFile(null);
@@ -887,7 +938,7 @@ function AdminPage({
     setRoundPriceListStatus('Importing peptide rows...');
 
     try {
-      const rows = await parseRoundPeptideBatchFile(file, roundForm.priceListSnapshot?.items ?? [], roundForm.peptides);
+      const rows = await parseRoundPeptideBatchFile(file, effectiveRoundPriceListSnapshot?.items ?? [], roundForm.peptides);
       const validRows = rows.filter((row) => row.errors.length === 0).map(stripRoundPeptideBatchFields);
 
       if (validRows.length === 0) {
@@ -954,7 +1005,8 @@ function AdminPage({
   };
 
   const applyPriceListItemToRoundRow = (rowId: string, priceListItemId: string) => {
-    const item = roundForm.priceListSnapshot?.items.find((currentItem) => currentItem.id === priceListItemId);
+    const priceListSnapshot = effectiveRoundPriceListSnapshot;
+    const item = priceListSnapshot?.items.find((currentItem) => currentItem.id === priceListItemId);
 
     if (!item) {
       updateRoundPeptideRow(rowId, {
@@ -968,14 +1020,28 @@ function AdminPage({
       ? peptides.find((peptide) => peptide.id === item.peptideIds[0])
       : findPeptideByName(item.productName, peptides);
 
-    updateRoundPeptideRow(rowId, {
-      priceListItemId: item.id,
-      vendorCode: item.vendorCode,
-      peptideId: linkedPeptide?.id ?? '',
-      peptideName: linkedPeptide?.name ?? item.productName,
-      mass: item.mass,
-      vendorPrice: item.price,
-      vendorPriceOverridden: false,
+    setRoundForm((currentForm) => {
+      const nextPriceSourceMode = currentForm.priceListSnapshot ? currentForm.priceSourceMode : 'vendor-default';
+
+      return {
+        ...currentForm,
+        priceSourceMode: nextPriceSourceMode,
+        priceListSnapshot: currentForm.priceListSnapshot ?? priceListSnapshot,
+        peptides: currentForm.peptides.map((row) =>
+          row.id === rowId
+            ? {
+                ...row,
+                priceListItemId: item.id,
+                vendorCode: item.vendorCode,
+                peptideId: linkedPeptide?.id ?? '',
+                peptideName: linkedPeptide?.name ?? item.productName,
+                mass: item.mass,
+                vendorPrice: item.price,
+                vendorPriceOverridden: false,
+              }
+            : row,
+        ),
+      };
     });
   };
 
@@ -1901,7 +1967,7 @@ function AdminPage({
               <div className="admin-round-source__header">
                 <div>
                   <span>Price source</span>
-                  <small>{roundForm.priceListSnapshot ? `${roundForm.priceListSnapshot.items.length} linked rows` : 'No price snapshot'}</small>
+                  <small>{effectiveRoundPriceListSnapshot ? `${effectiveRoundPriceListSnapshot.items.length} available rows` : 'No price snapshot'}</small>
                 </div>
                 <label>
                   <span>Mode</span>
@@ -2038,7 +2104,7 @@ function AdminPage({
                       onChange={(event) => applyPriceListItemToRoundRow(row.id, event.target.value)}
                     >
                       <option value="">{row.vendorCode || 'Manual'}</option>
-                      {sortRoundPriceListItemsByVendorCode(roundForm.priceListSnapshot?.items ?? []).map((item) => (
+                      {sortRoundPriceListItemsByVendorCode(effectiveRoundPriceListSnapshot?.items ?? []).map((item) => (
                         <option value={item.id} key={item.id}>
                           {item.vendorCode || item.productName}
                         </option>
@@ -2384,6 +2450,17 @@ function AdminPage({
 
             {priceListStatus && <p className="admin-status">{priceListStatus}</p>}
 
+            {!priceListDraft && (
+              <div className="admin-price-toolbar">
+                <div className="admin-price-meta">
+                  <span>No rows yet</span>
+                </div>
+                <button type="button" onClick={addManualPriceListRow}>
+                  Add Row
+                </button>
+              </div>
+            )}
+
             {priceListDraft && (
               <>
                 <div className="admin-price-toolbar">
@@ -2400,8 +2477,13 @@ function AdminPage({
                       onChange={(event) => setPriceListSearch(event.target.value)}
                     />
                   </label>
-                  <button className="admin-delete-button" type="button" onClick={() => void deleteVendorPriceList()}>
-                    Delete Entire Price List
+                  {priceLists.some((priceList) => priceList.id === priceListDraft.id) && (
+                    <button className="admin-delete-button" type="button" onClick={() => void deleteVendorPriceList()}>
+                      Delete Entire Price List
+                    </button>
+                  )}
+                  <button type="button" onClick={addManualPriceListRow}>
+                    Add Row
                   </button>
                 </div>
                 <div className="admin-price-table">
@@ -3763,8 +3845,19 @@ function findUpdatedRoundPriceListItem(
     }
   }
 
-  const normalizedProductName = normalizeName(row.peptideName);
   const normalizedMass = normalizeName(row.mass);
+  const peptideIdMatch = row.peptideId
+    ? priceListSnapshot.items.find((item) =>
+        item.peptideIds.includes(row.peptideId)
+        && (!normalizedMass || normalizeName(item.mass) === normalizedMass),
+      )
+    : null;
+
+  if (peptideIdMatch) {
+    return peptideIdMatch;
+  }
+
+  const normalizedProductName = normalizeName(row.peptideName);
 
   return priceListSnapshot.items.find((item) =>
     normalizeName(item.productName) === normalizedProductName

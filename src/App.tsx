@@ -1168,7 +1168,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
   const [rounds, setRounds] = useState<Round[]>([]);
   const [coaStatus, setCoaStatus] = useState('');
   const [isSubmittingCoa, setIsSubmittingCoa] = useState(false);
-  const [adminRoundId, setAdminRoundId] = useState('');
+  const [roundFilter, setRoundFilter] = useState('all');
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [batchRoundId, setBatchRoundId] = useState('');
   const [batchRows, setBatchRows] = useState<CoaBatchFormRow[]>([]);
@@ -1185,11 +1185,11 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
     [sortedCoaResults],
   );
   const filteredResults = useMemo(
-    () => filterCoaResults(sortedCoaResults, searchTerm, peptideFilter),
-    [sortedCoaResults, searchTerm, peptideFilter],
+    () => filterCoaResults(sortedCoaResults, searchTerm, peptideFilter, roundFilter),
+    [sortedCoaResults, searchTerm, peptideFilter, roundFilter],
   );
   const selectedCoaResult = sortedCoaResults.find((result) => result.id === selectedCoaId) ?? null;
-  const selectedAdminRound = rounds.find((round) => round.id === adminRoundId) ?? rounds[0] ?? null;
+  const selectedFilterRound = roundFilter === 'all' ? null : rounds.find((round) => round.id === roundFilter) ?? null;
   const selectedBatchRound = rounds.find((round) => round.id === batchRoundId) ?? rounds[0] ?? null;
   const selectableBatchRoundPeptides = useMemo(
     () => sortRoundPeptidesByVendorCode(
@@ -1225,10 +1225,10 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
 
       setCoaResults(nextCoas);
       setRounds(sortedRounds);
-      setAdminRoundId((currentRoundId) =>
-        currentRoundId && sortedRounds.some((round) => round.id === currentRoundId)
+      setRoundFilter((currentRoundId) =>
+        currentRoundId === 'all' || sortedRounds.some((round) => round.id === currentRoundId)
           ? currentRoundId
-          : sortedRounds[0]?.id ?? '',
+          : 'all',
       );
       setCoaStatus('');
     } catch (error) {
@@ -1260,14 +1260,15 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
     try {
       const nextRounds = sortRoundsForDisplay(await fetchRounds());
       const firstRound = nextRounds[0] ?? null;
+      const defaultBatchRound = nextRounds.find((round) => round.id === roundFilter) ?? firstRound;
 
       setRounds(nextRounds);
-      setAdminRoundId((currentRoundId) =>
-        currentRoundId && nextRounds.some((round) => round.id === currentRoundId)
+      setRoundFilter((currentRoundId) =>
+        currentRoundId === 'all' || nextRounds.some((round) => round.id === currentRoundId)
           ? currentRoundId
-          : firstRound?.id ?? '',
+          : 'all',
       );
-      setBatchRoundId(firstRound?.id ?? '');
+      setBatchRoundId(defaultBatchRound?.id ?? '');
       setBatchRows([createCoaBatchFormRow()]);
       setIsBatchModalOpen(true);
     } catch (error) {
@@ -1494,21 +1495,21 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const deleteAllCoasForSelectedRound = async () => {
-    if (!selectedAdminRound) {
-      setCoaStatus('Choose a round first.');
+    if (!selectedFilterRound) {
+      setCoaStatus('Choose a round filter before deleting entries.');
       return;
     }
 
-    const entriesToDelete = coaResults.filter((result) => result.roundId === selectedAdminRound.id);
+    const entriesToDelete = coaResults.filter((result) => result.roundId === selectedFilterRound.id);
 
     if (entriesToDelete.length === 0) {
-      setCoaStatus(`No COA entries found for ${selectedAdminRound.name}.`);
+      setCoaStatus(`No COA entries found for ${selectedFilterRound.name}.`);
       return;
     }
 
     const entryLabel = entriesToDelete.length === 1 ? 'entry' : 'entries';
 
-    if (!window.confirm(`Delete ${entriesToDelete.length} COA ${entryLabel} from ${selectedAdminRound.name}? This cannot be undone.`)) {
+    if (!window.confirm(`Delete ${entriesToDelete.length} COA ${entryLabel} from ${selectedFilterRound.name}? This cannot be undone.`)) {
       return;
     }
 
@@ -1527,7 +1528,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
         clearSelectedCoaResult();
       }
 
-      setCoaStatus(`${entriesToDelete.length} COA ${entryLabel} deleted from ${selectedAdminRound.name}.`);
+      setCoaStatus(`${entriesToDelete.length} COA ${entryLabel} deleted from ${selectedFilterRound.name}.`);
     } catch (error) {
       console.error(error);
       setCoaStatus('COA entries could not be deleted.');
@@ -1569,16 +1570,6 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
           <p>Every batch is independently tested. Select a batch to view the full result summary.</p>
           {isAdmin && (
             <div className="coa-admin-actions">
-              <label className="coa-admin-round-select">
-                <span>Admin round</span>
-                <select value={selectedAdminRound?.id ?? ''} disabled={isSubmittingCoa || rounds.length === 0} onChange={(event) => setAdminRoundId(event.target.value)}>
-                  {rounds.map((round) => (
-                    <option value={round.id} key={round.id}>
-                      {round.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <button className="coa-admin-primary" type="button" disabled={isSubmittingCoa} onClick={() => void openBatchModal()}>
                 Add batch numbers
               </button>
@@ -1588,7 +1579,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
               <button
                 className="coa-admin-danger"
                 type="button"
-                disabled={isSubmittingCoa || !selectedAdminRound}
+                disabled={isSubmittingCoa || !selectedFilterRound}
                 onClick={() => void deleteAllCoasForSelectedRound()}
               >
                 Delete all
@@ -1602,6 +1593,18 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
         {!selectedCoaId && (
           <>
             <div className="coa-toolbar" aria-label="COA filters">
+              <label className="coa-round-filter">
+                <span>Round</span>
+                <select value={roundFilter} onChange={(event) => setRoundFilter(event.target.value)}>
+                  <option value="all">All rounds</option>
+                  {rounds.map((round) => (
+                    <option value={round.id} key={round.id}>
+                      {round.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <label className="coa-search">
                 <span>Search</span>
                 <input
@@ -2179,10 +2182,14 @@ function getCoaHashSelection() {
   return decodeURIComponent(window.location.hash.replace(/^#/, '')).trim();
 }
 
-function filterCoaResults(results: CoaResult[], searchTerm: string, peptideFilter: string) {
+function filterCoaResults(results: CoaResult[], searchTerm: string, peptideFilter: string, roundFilter: string) {
   const normalizedSearchTerm = normalizeCoaSearchText(searchTerm);
 
   return results.filter((result) => {
+    if (roundFilter !== 'all' && result.roundId !== roundFilter) {
+      return false;
+    }
+
     if (peptideFilter !== 'all' && result.peptideName !== peptideFilter) {
       return false;
     }
