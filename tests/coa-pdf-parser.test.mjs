@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { doesParsedLotMatchBatch, parseCoaPdfBuffer } from '../server/coa-pdf-parser.mjs';
+import { doesParsedLotMatchBatch, parseCoaPdfUploadBuffer } from '../server/coa-pdf-parser.mjs';
 
 const fixtureCases = [
   {
@@ -13,6 +13,8 @@ const fixtureCases = [
     purity: '99.85%',
     averageNetContent: '31.71 mg',
     verificationPath: '/2qgRtQeSmLEps64L',
+    vialWidth: 560,
+    vialHeight: 560,
   },
   {
     fileName: 'CR-MOTSC40-2606-BLUE.pdf',
@@ -20,6 +22,8 @@ const fixtureCases = [
     purity: '99.84%',
     averageNetContent: '42.61 mg',
     verificationPath: '/BbI200sytFsY4ccJ',
+    vialWidth: 560,
+    vialHeight: 747,
   },
   {
     fileName: 'CR-TESA20-2606-GRAY.pdf',
@@ -27,6 +31,8 @@ const fixtureCases = [
     purity: '99.78%',
     averageNetContent: '20.87 mg',
     verificationPath: '/jVRGVT5XYzZnyPci',
+    vialWidth: 560,
+    vialHeight: 747,
   },
 ];
 
@@ -35,7 +41,8 @@ for (const fixtureCase of fixtureCases) {
 
   test(`parses ILS COA fixture ${fixtureCase.fileName}`, { skip: !fixturePath }, async () => {
     const pdf = await readFile(fixturePath);
-    const parsed = await parseCoaPdfBuffer(pdf, { fileName: fixtureCase.fileName });
+    const result = await parseCoaPdfUploadBuffer(pdf, { fileName: fixtureCase.fileName });
+    const parsed = result.parsedCoa;
 
     assert.equal(parsed.templateId, 'ils_laboratories_coa');
     assert.equal(parsed.pageCount, 2);
@@ -49,6 +56,16 @@ for (const fixtureCase of fixtureCases) {
     assert.equal(parsed.fields.fentanyl, 'Pass');
     assert.ok(parsed.fields.verificationUrl.endsWith(fixtureCase.verificationPath));
     assert.equal(parsed.warnings.length, 0);
+    assert.equal(result.vialImage.mimeType, 'image/png');
+    assert.equal(result.vialImage.width, fixtureCase.vialWidth);
+    assert.equal(result.vialImage.height, fixtureCase.vialHeight);
+    assert.equal(result.vialImage.sourceName, 'img_p0_5');
+    assert.equal(result.vialImage.operatorIndex, 316);
+    assert.equal(result.vialImage.buffer.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    assert.equal(parsed.raw.vialImage.width, fixtureCase.vialWidth);
+    assert.equal(parsed.raw.vialImage.height, fixtureCase.vialHeight);
+    assert.equal(parsed.raw.vialImage.drawnX, 476.22);
+    assert.ok(parsed.raw.vialImage.drawnWidth > 70);
   });
 }
 

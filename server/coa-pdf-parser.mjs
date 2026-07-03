@@ -1,9 +1,14 @@
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { PNG } from 'pngjs';
 
 const parserVersion = 'coa-pdf-parser-v1';
 const maxRawSnippetLength = 1200;
 
 export async function parseCoaPdfBuffer(buffer, options = {}) {
+  return (await parseCoaPdfUploadBuffer(buffer, options)).parsedCoa;
+}
+
+export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
   const data = new Uint8Array(buffer);
   const document = await pdfjs.getDocument({
     data,
@@ -12,6 +17,7 @@ export async function parseCoaPdfBuffer(buffer, options = {}) {
   }).promise;
   const pages = [];
   const annotationUrls = [];
+  const imageCandidates = [];
 
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
     const page = await document.getPage(pageNumber);
@@ -32,6 +38,10 @@ export async function parseCoaPdfBuffer(buffer, options = {}) {
       lines,
       text: lines.join('\n'),
     });
+
+    if (pageNumber === 1) {
+      imageCandidates.push(...await extractPageImageCandidates(page, pageNumber));
+    }
   }
 
   const fullText = pages.map((page) => page.text).join('\n');
@@ -43,22 +53,35 @@ export async function parseCoaPdfBuffer(buffer, options = {}) {
     : parseGenericFields(pages, fullText, verificationUrl);
   const warnings = validateParsedFields(fields, { fileName: options.fileName });
   const confidence = calculateConfidence(fields, template, warnings);
+  const vialImage = selectVialImageCandidate(imageCandidates);
 
-  return compactParsedCoa({
-    parserVersion,
-    extractionMethod: 'native_pdf',
-    templateId: template.templateId,
-    templateConfidence: template.confidence,
-    matchedAnchors: template.matchedAnchors,
-    pageCount: document.numPages,
-    confidence,
-    fields,
-    warnings,
-    raw: {
-      verificationUrls: [...new Set([...annotationUrls, ...textUrls])],
-      snippets: createSnippets(pages),
-    },
-  });
+  return {
+    parsedCoa: compactParsedCoa({
+      parserVersion,
+      extractionMethod: 'native_pdf',
+      templateId: template.templateId,
+      templateConfidence: template.confidence,
+      matchedAnchors: template.matchedAnchors,
+      pageCount: document.numPages,
+      confidence,
+      fields,
+      warnings,
+      raw: {
+        verificationUrls: [...new Set([...annotationUrls, ...textUrls])],
+        snippets: createSnippets(pages),
+        vialImage: vialImage ? createVialImageMetadata(vialImage) : null,
+      },
+    }),
+    vialImage: vialImage ? {
+      buffer: vialImage.buffer,
+      mimeType: 'image/png',
+      width: vialImage.width,
+      height: vialImage.height,
+      sourceName: vialImage.name,
+      pageNumber: vialImage.pageNumber,
+      operatorIndex: vialImage.operatorIndex,
+    } : null,
+  };
 }
 
 export function createFailedParsedCoa(error) {
@@ -76,6 +99,7 @@ export function createFailedParsedCoa(error) {
     raw: {
       verificationUrls: [],
       snippets: {},
+      vialImage: null,
     },
   });
 }
@@ -105,7 +129,264 @@ export function compactParsedCoa(value) {
     raw: {
       verificationUrls: sanitizeStringList(raw.verificationUrls, 8, 240),
       snippets: compactSnippets(raw.snippets),
+      vialImage: compactVialImageMetadata(raw.vialImage),
     },
+  };
+}
+
+async function extractPageImageCandidates(page, pageNumber) {
+  const operatorList = await page.getOperatorList();
+  const candidates = [];
+  const pageWidth = Math.abs(Number(page.view?.[2]) - Number(page.view?.[0])) || 612;
+  let currentMatrix = [1, 0, 0, 1, 0, 0];
+  const matrixStack = [];
+
+  for (let index = 0; index < operatorList.fnArray.length; index += 1) {
+    const operator = operatorList.fnArray[index];
+    const args = operatorList.argsArray[index];
+
+    if (operator === pdfjs.OPS.save) {
+      matrixStack.push(currentMatrix.slice());
+      continue;
+    }
+
+    if (operator === pdfjs.OPS.restore) {
+      currentMatrix = matrixStack.pop() || [1, 0, 0, 1, 0, 0];
+      continue;
+    }
+
+    if (operator === pdfjs.OPS.transform) {
+      currentMatrix = multiplyPdfMatrix(currentMatrix, args);
+      continue;
+    }
+
+    if (operator !== pdfjs.OPS.paintImageXObject) {
+      continue;
+    }
+
+    const [name, width, height] = args ?? [];
+    const placement = createImagePlacement(currentMatrix, pageWidth);
+
+    if (!name || !isSaneVialImageSize(width, height, placement)) {
+      continue;
+    }
+
+    const image = await getPageImageObject(page, name);
+    const candidate = createImageCandidate({ image, name, pageNumber, operatorIndex: index, placement });
+
+    if (candidate) {
+      candidates.push(candidate);
+    }
+  }
+
+  return candidates;
+}
+
+function multiplyPdfMatrix(first, second) {
+  if (!Array.isArray(second) || second.length < 6) {
+    return first;
+  }
+
+  return [
+    first[0] * second[0] + first[2] * second[1],
+    first[1] * second[0] + first[3] * second[1],
+    first[0] * second[2] + first[2] * second[3],
+    first[1] * second[2] + first[3] * second[3],
+    first[0] * second[4] + first[2] * second[5] + first[4],
+    first[1] * second[4] + first[3] * second[5] + first[5],
+  ];
+}
+
+function createImagePlacement(matrix, pageWidth) {
+  return {
+    x: Number(matrix?.[4]) || 0,
+    y: Number(matrix?.[5]) || 0,
+    width: Math.abs(Number(matrix?.[0]) || 0),
+    height: Math.abs(Number(matrix?.[3]) || 0),
+    pageWidth,
+  };
+}
+
+function getPageImageObject(page, name) {
+  return new Promise((resolve) => {
+    page.objs.get(name, resolve);
+  });
+}
+
+function createImageCandidate({ image, name, pageNumber, operatorIndex, placement }) {
+  const width = Math.max(0, Math.round(Number(image?.width) || 0));
+  const height = Math.max(0, Math.round(Number(image?.height) || 0));
+
+  if (!isSaneVialImageSize(width, height, placement) || !image?.data) {
+    return null;
+  }
+
+  const rgba = toRgbaBuffer(image);
+  const content = analyzeImageContent(rgba, width, height);
+
+  if (content.visibleRatio < 0.02 || content.nonWhiteRatio < 0.01) {
+    return null;
+  }
+
+  const score = scoreVialImageCandidate({ width, height, kind: image.kind, operatorIndex, content, placement });
+  const png = new PNG({ width, height });
+  png.data = rgba;
+
+  return {
+    name,
+    pageNumber,
+    operatorIndex,
+    width,
+    height,
+    kind: image.kind,
+    placement,
+    score,
+    content,
+    buffer: PNG.sync.write(png),
+  };
+}
+
+function isSaneVialImageSize(width, height, placement = {}) {
+  const cleanWidth = Number(width);
+  const cleanHeight = Number(height);
+  const aspectRatio = cleanWidth / cleanHeight;
+  const drawWidth = Number(placement.width) || 0;
+  const drawHeight = Number(placement.height) || 0;
+
+  return Number.isFinite(cleanWidth)
+    && Number.isFinite(cleanHeight)
+    && cleanWidth >= 120
+    && cleanWidth <= 900
+    && cleanHeight >= 120
+    && cleanHeight <= 900
+    && aspectRatio >= 0.45
+    && aspectRatio <= 1.35
+    && (!drawWidth || (drawWidth >= 45 && drawWidth <= 170))
+    && (!drawHeight || (drawHeight >= 45 && drawHeight <= 180));
+}
+
+function toRgbaBuffer(image) {
+  const width = Math.max(0, Math.round(Number(image.width) || 0));
+  const height = Math.max(0, Math.round(Number(image.height) || 0));
+  const pixelCount = width * height;
+  const source = image.data;
+  const rgba = Buffer.alloc(pixelCount * 4);
+
+  if (image.kind === pdfjs.ImageKind.RGBA_32BPP) {
+    return Buffer.from(source);
+  }
+
+  if (image.kind === pdfjs.ImageKind.RGB_24BPP) {
+    for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+      rgba[pixel * 4] = source[pixel * 3] ?? 0;
+      rgba[pixel * 4 + 1] = source[pixel * 3 + 1] ?? 0;
+      rgba[pixel * 4 + 2] = source[pixel * 3 + 2] ?? 0;
+      rgba[pixel * 4 + 3] = 255;
+    }
+
+    return rgba;
+  }
+
+  for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+    const value = source[pixel] ?? 0;
+    rgba[pixel * 4] = value;
+    rgba[pixel * 4 + 1] = value;
+    rgba[pixel * 4 + 2] = value;
+    rgba[pixel * 4 + 3] = 255;
+  }
+
+  return rgba;
+}
+
+function analyzeImageContent(rgba, width, height) {
+  const pixelCount = Math.max(1, width * height);
+  let visiblePixels = 0;
+  let nonWhitePixels = 0;
+
+  for (let offset = 0; offset < rgba.length; offset += 4) {
+    const red = rgba[offset];
+    const green = rgba[offset + 1];
+    const blue = rgba[offset + 2];
+    const alpha = rgba[offset + 3];
+
+    if (alpha <= 10) {
+      continue;
+    }
+
+    visiblePixels += 1;
+
+    if (red < 245 || green < 245 || blue < 245) {
+      nonWhitePixels += 1;
+    }
+  }
+
+  return {
+    visibleRatio: visiblePixels / pixelCount,
+    nonWhiteRatio: nonWhitePixels / pixelCount,
+  };
+}
+
+function scoreVialImageCandidate({ width, height, kind, operatorIndex, content, placement }) {
+  let score = 0;
+  const aspectRatio = width / height;
+  const isRightSide = placement.x >= placement.pageWidth * 0.72;
+
+  if (isRightSide) {
+    score += 8;
+  }
+
+  if (placement.y >= 480 && placement.y <= 640) {
+    score += 4;
+  }
+
+  if (placement.width >= 60 && placement.width <= 120 && placement.height >= 60 && placement.height <= 130) {
+    score += 4;
+  }
+
+  if (width >= 500 && height >= 500) {
+    score += 3;
+  }
+
+  if (aspectRatio >= 0.65 && aspectRatio <= 1.05) {
+    score += 2;
+  }
+
+  if (operatorIndex >= 280 && operatorIndex <= 380) {
+    score += 2;
+  }
+
+  if (kind === pdfjs.ImageKind.RGBA_32BPP && !isRightSide) {
+    score -= 4;
+  }
+
+  score += Math.min(2, content.nonWhiteRatio * 8);
+
+  return Math.round(score * 100) / 100;
+}
+
+function selectVialImageCandidate(candidates) {
+  return candidates
+    .slice()
+    .sort((first, second) =>
+    second.score - first.score ||
+      second.placement.x - first.placement.x ||
+      first.operatorIndex - second.operatorIndex,
+    )[0] ?? null;
+}
+
+function createVialImageMetadata(vialImage) {
+  return {
+    pageNumber: vialImage.pageNumber,
+    operatorIndex: vialImage.operatorIndex,
+    imageName: vialImage.name,
+    width: vialImage.width,
+    height: vialImage.height,
+    drawnX: Math.round(vialImage.placement.x * 100) / 100,
+    drawnY: Math.round(vialImage.placement.y * 100) / 100,
+    drawnWidth: Math.round(vialImage.placement.width * 100) / 100,
+    drawnHeight: Math.round(vialImage.placement.height * 100) / 100,
+    mimeType: 'image/png',
+    score: vialImage.score,
   };
 }
 
@@ -412,6 +693,26 @@ function compactSnippets(snippets) {
       .map(([key, value]) => [sanitizeText(key).slice(0, 40), sanitizeText(value).slice(0, maxRawSnippetLength)])
       .filter(([key, value]) => key && value),
   );
+}
+
+function compactVialImageMetadata(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  return {
+    pageNumber: Math.max(0, Math.round(Number(value.pageNumber) || 0)),
+    operatorIndex: Math.max(0, Math.round(Number(value.operatorIndex) || 0)),
+    imageName: sanitizeText(value.imageName).slice(0, 80),
+    width: Math.max(0, Math.round(Number(value.width) || 0)),
+    height: Math.max(0, Math.round(Number(value.height) || 0)),
+    drawnX: Math.max(0, Math.round(Number(value.drawnX) * 100) / 100 || 0),
+    drawnY: Math.max(0, Math.round(Number(value.drawnY) * 100) / 100 || 0),
+    drawnWidth: Math.max(0, Math.round(Number(value.drawnWidth) * 100) / 100 || 0),
+    drawnHeight: Math.max(0, Math.round(Number(value.drawnHeight) * 100) / 100 || 0),
+    mimeType: sanitizeText(value.mimeType).slice(0, 40) || 'image/png',
+    score: Math.max(0, Math.round(Number(value.score) * 100) / 100 || 0),
+  };
 }
 
 function normalizeDate(value) {

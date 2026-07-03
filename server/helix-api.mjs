@@ -14,6 +14,7 @@ import {
   publicVoteLabelTemplate,
   readCollection,
   readCoaPdfAsset,
+  readCoaVialImageAsset,
   readLabelTemplatePreviewAsset,
   readPublicLabelTemplates,
   recoverLabelTemplate,
@@ -102,6 +103,17 @@ export async function handleHelixApiRequest(request) {
         'Content-Type': pdf.mimeType,
         'Cache-Control': 'public, max-age=3600',
         'Content-Disposition': `inline; filename="${pdf.fileName.replace(/["\\]/g, '')}"`,
+      });
+    }
+
+    if (method === 'GET' && pathname.startsWith('/api/coas/') && getPathPart(pathname, 4) === 'vial-image') {
+      const coaId = decodeURIComponent(getPathPart(pathname, 3));
+      const image = await readCoaVialImageAsset(coaId);
+
+      return binaryResponse(200, image.buffer, {
+        'Content-Type': image.mimeType,
+        'Cache-Control': 'private, no-cache',
+        'Content-Disposition': `inline; filename="${image.fileName.replace(/["\\]/g, '')}"`,
       });
     }
 

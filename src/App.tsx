@@ -119,6 +119,12 @@ type CoaResult = {
   coaMimeType?: string;
   coaBlobKey?: string;
   coaUploadedAt?: string;
+  vialImageAssetKey?: string;
+  vialImageMimeType?: string;
+  vialImageFileName?: string;
+  vialImageSource?: string;
+  vialImageMode?: 'extracted' | 'placeholder';
+  vialImageExtractedAt?: string;
   parsedCoa?: ParsedCoa;
   createdAt?: string;
   updatedAt?: string;
@@ -158,6 +164,19 @@ type ParsedCoa = {
   raw?: {
     verificationUrls?: string[];
     snippets?: Record<string, string>;
+    vialImage?: {
+      pageNumber: number;
+      operatorIndex: number;
+      imageName: string;
+      width: number;
+      height: number;
+      drawnX: number;
+      drawnY: number;
+      drawnWidth: number;
+      drawnHeight: number;
+      mimeType: string;
+      score: number;
+    } | null;
   };
   error?: string;
 };
@@ -209,6 +228,12 @@ type CoaPdfAsset = {
   coaMimeType: 'application/pdf';
   coaBlobKey: string;
   coaUploadedAt: string;
+  vialImageAssetKey?: string;
+  vialImageMimeType?: string;
+  vialImageFileName?: string;
+  vialImageSource?: string;
+  vialImageMode?: 'extracted' | 'placeholder';
+  vialImageExtractedAt?: string;
   parsedCoa?: ParsedCoa;
 };
 
@@ -1612,6 +1637,24 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
     }
   };
 
+  const saveCoaVialImageMode = async (result: CoaResult, mode: 'extracted' | 'placeholder') => {
+    if (!result.vialImageAssetKey) {
+      return;
+    }
+
+    setIsSubmittingCoa(true);
+
+    try {
+      setCoaResults(await saveCoaEntry({ ...result, vialImageMode: mode }));
+      setCoaStatus(mode === 'placeholder' ? 'Generated vial restored.' : 'COA vial image restored.');
+    } catch (error) {
+      console.error(error);
+      setCoaStatus('Vial image setting could not be saved.');
+    } finally {
+      setIsSubmittingCoa(false);
+    }
+  };
+
   return (
     <section className="coa-page" aria-labelledby="coa-title">
       <div className="section__content coa-page__content">
@@ -1827,6 +1870,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
             }}
             onClear={clearSelectedCoaResult}
             onEdit={openEditCoaModal}
+            onToggleVialImage={(result, mode) => void saveCoaVialImageMode(result, mode)}
           />
         ) : selectedCoaId ? (
           <div className="coa-detail coa-detail--empty" role="status">
@@ -2018,13 +2062,16 @@ function CoaBatchDetail({
   onAttach,
   onClear,
   onEdit,
+  onToggleVialImage,
 }: {
   result: CoaResult;
   isAdmin: boolean;
   onAttach: (result: CoaResult) => void;
   onClear: () => void;
   onEdit: (result: CoaResult) => void;
+  onToggleVialImage: (result: CoaResult, mode: 'extracted' | 'placeholder') => void;
 }) {
+  const vialImageUrl = getCoaVialImageUrl(result);
   const detailRows = [
     { label: 'Lab', value: result.lab },
     { label: 'Round', value: result.roundName },
@@ -2070,6 +2117,14 @@ function CoaBatchDetail({
           )}
           {isAdmin && (
             <>
+              {result.vialImageAssetKey && (
+                <button
+                  type="button"
+                  onClick={() => onToggleVialImage(result, result.vialImageMode === 'placeholder' ? 'extracted' : 'placeholder')}
+                >
+                  {result.vialImageMode === 'placeholder' ? 'Use COA vial' : 'Use generated vial'}
+                </button>
+              )}
               <button type="button" onClick={() => onAttach(result)}>
                 Add COA
               </button>
@@ -2083,8 +2138,8 @@ function CoaBatchDetail({
 
       <div className="coa-detail__body">
         <div className="coa-vial-slot" aria-label={`Vial image for ${result.batchNumber}`}>
-          {result.vialImageUrl ? (
-            <img src={result.vialImageUrl} alt={`${result.batchNumber} vial`} />
+          {vialImageUrl ? (
+            <img src={vialImageUrl} alt={`${result.batchNumber} vial`} />
           ) : (
             <div className="coa-vial-placeholder" aria-hidden="true">
               <span className="coa-vial-placeholder__cap" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
@@ -2344,6 +2399,12 @@ function normalizeCoaResult(value: unknown): CoaResult | null {
     coaMimeType: sanitizeClientText(coa.coaMimeType),
     coaBlobKey: sanitizeClientText(coa.coaBlobKey),
     coaUploadedAt: sanitizeClientText(coa.coaUploadedAt),
+    vialImageAssetKey: sanitizeClientText(coa.vialImageAssetKey),
+    vialImageMimeType: sanitizeClientText(coa.vialImageMimeType),
+    vialImageFileName: sanitizeClientText(coa.vialImageFileName),
+    vialImageSource: sanitizeClientText(coa.vialImageSource),
+    vialImageMode: coa.vialImageMode === 'placeholder' ? 'placeholder' : 'extracted',
+    vialImageExtractedAt: sanitizeClientText(coa.vialImageExtractedAt),
     parsedCoa: normalizeParsedCoa(coa.parsedCoa),
     createdAt: sanitizeClientText(coa.createdAt),
     updatedAt: sanitizeClientText(coa.updatedAt),
@@ -2359,6 +2420,9 @@ function normalizeParsedCoa(value: unknown): ParsedCoa | undefined {
   const fields = (parsed.fields && typeof parsed.fields === 'object' && !Array.isArray(parsed.fields)
     ? parsed.fields
     : {}) as Partial<ParsedCoa['fields']>;
+  const raw = (parsed.raw && typeof parsed.raw === 'object' && !Array.isArray(parsed.raw)
+    ? parsed.raw
+    : {}) as Partial<NonNullable<ParsedCoa['raw']>>;
 
   return {
     parserVersion: sanitizeClientText(parsed.parserVersion),
@@ -2390,7 +2454,34 @@ function normalizeParsedCoa(value: unknown): ParsedCoa | undefined {
       overallStatus: sanitizeClientText(fields.overallStatus),
     },
     warnings: normalizeClientStringList(parsed.warnings),
+    raw: {
+      verificationUrls: normalizeClientStringList(raw.verificationUrls),
+      snippets: normalizeClientStringRecord(raw.snippets),
+      vialImage: normalizeParsedVialImage(raw.vialImage),
+    },
     error: sanitizeClientText(parsed.error),
+  };
+}
+
+function normalizeParsedVialImage(value: unknown): NonNullable<ParsedCoa['raw']>['vialImage'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const image = value as Partial<NonNullable<NonNullable<ParsedCoa['raw']>['vialImage']>>;
+
+  return {
+    pageNumber: Math.max(0, Math.round(normalizeClientNumber(image.pageNumber))),
+    operatorIndex: Math.max(0, Math.round(normalizeClientNumber(image.operatorIndex))),
+    imageName: sanitizeClientText(image.imageName),
+    width: Math.max(0, Math.round(normalizeClientNumber(image.width))),
+    height: Math.max(0, Math.round(normalizeClientNumber(image.height))),
+    drawnX: normalizeClientNumber(image.drawnX),
+    drawnY: normalizeClientNumber(image.drawnY),
+    drawnWidth: normalizeClientNumber(image.drawnWidth),
+    drawnHeight: normalizeClientNumber(image.drawnHeight),
+    mimeType: sanitizeClientText(image.mimeType) || 'image/png',
+    score: normalizeClientNumber(image.score),
   };
 }
 
@@ -2424,6 +2515,16 @@ function formatMassWithUnits(value: string) {
 
 function getCoaPdfUrl(result: CoaResult) {
   return `/api/coas/${encodeURIComponent(result.id)}/pdf`;
+}
+
+function getCoaVialImageUrl(result: CoaResult) {
+  if (!result.vialImageAssetKey || result.vialImageMode === 'placeholder') {
+    return '';
+  }
+
+  const version = encodeURIComponent(result.vialImageExtractedAt || result.vialImageAssetKey);
+
+  return `/api/coas/${encodeURIComponent(result.id)}/vial-image?v=${version}`;
 }
 
 async function fetchCoaResults() {
@@ -2685,11 +2786,17 @@ function mergeCoaPdfAsset(entry: CoaResult, asset: Partial<CoaPdfAsset>): CoaRes
     throw new Error(`COA PDF lot ${parsedCoa.fields.lotNumber} does not match ${entry.batchNumber}.`);
   }
 
-  return applyParsedCoaFields({
+  const mergedEntry = {
     ...entry,
     ...asset,
     ...(parsedCoa ? { parsedCoa } : {}),
-  }, parsedCoa);
+  };
+
+  if (asset.vialImageAssetKey) {
+    mergedEntry.vialImageMode = entry.vialImageMode === 'placeholder' ? 'placeholder' : 'extracted';
+  }
+
+  return applyParsedCoaFields(mergedEntry, parsedCoa);
 }
 
 function applyParsedCoaFields(entry: CoaResult, parsedCoa?: ParsedCoa): CoaResult {
@@ -2763,6 +2870,19 @@ function normalizeClientStringList(value: unknown) {
   return Array.isArray(value)
     ? value.map(sanitizeClientText).filter(Boolean).slice(0, 12)
     : [];
+}
+
+function normalizeClientStringRecord(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, recordValue]) => [sanitizeClientText(key), sanitizeClientText(recordValue)])
+      .filter(([key, recordValue]) => key && recordValue)
+      .slice(0, 8),
+  );
 }
 
 function sanitizeClientText(value: unknown) {

@@ -132,6 +132,14 @@ test('coa pdf uploads return parsed payload and stored entries preserve parsed f
   assert.equal(asset.parsedCoa.fields.purity, '99.85%');
   assert.equal(asset.parsedCoa.fields.averageNetContent, '31.71 mg');
   assert.ok(asset.parsedCoa.fields.verificationUrl.endsWith('/2qgRtQeSmLEps64L'));
+  assert.match(asset.vialImageAssetKey, /^coa-vial-images\/.+\.png$/);
+  assert.equal(asset.vialImageMimeType, 'image/png');
+  assert.equal(asset.vialImageSource, 'coa-pdf');
+  assert.equal(asset.vialImageMode, 'extracted');
+  assert.equal(asset.parsedCoa.raw.vialImage.width, 560);
+  assert.equal(asset.parsedCoa.raw.vialImage.height, 560);
+  assert.equal(asset.parsedCoa.raw.vialImage.imageName, 'img_p0_5');
+  assert.equal(asset.parsedCoa.raw.vialImage.operatorIndex, 316);
 
   const saveResponse = await apiRequest('/api/admin/data/coas/parsed-coa', 'PUT', {
     ...createCoa({
@@ -168,6 +176,40 @@ test('coa pdf uploads return parsed payload and stored entries preserve parsed f
   assert.equal(stored.fentanyl, 'Pass');
   assert.ok(stored.verificationUrl.endsWith('/2qgRtQeSmLEps64L'));
   assert.equal(stored.parsedCoa.fields.lotNumber, 'CR-3XAG-30MG-2606-2');
+  assert.equal(stored.vialImageAssetKey, asset.vialImageAssetKey);
+  assert.equal(stored.vialImageMode, 'extracted');
+
+  const activeImageResponse = await apiRequest('/api/coas/parsed-coa/vial-image', 'GET');
+
+  assert.equal(activeImageResponse.statusCode, 200);
+  assert.equal(activeImageResponse.headers['Content-Type'], 'image/png');
+  assert.equal(Buffer.from(activeImageResponse.body, 'base64').subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+
+  const placeholderResponse = await apiRequest('/api/admin/data/coas/parsed-coa', 'PUT', {
+    ...stored,
+    vialImageMode: 'placeholder',
+  }, { cookie: adminCookie });
+
+  assert.equal(placeholderResponse.statusCode, 200);
+
+  const hiddenImageResponse = await apiRequest('/api/coas/parsed-coa/vial-image', 'GET');
+
+  assert.equal(hiddenImageResponse.statusCode, 404);
+
+  const [placeholderCoa] = JSON.parse(placeholderResponse.body).filter((coa) => coa.id === 'parsed-coa');
+  const restoredResponse = await apiRequest('/api/admin/data/coas/parsed-coa', 'PUT', {
+    ...placeholderCoa,
+    vialImageMode: 'extracted',
+  }, { cookie: adminCookie });
+
+  assert.equal(restoredResponse.statusCode, 200);
+
+  const restoredCoa = (await readCollection('coas')).find((coa) => coa.id === 'parsed-coa');
+  const restoredImageResponse = await apiRequest('/api/coas/parsed-coa/vial-image', 'GET');
+
+  assert.equal(restoredCoa.vialImageAssetKey, asset.vialImageAssetKey);
+  assert.equal(restoredCoa.vialImageMode, 'extracted');
+  assert.equal(restoredImageResponse.statusCode, 200);
 });
 
 test('coa admin writes reject parsed payloads for a different lot', { skip: !sampleCoaFixturePath }, async () => {

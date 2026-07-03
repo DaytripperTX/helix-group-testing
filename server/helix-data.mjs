@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch, parseCoaPdfBuffer } from './coa-pdf-parser.mjs';
+import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch, parseCoaPdfUploadBuffer } from './coa-pdf-parser.mjs';
 
 const rootDir = process.env.HELIX_ROOT_DIR
   ? path.resolve(process.env.HELIX_ROOT_DIR)
@@ -15,9 +15,11 @@ const legacyLabelsPath = path.join(rootDir, 'dist', 'stored-data', 'labels', 'te
 const storeName = 'helix-data';
 const labelTemplateOverridePrefix = 'label-template-overrides/';
 const coaPdfAssetPrefix = 'coa-pdfs/';
+const coaVialImageAssetPrefix = 'coa-vial-images/';
 const maxLabelPreviewBytes = 3 * 1024 * 1024;
 const maxLabelCodeLength = 20 * 1024;
 const maxCoaPdfBytes = 8 * 1024 * 1024;
+const maxCoaVialImageBytes = 1024 * 1024;
 const maxReportCountBeforeHide = 5;
 const trashRetentionMs = 5 * 24 * 60 * 60 * 1000;
 const allowedPreviewMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
@@ -119,6 +121,21 @@ export async function readCoaPdfAsset(itemId) {
     buffer: await readCoaPdfBuffer(coa.coaBlobKey),
     mimeType: coa.coaMimeType || 'application/pdf',
     fileName: sanitizePreviewFileName(coa.coaFileName || `${coa.id}.pdf`, 'application/pdf'),
+  };
+}
+
+export async function readCoaVialImageAsset(itemId) {
+  const coas = await readCollection('coas');
+  const coa = coas.find((item) => item?.id === itemId);
+
+  if (!coa || coa.vialImageMode === 'placeholder' || !coa.vialImageAssetKey) {
+    throw createHttpError(404, 'COA vial image not found.');
+  }
+
+  return {
+    buffer: await readCoaVialImageBuffer(coa.vialImageAssetKey),
+    mimeType: coa.vialImageMimeType || 'image/png',
+    fileName: sanitizePreviewFileName(coa.vialImageFileName || `${coa.id}-vial.png`, coa.vialImageMimeType || 'image/png'),
   };
 }
 
@@ -292,7 +309,14 @@ export async function writeCoaPdfAsset(asset) {
   }
 
   const blobKey = `${coaPdfAssetPrefix}${Date.now()}-${safeFileName || 'coa.pdf'}`;
-  const parsedCoa = await parseStoredCoaPdf(buffer, asset.fileName);
+  const { parsedCoa, vialImage } = await parseStoredCoaPdf(buffer, asset.fileName);
+  const vialImageFields = vialImage
+    ? await storeCoaVialImageAsset({
+        fileName: asset.fileName,
+        safeFileName,
+        image: vialImage,
+      })
+    : {};
 
   if (shouldUseNetlifyBlobs()) {
     const store = await getBlobStore();
@@ -315,15 +339,62 @@ export async function writeCoaPdfAsset(asset) {
     coaBlobKey: blobKey,
     coaUploadedAt: new Date().toISOString(),
     parsedCoa,
+    ...vialImageFields,
   };
 }
 
 async function parseStoredCoaPdf(buffer, fileName) {
   try {
-    return await parseCoaPdfBuffer(buffer, { fileName });
+    return await parseCoaPdfUploadBuffer(buffer, { fileName });
   } catch (error) {
-    return createFailedParsedCoa(error);
+    return {
+      parsedCoa: createFailedParsedCoa(error),
+      vialImage: null,
+    };
   }
+}
+
+async function storeCoaVialImageAsset({ fileName, safeFileName, image }) {
+  if (
+    !image ||
+    image.mimeType !== 'image/png' ||
+    !Buffer.isBuffer(image.buffer) ||
+    image.buffer.length === 0 ||
+    image.buffer.length > maxCoaVialImageBytes
+  ) {
+    return {};
+  }
+
+  const cleanBaseName = (safeFileName || fileName || 'coa-vial.png')
+    .replace(/\.pdf$/i, '')
+    .replace(/[^a-zA-Z0-9._-]/g, '-');
+  const assetKey = `${coaVialImageAssetPrefix}${Date.now()}-${cleanBaseName || 'coa-vial'}.png`;
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    await store.set(assetKey, image.buffer, {
+      metadata: {
+        fileName: `${cleanBaseName || 'coa-vial'}.png`,
+        mimeType: 'image/png',
+        width: String(image.width),
+        height: String(image.height),
+      },
+    });
+  } else {
+    const localAssetPath = path.join(localDataDir, assetKey);
+
+    await mkdir(path.dirname(localAssetPath), { recursive: true });
+    await writeFile(localAssetPath, image.buffer);
+  }
+
+  return {
+    vialImageAssetKey: assetKey,
+    vialImageMimeType: 'image/png',
+    vialImageFileName: `${cleanBaseName || 'coa-vial'}.png`,
+    vialImageSource: 'coa-pdf',
+    vialImageMode: 'extracted',
+    vialImageExtractedAt: new Date().toISOString(),
+  };
 }
 
 export async function publicReportLabelTemplate(report, headers = {}) {
@@ -679,6 +750,41 @@ async function readCoaPdfBuffer(assetKey) {
   } catch {
     throw createHttpError(404, 'COA PDF not found.');
   }
+}
+
+async function readCoaVialImageBuffer(assetKey) {
+  const cleanAssetKey = normalizeCoaVialImageAssetKey(assetKey);
+
+  if (!cleanAssetKey) {
+    throw createHttpError(404, 'COA vial image not found.');
+  }
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    const asset = await store.get(cleanAssetKey, { type: 'arrayBuffer' });
+
+    if (!asset) {
+      throw createHttpError(404, 'COA vial image not found.');
+    }
+
+    return Buffer.from(asset);
+  }
+
+  try {
+    return await readFile(path.join(localDataDir, cleanAssetKey));
+  } catch {
+    throw createHttpError(404, 'COA vial image not found.');
+  }
+}
+
+function normalizeCoaVialImageAssetKey(value) {
+  const cleanValue = typeof value === 'string' ? value.trim().replace(/\\/g, '/') : '';
+
+  if (!cleanValue || !cleanValue.startsWith(coaVialImageAssetPrefix) || cleanValue.includes('..')) {
+    return '';
+  }
+
+  return cleanValue;
 }
 
 async function getBlobStore() {
@@ -1064,9 +1170,13 @@ function normalizeCoaItem(item, options = {}) {
 
   const now = new Date().toISOString();
   const coaBlobKey = normalizeCoaAssetKey(item.coaBlobKey);
+  const vialImageAssetKey = normalizeCoaVialImageAssetKey(item.vialImageAssetKey);
   const parsedCoa = item.parsedCoa && typeof item.parsedCoa === 'object' && !Array.isArray(item.parsedCoa)
     ? compactParsedCoa(item.parsedCoa)
     : null;
+  const vialImageMode = item.vialImageMode === 'placeholder' || isRejectedLegacyCoaVialImage(parsedCoa)
+    ? 'placeholder'
+    : 'extracted';
 
   if (parsedCoa && !doesParsedLotMatchBatch(parsedCoa, batchNumber)) {
     throw createHttpError(400, 'Parsed COA lot does not match the COA batch number.');
@@ -1103,12 +1213,34 @@ function normalizeCoaItem(item, options = {}) {
           coaUploadedAt: normalizeDateTimeString(item.coaUploadedAt) || now,
         }
       : {}),
+    ...(vialImageAssetKey
+      ? {
+          vialImageAssetKey,
+          vialImageMimeType: item.vialImageMimeType === 'image/png' ? 'image/png' : 'image/png',
+          vialImageFileName: sanitizeRoundText(item.vialImageFileName, 180) || `${id}-vial.png`,
+          vialImageSource: item.vialImageSource === 'coa-pdf' ? 'coa-pdf' : 'coa-pdf',
+          vialImageMode,
+          vialImageExtractedAt: normalizeDateTimeString(item.vialImageExtractedAt) || now,
+        }
+      : {}),
     ...(parsedCoa ? { parsedCoa } : {}),
     createdAt: normalizeDateTimeString(item.createdAt) || now,
     updatedAt: options.updateTimestamp
       ? now
       : normalizeDateTimeString(item.updatedAt) || normalizeDateTimeString(item.createdAt) || now,
   };
+}
+
+function isRejectedLegacyCoaVialImage(parsedCoa) {
+  const image = parsedCoa?.raw?.vialImage;
+
+  return parsedCoa?.templateId === 'ils_laboratories_coa'
+    && image
+    && (
+      Number(image.operatorIndex) < 300 ||
+      Number(image.drawnX) < 430 ||
+      (Number(image.width) <= 260 && Number(image.height) <= 280)
+    );
 }
 
 function resolveCoaRoundLink(item, rounds) {
