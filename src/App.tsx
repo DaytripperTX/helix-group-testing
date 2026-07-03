@@ -102,6 +102,10 @@ type CoaResult = {
   mass: string;
   batchNumber: string;
   dateTested: string;
+  lab: string;
+  coaNumber: string;
+  accessionNumber: string;
+  verificationUrl: string;
   roundName: string;
   testingTier: TestingTierId;
   averageNetContent: string;
@@ -109,14 +113,53 @@ type CoaResult = {
   endotoxins: string;
   heavyMetals: string;
   sterility: string;
+  fentanyl: string;
   capColor: string;
   coaFileName?: string;
   coaMimeType?: string;
   coaBlobKey?: string;
   coaUploadedAt?: string;
+  parsedCoa?: ParsedCoa;
   createdAt?: string;
   updatedAt?: string;
   vialImageUrl?: string;
+};
+
+type ParsedCoa = {
+  parserVersion: string;
+  extractionMethod: string;
+  templateId: string;
+  templateConfidence: number;
+  matchedAnchors: string[];
+  pageCount: number;
+  confidence: number;
+  fields: {
+    lab: string;
+    coaNumber: string;
+    lotNumber: string;
+    accessionNumber: string;
+    productName: string;
+    analysisDate: string;
+    dateReceived: string;
+    issuedDate: string;
+    labeledContent: string;
+    purity: string;
+    averageNetContent: string;
+    meanPurity: string;
+    heavyMetals: string;
+    sterility: string;
+    endotoxins: string;
+    fentanyl: string;
+    accessCode: string;
+    verificationUrl: string;
+    overallStatus: string;
+  };
+  warnings: string[];
+  raw?: {
+    verificationUrls?: string[];
+    snippets?: Record<string, string>;
+  };
+  error?: string;
 };
 
 type CoaBatchFormRow = {
@@ -135,11 +178,16 @@ type CoaEditForm = {
   capColor: string;
   code: string;
   dateTested: string;
+  lab: string;
+  coaNumber: string;
+  accessionNumber: string;
+  verificationUrl: string;
   averageNetContent: string;
   purity: string;
   endotoxins: string;
   heavyMetals: string;
   sterility: string;
+  fentanyl: string;
   file: File | null;
 };
 
@@ -161,6 +209,7 @@ type CoaPdfAsset = {
   coaMimeType: 'application/pdf';
   coaBlobKey: string;
   coaUploadedAt: string;
+  parsedCoa?: ParsedCoa;
 };
 
 const testingTiers: TestingTier[] = [
@@ -1353,10 +1402,10 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
         }
 
         const asset = row.file ? await uploadCoaPdf(row.file) : {};
-        nextCoas = await saveCoaEntry({
-          ...createCoaEntryFromRoundRow(selectedBatchRound, roundPeptide, row),
-          ...asset,
-        });
+        nextCoas = await saveCoaEntry(mergeCoaPdfAsset(
+          createCoaEntryFromRoundRow(selectedBatchRound, roundPeptide, row),
+          asset,
+        ));
       }
 
       setCoaResults(nextCoas);
@@ -1364,7 +1413,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
       setCoaStatus(`${validRows.length} batch ${validRows.length === 1 ? 'entry' : 'entries'} saved.`);
     } catch (error) {
       console.error(error);
-      setCoaStatus('Batch entries could not be saved.');
+      setCoaStatus(getCoaErrorMessage(error, 'Batch entries could not be saved.'));
     } finally {
       setIsSubmittingCoa(false);
     }
@@ -1407,7 +1456,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
         }
 
         const asset = await uploadCoaPdf(draft.file);
-        nextCoas = await saveCoaEntry({ ...currentCoa, ...asset });
+        nextCoas = await saveCoaEntry(mergeCoaPdfAsset(currentCoa, asset));
       }
 
       setCoaResults(nextCoas);
@@ -1415,7 +1464,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
       setCoaStatus(`${uploadRows.length} COA ${uploadRows.length === 1 ? 'PDF' : 'PDFs'} attached.`);
     } catch (error) {
       console.error(error);
-      setCoaStatus('COA PDFs could not be uploaded.');
+      setCoaStatus(getCoaErrorMessage(error, 'COA PDFs could not be uploaded.'));
     } finally {
       setIsSubmittingCoa(false);
     }
@@ -1444,29 +1493,33 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
 
     try {
       const asset = coaEditForm.file ? await uploadCoaPdf(coaEditForm.file) : {};
-      const nextCoas = await saveCoaEntry({
+      const nextCoas = await saveCoaEntry(mergeCoaPdfAsset({
         ...editingCoa,
-      ...createCoaEntryFromRoundRow(round, roundPeptide, {
-        id: editingCoa.id,
-        batchNumber: coaEditForm.batchNumber,
-        capColor: coaEditForm.capColor,
-        code: coaEditForm.code,
-      }),
+        ...createCoaEntryFromRoundRow(round, roundPeptide, {
+          id: editingCoa.id,
+          batchNumber: coaEditForm.batchNumber,
+          capColor: coaEditForm.capColor,
+          code: coaEditForm.code,
+        }),
         dateTested: coaEditForm.dateTested,
+        lab: coaEditForm.lab,
+        coaNumber: coaEditForm.coaNumber,
+        accessionNumber: coaEditForm.accessionNumber,
+        verificationUrl: coaEditForm.verificationUrl,
         averageNetContent: coaEditForm.averageNetContent,
         purity: coaEditForm.purity,
         endotoxins: coaEditForm.endotoxins,
         heavyMetals: coaEditForm.heavyMetals,
         sterility: coaEditForm.sterility,
-        ...asset,
-      });
+        fentanyl: coaEditForm.fentanyl,
+      }, asset));
 
       setCoaResults(nextCoas);
       setEditingCoa(null);
       setCoaStatus('COA entry saved.');
     } catch (error) {
       console.error(error);
-      setCoaStatus('COA entry could not be saved.');
+      setCoaStatus(getCoaErrorMessage(error, 'COA entry could not be saved.'));
     } finally {
       setIsSubmittingCoa(false);
     }
@@ -1547,13 +1600,13 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
 
     try {
       const asset = await uploadCoaPdf(attachCoaFile);
-      setCoaResults(await saveCoaEntry({ ...attachingCoa, ...asset }));
+      setCoaResults(await saveCoaEntry(mergeCoaPdfAsset(attachingCoa, asset)));
       setAttachingCoa(null);
       setAttachCoaFile(null);
-      setCoaStatus('COA PDF attached.');
+      setCoaStatus(createParsedCoaStatus(asset.parsedCoa, 'COA PDF attached.'));
     } catch (error) {
       console.error(error);
-      setCoaStatus('COA PDF could not be attached.');
+      setCoaStatus(getCoaErrorMessage(error, 'COA PDF could not be attached.'));
     } finally {
       setIsSubmittingCoa(false);
     }
@@ -1973,6 +2026,8 @@ function CoaBatchDetail({
   onEdit: (result: CoaResult) => void;
 }) {
   const detailRows = [
+    { label: 'Lab', value: result.lab },
+    { label: 'COA #', value: result.coaNumber },
     { label: 'Peptide Name', value: result.peptideName },
     { label: 'Mass', value: formatMassWithUnits(result.mass) },
     { label: 'Batch #', value: result.batchNumber },
@@ -1985,7 +2040,9 @@ function CoaBatchDetail({
     { label: 'Endotoxins', value: result.endotoxins, status: true },
     { label: 'Heavy Metals', value: result.heavyMetals, status: true },
     { label: 'Sterility', value: result.sterility, status: true },
-  ];
+    { label: 'Fentanyl', value: result.fentanyl, status: true },
+    { label: 'Verify URL', value: result.verificationUrl },
+  ].filter((item) => item.value);
 
   return (
     <article className="coa-detail" aria-labelledby="coa-detail-title">
@@ -2048,6 +2105,8 @@ function CoaBatchDetail({
                     <span aria-hidden="true" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
                     {item.value}
                   </span>
+                ) : item.label === 'Verify URL' ? (
+                  <a href={item.value} target="_blank" rel="noreferrer">{item.value}</a>
                 ) : (
                   item.value
                 )}
@@ -2143,11 +2202,16 @@ function CoaEditFields({
         <CoaTextInput label="Code" value={form.code} onChange={(value) => onChange({ ...form, code: value })} />
         <CoaTextInput label="Cap color" value={form.capColor} onChange={(value) => onChange({ ...form, capColor: value })} />
         <CoaTextInput label="Date tested" value={form.dateTested} onChange={(value) => onChange({ ...form, dateTested: value })} />
+        <CoaTextInput label="Lab" value={form.lab} onChange={(value) => onChange({ ...form, lab: value })} />
+        <CoaTextInput label="COA #" value={form.coaNumber} onChange={(value) => onChange({ ...form, coaNumber: value })} />
+        <CoaTextInput label="Accession #" value={form.accessionNumber} onChange={(value) => onChange({ ...form, accessionNumber: value })} />
+        <CoaTextInput label="Verify URL" value={form.verificationUrl} onChange={(value) => onChange({ ...form, verificationUrl: value })} />
         <CoaTextInput label="Avg net content" value={form.averageNetContent} onChange={(value) => onChange({ ...form, averageNetContent: value })} />
         <CoaTextInput label="Purity" value={form.purity} onChange={(value) => onChange({ ...form, purity: value })} />
         <CoaTextInput label="Endotoxins" value={form.endotoxins} onChange={(value) => onChange({ ...form, endotoxins: value })} />
         <CoaTextInput label="Heavy metals" value={form.heavyMetals} onChange={(value) => onChange({ ...form, heavyMetals: value })} />
         <CoaTextInput label="Sterility" value={form.sterility} onChange={(value) => onChange({ ...form, sterility: value })} />
+        <CoaTextInput label="Fentanyl" value={form.fentanyl} onChange={(value) => onChange({ ...form, fentanyl: value })} />
         <label className="coa-modal-field">
           <span>COA PDF</span>
           <input type="file" accept="application/pdf,.pdf" onChange={(event) => onChange({ ...form, file: event.target.files?.[0] ?? null })} />
@@ -2265,17 +2329,67 @@ function normalizeCoaResult(value: unknown): CoaResult | null {
     mass: sanitizeClientText(coa.mass),
     testingTier: normalizeClientTestingTier(coa.testingTier),
     dateTested: sanitizeClientText(coa.dateTested),
+    lab: sanitizeClientText(coa.lab),
+    coaNumber: sanitizeClientText(coa.coaNumber),
+    accessionNumber: sanitizeClientText(coa.accessionNumber),
+    verificationUrl: sanitizeClientText(coa.verificationUrl),
     averageNetContent: sanitizeClientText(coa.averageNetContent) || 'Pending',
     purity: sanitizeClientText(coa.purity) || 'Pending',
     endotoxins: sanitizeClientText(coa.endotoxins) || 'Pending',
     heavyMetals: sanitizeClientText(coa.heavyMetals) || 'Pending',
     sterility: sanitizeClientText(coa.sterility) || 'Pending',
+    fentanyl: sanitizeClientText(coa.fentanyl) || 'Pending',
     coaFileName: sanitizeClientText(coa.coaFileName),
     coaMimeType: sanitizeClientText(coa.coaMimeType),
     coaBlobKey: sanitizeClientText(coa.coaBlobKey),
     coaUploadedAt: sanitizeClientText(coa.coaUploadedAt),
+    parsedCoa: normalizeParsedCoa(coa.parsedCoa),
     createdAt: sanitizeClientText(coa.createdAt),
     updatedAt: sanitizeClientText(coa.updatedAt),
+  };
+}
+
+function normalizeParsedCoa(value: unknown): ParsedCoa | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const parsed = value as Partial<ParsedCoa>;
+  const fields = (parsed.fields && typeof parsed.fields === 'object' && !Array.isArray(parsed.fields)
+    ? parsed.fields
+    : {}) as Partial<ParsedCoa['fields']>;
+
+  return {
+    parserVersion: sanitizeClientText(parsed.parserVersion),
+    extractionMethod: sanitizeClientText(parsed.extractionMethod),
+    templateId: sanitizeClientText(parsed.templateId),
+    templateConfidence: normalizeClientNumber(parsed.templateConfidence),
+    matchedAnchors: normalizeClientStringList(parsed.matchedAnchors),
+    pageCount: Math.max(0, Math.round(normalizeClientNumber(parsed.pageCount))),
+    confidence: normalizeClientNumber(parsed.confidence),
+    fields: {
+      lab: sanitizeClientText(fields.lab),
+      coaNumber: sanitizeClientText(fields.coaNumber),
+      lotNumber: sanitizeClientText(fields.lotNumber),
+      accessionNumber: sanitizeClientText(fields.accessionNumber),
+      productName: sanitizeClientText(fields.productName),
+      analysisDate: sanitizeClientText(fields.analysisDate),
+      dateReceived: sanitizeClientText(fields.dateReceived),
+      issuedDate: sanitizeClientText(fields.issuedDate),
+      labeledContent: sanitizeClientText(fields.labeledContent),
+      purity: sanitizeClientText(fields.purity),
+      averageNetContent: sanitizeClientText(fields.averageNetContent),
+      meanPurity: sanitizeClientText(fields.meanPurity),
+      heavyMetals: sanitizeClientText(fields.heavyMetals) || 'Pending',
+      sterility: sanitizeClientText(fields.sterility) || 'Pending',
+      endotoxins: sanitizeClientText(fields.endotoxins) || 'Pending',
+      fentanyl: sanitizeClientText(fields.fentanyl) || 'Pending',
+      accessCode: sanitizeClientText(fields.accessCode),
+      verificationUrl: sanitizeClientText(fields.verificationUrl),
+      overallStatus: sanitizeClientText(fields.overallStatus),
+    },
+    warnings: normalizeClientStringList(parsed.warnings),
+    error: sanitizeClientText(parsed.error),
   };
 }
 
@@ -2492,11 +2606,16 @@ function createEmptyCoaEditForm(): CoaEditForm {
     capColor: '',
     code: '',
     dateTested: '',
+    lab: '',
+    coaNumber: '',
+    accessionNumber: '',
+    verificationUrl: '',
     averageNetContent: 'Pending',
     purity: 'Pending',
     endotoxins: 'Pending',
     heavyMetals: 'Pending',
     sterility: 'Pending',
+    fentanyl: 'Pending',
     file: null,
   };
 }
@@ -2509,11 +2628,16 @@ function createCoaEditForm(result: CoaResult): CoaEditForm {
     capColor: result.capColor,
     code: result.code,
     dateTested: result.dateTested,
+    lab: result.lab,
+    coaNumber: result.coaNumber,
+    accessionNumber: result.accessionNumber,
+    verificationUrl: result.verificationUrl,
     averageNetContent: result.averageNetContent,
     purity: result.purity,
     endotoxins: result.endotoxins,
     heavyMetals: result.heavyMetals,
     sterility: result.sterility,
+    fentanyl: result.fentanyl,
     file: null,
   };
 }
@@ -2540,12 +2664,79 @@ function createCoaEntryFromRoundRow(
     mass: roundPeptide.mass,
     testingTier: roundPeptide.testingTier,
     dateTested: '',
+    lab: '',
+    coaNumber: '',
+    accessionNumber: '',
+    verificationUrl: '',
     averageNetContent: 'Pending',
     purity: 'Pending',
     endotoxins: 'Pending',
     heavyMetals: 'Pending',
     sterility: 'Pending',
+    fentanyl: 'Pending',
   };
+}
+
+function mergeCoaPdfAsset(entry: CoaResult, asset: Partial<CoaPdfAsset>): CoaResult {
+  const parsedCoa = normalizeParsedCoa(asset.parsedCoa);
+
+  if (parsedCoa && !doesParsedCoaMatchEntry(entry, parsedCoa)) {
+    throw new Error(`COA PDF lot ${parsedCoa.fields.lotNumber} does not match ${entry.batchNumber}.`);
+  }
+
+  return applyParsedCoaFields({
+    ...entry,
+    ...asset,
+    ...(parsedCoa ? { parsedCoa } : {}),
+  }, parsedCoa);
+}
+
+function applyParsedCoaFields(entry: CoaResult, parsedCoa?: ParsedCoa): CoaResult {
+  if (!parsedCoa) {
+    return entry;
+  }
+
+  const fields = parsedCoa.fields;
+
+  return {
+    ...entry,
+    lab: fields.lab || entry.lab,
+    coaNumber: fields.coaNumber || entry.coaNumber,
+    accessionNumber: fields.accessionNumber || entry.accessionNumber,
+    dateTested: fields.analysisDate || entry.dateTested,
+    verificationUrl: fields.verificationUrl || entry.verificationUrl,
+    averageNetContent: fields.averageNetContent || entry.averageNetContent,
+    purity: fields.purity || entry.purity,
+    endotoxins: normalizeParsedStatus(fields.endotoxins, entry.endotoxins),
+    heavyMetals: normalizeParsedStatus(fields.heavyMetals, entry.heavyMetals),
+    sterility: normalizeParsedStatus(fields.sterility, entry.sterility),
+    fentanyl: normalizeParsedStatus(fields.fentanyl, entry.fentanyl),
+  };
+}
+
+function doesParsedCoaMatchEntry(entry: CoaResult, parsedCoa: ParsedCoa) {
+  const parsedLot = normalizeBatchMatchText(parsedCoa.fields.lotNumber);
+  const targetBatch = normalizeBatchMatchText(entry.batchNumber);
+
+  return !parsedLot || !targetBatch || parsedLot === targetBatch;
+}
+
+function normalizeParsedStatus(value: string, fallback: string) {
+  return value && value !== 'Pending' ? value : fallback;
+}
+
+function createParsedCoaStatus(parsedCoa: ParsedCoa | undefined, fallback: string) {
+  const warnings = parsedCoa?.warnings ?? [];
+
+  if (warnings.length === 0) {
+    return fallback;
+  }
+
+  return `${fallback} ${warnings.slice(0, 2).join(' ')}`;
+}
+
+function getCoaErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function findCoaMatchForFile(file: File, results: CoaResult[]) {
@@ -2559,6 +2750,18 @@ function findCoaMatchForFile(file: File, results: CoaResult[]) {
 
 function normalizeBatchMatchText(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function normalizeClientNumber(value: unknown) {
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : 0;
+}
+
+function normalizeClientStringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.map(sanitizeClientText).filter(Boolean).slice(0, 12)
+    : [];
 }
 
 function sanitizeClientText(value: unknown) {

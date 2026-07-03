@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { readFile, rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import path from 'node:path';
 
@@ -109,6 +110,85 @@ test('coa pdf uploads are admin only, pdf only, and publicly served when attache
   assert.equal(pdfResponse.headers['Content-Type'], 'application/pdf');
   assert.equal(Buffer.from(pdfResponse.body, 'base64').subarray(0, 5).toString('utf8'), '%PDF-');
   assert.equal(missingPdfResponse.statusCode, 404);
+});
+
+const sampleCoaFixturePath = resolveLocalCoaFixture('CR-3XAG-30MG-2606-2.pdf');
+
+test('coa pdf uploads return parsed payload and stored entries preserve parsed fields', { skip: !sampleCoaFixturePath }, async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+  await seedRound(adminCookie);
+
+  const uploadResponse = await apiRequest('/api/admin/assets/coa-pdf', 'POST', await createFixturePdfUpload('CR-3XAG-30MG-2606-2.pdf'), {
+    cookie: adminCookie,
+  });
+
+  assert.equal(uploadResponse.statusCode, 200);
+
+  const asset = JSON.parse(uploadResponse.body);
+
+  assert.equal(asset.parsedCoa.templateId, 'ils_laboratories_coa');
+  assert.equal(asset.parsedCoa.fields.lotNumber, 'CR-3XAG-30MG-2606-2');
+  assert.equal(asset.parsedCoa.fields.purity, '99.85%');
+  assert.equal(asset.parsedCoa.fields.averageNetContent, '31.71 mg');
+  assert.ok(asset.parsedCoa.fields.verificationUrl.endsWith('/2qgRtQeSmLEps64L'));
+
+  const saveResponse = await apiRequest('/api/admin/data/coas/parsed-coa', 'PUT', {
+    ...createCoa({
+      id: 'parsed-coa',
+      batchNumber: asset.parsedCoa.fields.lotNumber,
+    }),
+    ...asset,
+    lab: asset.parsedCoa.fields.lab,
+    coaNumber: asset.parsedCoa.fields.coaNumber,
+    accessionNumber: asset.parsedCoa.fields.accessionNumber,
+    dateTested: asset.parsedCoa.fields.analysisDate,
+    averageNetContent: asset.parsedCoa.fields.averageNetContent,
+    purity: asset.parsedCoa.fields.purity,
+    endotoxins: asset.parsedCoa.fields.endotoxins,
+    heavyMetals: asset.parsedCoa.fields.heavyMetals,
+    sterility: asset.parsedCoa.fields.sterility,
+    fentanyl: asset.parsedCoa.fields.fentanyl,
+    verificationUrl: asset.parsedCoa.fields.verificationUrl,
+  }, { cookie: adminCookie });
+
+  assert.equal(saveResponse.statusCode, 200);
+
+  const stored = (await readCollection('coas')).find((coa) => coa.id === 'parsed-coa');
+
+  assert.equal(stored.lab, 'ILS Laboratories');
+  assert.equal(stored.coaNumber, 'COA-2026-O1Y8QY');
+  assert.equal(stored.accessionNumber, 'ACC-2026-5031');
+  assert.equal(stored.dateTested, '2026-06-26');
+  assert.equal(stored.averageNetContent, '31.71 mg');
+  assert.equal(stored.purity, '99.85%');
+  assert.equal(stored.endotoxins, 'Pass');
+  assert.equal(stored.heavyMetals, 'Pass');
+  assert.equal(stored.sterility, 'Pass');
+  assert.equal(stored.fentanyl, 'Pass');
+  assert.ok(stored.verificationUrl.endsWith('/2qgRtQeSmLEps64L'));
+  assert.equal(stored.parsedCoa.fields.lotNumber, 'CR-3XAG-30MG-2606-2');
+});
+
+test('coa admin writes reject parsed payloads for a different lot', { skip: !sampleCoaFixturePath }, async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+  await seedRound(adminCookie);
+
+  const uploadResponse = await apiRequest('/api/admin/assets/coa-pdf', 'POST', await createFixturePdfUpload('CR-3XAG-30MG-2606-2.pdf'), {
+    cookie: adminCookie,
+  });
+  const asset = JSON.parse(uploadResponse.body);
+  const saveResponse = await apiRequest('/api/admin/data/coas/mismatched-parsed-coa', 'PUT', {
+    ...createCoa({
+      id: 'mismatched-parsed-coa',
+      batchNumber: 'CR-MOTSC40-2606-BLUE',
+    }),
+    ...asset,
+  }, { cookie: adminCookie });
+
+  assert.equal(saveResponse.statusCode, 400);
+  assert.match(JSON.parse(saveResponse.body).error, /lot does not match/i);
 });
 
 test('coa batch number parser maps spreadsheet rows for admin imports', async () => {
@@ -229,6 +309,23 @@ function createPdfUpload() {
     mimeType: 'application/pdf',
     base64: Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF').toString('base64'),
   };
+}
+
+async function createFixturePdfUpload(fileName) {
+  return {
+    fileName,
+    mimeType: 'application/pdf',
+    base64: (await readFile(resolveLocalCoaFixture(fileName))).toString('base64'),
+  };
+}
+
+function resolveLocalCoaFixture(fileName) {
+  const candidates = [
+    path.join('.tmp', 'coa-fixtures', fileName),
+    path.join(process.env.USERPROFILE || '', 'Downloads', fileName),
+  ];
+
+  return candidates.find((candidate) => candidate && existsSync(candidate)) || '';
 }
 
 function apiRequest(pathname, method, body, options = {}) {

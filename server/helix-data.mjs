@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch, parseCoaPdfBuffer } from './coa-pdf-parser.mjs';
 
 const rootDir = process.env.HELIX_ROOT_DIR
   ? path.resolve(process.env.HELIX_ROOT_DIR)
@@ -291,6 +292,7 @@ export async function writeCoaPdfAsset(asset) {
   }
 
   const blobKey = `${coaPdfAssetPrefix}${Date.now()}-${safeFileName || 'coa.pdf'}`;
+  const parsedCoa = await parseStoredCoaPdf(buffer, asset.fileName);
 
   if (shouldUseNetlifyBlobs()) {
     const store = await getBlobStore();
@@ -312,7 +314,16 @@ export async function writeCoaPdfAsset(asset) {
     coaMimeType: 'application/pdf',
     coaBlobKey: blobKey,
     coaUploadedAt: new Date().toISOString(),
+    parsedCoa,
   };
+}
+
+async function parseStoredCoaPdf(buffer, fileName) {
+  try {
+    return await parseCoaPdfBuffer(buffer, { fileName });
+  } catch (error) {
+    return createFailedParsedCoa(error);
+  }
 }
 
 export async function publicReportLabelTemplate(report, headers = {}) {
@@ -1053,6 +1064,13 @@ function normalizeCoaItem(item, options = {}) {
 
   const now = new Date().toISOString();
   const coaBlobKey = normalizeCoaAssetKey(item.coaBlobKey);
+  const parsedCoa = item.parsedCoa && typeof item.parsedCoa === 'object' && !Array.isArray(item.parsedCoa)
+    ? compactParsedCoa(item.parsedCoa)
+    : null;
+
+  if (parsedCoa && !doesParsedLotMatchBatch(parsedCoa, batchNumber)) {
+    throw createHttpError(400, 'Parsed COA lot does not match the COA batch number.');
+  }
 
   return {
     id,
@@ -1067,11 +1085,16 @@ function normalizeCoaItem(item, options = {}) {
     mass: sanitizeRoundText(sourceRow?.mass ?? item.mass, 60),
     testingTier: normalizeTestingTier(sourceRow?.testingTier ?? item.testingTier),
     dateTested: sanitizeRoundText(item.dateTested, 80),
+    lab: sanitizeRoundText(item.lab, 120),
+    coaNumber: sanitizeRoundText(item.coaNumber, 80),
+    accessionNumber: sanitizeRoundText(item.accessionNumber, 80),
+    verificationUrl: sanitizeRoundText(item.verificationUrl, 240),
     averageNetContent: sanitizeRoundText(item.averageNetContent, 80) || 'Pending',
     purity: sanitizeRoundText(item.purity, 80) || 'Pending',
     endotoxins: sanitizeRoundText(item.endotoxins, 80) || 'Pending',
     heavyMetals: sanitizeRoundText(item.heavyMetals, 80) || 'Pending',
     sterility: sanitizeRoundText(item.sterility, 80) || 'Pending',
+    fentanyl: sanitizeRoundText(item.fentanyl, 80) || 'Pending',
     ...(coaBlobKey
       ? {
           coaFileName: sanitizeRoundText(item.coaFileName, 180) || `${id}.pdf`,
@@ -1080,6 +1103,7 @@ function normalizeCoaItem(item, options = {}) {
           coaUploadedAt: normalizeDateTimeString(item.coaUploadedAt) || now,
         }
       : {}),
+    ...(parsedCoa ? { parsedCoa } : {}),
     createdAt: normalizeDateTimeString(item.createdAt) || now,
     updatedAt: options.updateTimestamp
       ? now
