@@ -2072,11 +2072,13 @@ function CoaBatchDetail({
   onToggleVialImage: (result: CoaResult, mode: 'extracted' | 'placeholder') => void;
 }) {
   const vialImageUrl = getCoaVialImageUrl(result);
-  const detailRows = [
-    { label: 'Lab', value: result.lab },
+  const detailSummaryItems = [
     { label: 'Round', value: result.roundName },
-    { label: 'Date Tested', value: result.dateTested },
-    { label: 'Testing Tier', value: formatTestingTierLabel(result.testingTier) },
+    { label: 'Lab', value: result.lab },
+    { label: 'Date', value: result.dateTested },
+    { label: 'Tier', value: formatTestingTierLabel(result.testingTier) },
+  ].filter((item) => item.value);
+  const detailRows = [
     { label: 'Cap Color', value: result.capColor },
     { label: 'Avg Net Content', value: result.averageNetContent },
     { label: 'Purity', value: result.purity },
@@ -2149,27 +2151,36 @@ function CoaBatchDetail({
           )}
         </div>
 
-        <dl className="coa-detail__grid">
-          {detailRows.map((item) => (
-            <div key={item.label}>
-              <dt>{item.label}</dt>
-              <dd>
-                {item.status ? (
-                  <span className={getCoaStatusClassName(item.value)}>{item.value}</span>
-                ) : item.label === 'Testing Tier' ? (
-                  <span className={`coa-tier coa-tier--${result.testingTier}`}>{item.value}</span>
-                ) : item.label === 'Cap Color' ? (
-                  <span className="coa-cap-color">
-                    <span aria-hidden="true" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
-                    {item.value}
-                  </span>
-                ) : (
-                  item.value
-                )}
-              </dd>
-            </div>
-          ))}
-        </dl>
+        <div className="coa-detail__info">
+          <div className="coa-detail__summary" aria-label="COA summary">
+            {detailSummaryItems.map((item) => (
+              <div className="coa-detail__summary-item" key={item.label}>
+                <span className="coa-detail__summary-label">{item.label}</span>
+                <span className="coa-detail__summary-value">{item.value}</span>
+              </div>
+            ))}
+          </div>
+
+          <dl className="coa-detail__grid">
+            {detailRows.map((item) => (
+              <div key={item.label}>
+                <dt>{item.label}</dt>
+                <dd>
+                  {item.status ? (
+                    <span className={getCoaStatusClassName(item.value)}>{item.value}</span>
+                  ) : item.label === 'Cap Color' ? (
+                    <span className="coa-cap-color">
+                      <span aria-hidden="true" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
+                      {item.value}
+                    </span>
+                  ) : (
+                    item.value
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
       </div>
     </article>
   );
