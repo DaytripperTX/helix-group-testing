@@ -2027,10 +2027,6 @@ function CoaBatchDetail({
 }) {
   const detailRows = [
     { label: 'Lab', value: result.lab },
-    { label: 'COA #', value: result.coaNumber },
-    { label: 'Peptide Name', value: result.peptideName },
-    { label: 'Mass', value: formatMassWithUnits(result.mass) },
-    { label: 'Batch #', value: result.batchNumber },
     { label: 'Round', value: result.roundName },
     { label: 'Date Tested', value: result.dateTested },
     { label: 'Testing Tier', value: formatTestingTierLabel(result.testingTier) },
@@ -2041,7 +2037,6 @@ function CoaBatchDetail({
     { label: 'Heavy Metals', value: result.heavyMetals, status: true },
     { label: 'Sterility', value: result.sterility, status: true },
     { label: 'Fentanyl', value: result.fentanyl, status: true },
-    { label: 'Verify URL', value: result.verificationUrl },
   ].filter((item) => item.value);
 
   return (
@@ -2051,7 +2046,10 @@ function CoaBatchDetail({
           <p className="eyebrow">Batch detail</p>
           <h2 id="coa-detail-title">{result.batchNumber}</h2>
           <p>
-            {result.peptideName} {formatMassWithUnits(result.mass)} tested at the {formatTestingTierLabel(result.testingTier)} tier.
+            <span className="coa-detail__subtitle-product">
+              {result.peptideName} {formatMassWithUnits(result.mass)}
+            </span>
+            , tested at the {formatTestingTierLabel(result.testingTier)} tier.
           </p>
         </div>
         <div className="coa-detail__actions">
@@ -2064,6 +2062,11 @@ function CoaBatchDetail({
             </a>
           ) : (
             <span className="coa-pill coa-pill--pending">Pending</span>
+          )}
+          {result.verificationUrl && (
+            <a className="coa-detail__verify-link" href={result.verificationUrl} target="_blank" rel="noreferrer">
+              Verify COA
+            </a>
           )}
           {isAdmin && (
             <>
@@ -2105,8 +2108,6 @@ function CoaBatchDetail({
                     <span aria-hidden="true" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
                     {item.value}
                   </span>
-                ) : item.label === 'Verify URL' ? (
-                  <a href={item.value} target="_blank" rel="noreferrer">{item.value}</a>
                 ) : (
                   item.value
                 )}

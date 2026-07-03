@@ -5196,7 +5196,7 @@ h2 {
 .coa-detail--empty h2 {
   margin: 0 0 9px;
   color: #07101f;
-  font-size: 1.6rem;
+  font-size: 2rem;
   line-height: 1.1;
 }
 
@@ -5206,6 +5206,12 @@ h2 {
   color: #536173;
   font-weight: 760;
   line-height: 1.5;
+}
+
+.coa-detail__subtitle-product {
+  color: #d17a00;
+  font-size: 1.08rem;
+  font-weight: 850;
 }
 
 .coa-detail__actions {
@@ -5219,6 +5225,12 @@ h2 {
   border-color: #07101f;
   background: #07101f;
   color: #ffffff;
+}
+
+.coa-detail__actions .coa-detail__verify-link {
+  border-color: #d3e1ea;
+  background: #ffffff;
+  color: #bd6800;
 }
 
 .coa-detail__body {
