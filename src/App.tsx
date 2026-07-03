@@ -2080,7 +2080,7 @@ function CoaBatchDetail({
   ].filter((item) => item.value);
   const detailRows = [
     { label: 'Cap Color', value: result.capColor },
-    { label: 'Avg Net Content', value: result.averageNetContent },
+    { label: 'Avg Mass', value: result.averageNetContent },
     { label: 'Purity', value: result.purity },
     { label: 'Endotoxins', value: result.endotoxins, status: true },
     { label: 'Heavy Metals', value: result.heavyMetals, status: true },
