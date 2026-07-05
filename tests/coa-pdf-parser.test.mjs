@@ -48,6 +48,7 @@ for (const fixtureCase of fixtureCases) {
     assert.equal(parsed.pageCount, 2);
     assert.equal(parsed.fields.lab, 'ILS Laboratories');
     assert.equal(parsed.fields.lotNumber, fixtureCase.lotNumber);
+    assert.ok(parsed.fields.identityConfirmation);
     assert.equal(parsed.fields.purity, fixtureCase.purity);
     assert.equal(parsed.fields.averageNetContent, fixtureCase.averageNetContent);
     assert.equal(parsed.fields.endotoxins, 'Pass');

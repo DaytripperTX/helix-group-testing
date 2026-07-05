@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { CircleCheckBig } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import AdminPage from './AdminPage';
@@ -149,6 +150,7 @@ type ParsedCoa = {
     lotNumber: string;
     accessionNumber: string;
     productName: string;
+    identityConfirmation: string;
     analysisDate: string;
     dateReceived: string;
     issuedDate: string;
@@ -246,6 +248,31 @@ type CoaPdfAsset = {
   vialImageMode?: 'extracted' | 'placeholder';
   vialImageExtractedAt?: string;
   parsedCoa?: ParsedCoa;
+};
+
+type CoaTestResultKey =
+  | 'averageNetContent'
+  | 'purity'
+  | 'endotoxins'
+  | 'heavyMetals'
+  | 'sterility'
+  | 'fentanyl';
+
+type CoaResultColumn = {
+  key: CoaTestResultKey;
+  label: string;
+  detailLabel?: string;
+  colClassName: string;
+  pillClassName?: string;
+  status?: boolean;
+};
+
+type CoaDetailRow = {
+  label: string;
+  value: string;
+  capColor?: boolean;
+  pillClassName?: string;
+  status?: boolean;
 };
 
 const testingTiers: TestingTier[] = [
@@ -460,6 +487,54 @@ const testingTiers: TestingTier[] = [
         text: 'A bronze peptide can move up if round interest or risk review calls for broader screening.',
       },
     ],
+  },
+];
+
+const coaTestResultsByTier: Record<TestingTierId, readonly CoaTestResultKey[]> = {
+  none: [],
+  bronze: ['averageNetContent', 'purity'],
+  gold: ['averageNetContent', 'purity', 'fentanyl'],
+  'gold-plus': ['averageNetContent', 'purity', 'endotoxins', 'fentanyl'],
+  platinum: ['averageNetContent', 'purity', 'endotoxins', 'heavyMetals', 'sterility', 'fentanyl'],
+};
+
+const coaResultColumns: CoaResultColumn[] = [
+  {
+    key: 'averageNetContent',
+    label: 'Avg Net Content',
+    detailLabel: 'Quantity',
+    colClassName: 'coa-col-average',
+    pillClassName: 'coa-pill--neutral',
+  },
+  {
+    key: 'purity',
+    label: 'Purity',
+    colClassName: 'coa-col-purity',
+    pillClassName: 'coa-pill--purity',
+  },
+  {
+    key: 'endotoxins',
+    label: 'Endotoxins',
+    colClassName: 'coa-col-endo',
+    status: true,
+  },
+  {
+    key: 'heavyMetals',
+    label: 'Heavy Metals',
+    colClassName: 'coa-col-heavy',
+    status: true,
+  },
+  {
+    key: 'sterility',
+    label: 'Sterility',
+    colClassName: 'coa-col-sterility',
+    status: true,
+  },
+  {
+    key: 'fentanyl',
+    label: 'Fentanyl',
+    colClassName: 'coa-col-fentanyl',
+    status: true,
   },
 ];
 
@@ -1748,11 +1823,9 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
                   <col className="coa-col-round" />
                   <col className="coa-col-date" />
                   <col className="coa-col-tier" />
-                  <col className="coa-col-average" />
-                  <col className="coa-col-purity" />
-                  <col className="coa-col-endo" />
-                  <col className="coa-col-heavy" />
-                  <col className="coa-col-sterility" />
+                  {coaResultColumns.map((column) => (
+                    <col className={column.colClassName} key={column.key} />
+                  ))}
                   <col className="coa-col-link" />
                   {isAdmin && <col className="coa-col-admin" />}
                 </colgroup>
@@ -1764,11 +1837,9 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
                     <th scope="col">Round</th>
                     <th scope="col">Date Tested</th>
                     <th scope="col">Testing Tier</th>
-                    <th scope="col">Avg Net Content</th>
-                    <th scope="col">Purity</th>
-                    <th scope="col">Endotoxins</th>
-                    <th scope="col">Heavy Metals</th>
-                    <th scope="col">Sterility</th>
+                    {coaResultColumns.map((column) => (
+                      <th scope="col" key={column.key}>{column.label}</th>
+                    ))}
                     <th scope="col">COA</th>
                     {isAdmin && <th scope="col">Admin</th>}
                   </tr>
@@ -1802,21 +1873,11 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
                             {formatTestingTierLabel(result.testingTier)}
                           </span>
                         </td>
-                        <td data-label="Avg Net Content">
-                          <span className="coa-pill coa-pill--neutral">{result.averageNetContent}</span>
-                        </td>
-                        <td data-label="Purity">
-                          <span className="coa-pill coa-pill--purity">{result.purity}</span>
-                        </td>
-                        <td data-label="Endotoxins">
-                          <span className={getCoaStatusClassName(result.endotoxins)}>{result.endotoxins}</span>
-                        </td>
-                        <td data-label="Heavy Metals">
-                          <span className={getCoaStatusClassName(result.heavyMetals)}>{result.heavyMetals}</span>
-                        </td>
-                        <td data-label="Sterility">
-                          <span className={getCoaStatusClassName(result.sterility)}>{result.sterility}</span>
-                        </td>
+                        {coaResultColumns.map((column) => (
+                          <td data-label={column.label} key={column.key}>
+                            {renderCoaResultTableValue(result, column)}
+                          </td>
+                        ))}
                         <td data-label="COA">
                           {result.coaBlobKey ? (
                             <a
@@ -1862,7 +1923,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
                     ))
                   ) : (
                     <tr className="coa-empty-row">
-                      <td colSpan={isAdmin ? 13 : 12}>No COAs match the current filters.</td>
+                      <td colSpan={6 + coaResultColumns.length + 1 + (isAdmin ? 1 : 0)}>No COAs match the current filters.</td>
                     </tr>
                   )}
                 </tbody>
@@ -2089,15 +2150,15 @@ function CoaBatchDetail({
     { label: 'Date', value: result.dateTested },
     { label: 'Tier', value: formatTestingTierLabel(result.testingTier) },
   ].filter((item) => item.value);
-  const detailRows = [
-    { label: 'Cap Color', value: result.capColor },
-    { label: 'Avg Mass', value: result.averageNetContent },
-    { label: 'Purity', value: result.purity },
-    { label: 'Endotoxins', value: result.endotoxins, status: true },
-    { label: 'Heavy Metals', value: result.heavyMetals, status: true },
-    { label: 'Sterility', value: result.sterility, status: true },
-    { label: 'Fentanyl', value: result.fentanyl, status: true },
-  ].filter((item) => item.value);
+  const detailRows: CoaDetailRow[] = [
+    { label: 'Cap Color', value: result.capColor, capColor: true },
+    ...coaResultColumns.map((column) => ({
+      label: column.detailLabel ?? column.label,
+      value: getCoaResultValueForTier(result, column.key),
+      status: column.status,
+      pillClassName: column.pillClassName,
+    })),
+  ].filter((item) => item.value && item.value !== '-');
 
   return (
     <div className="coa-detail-stack">
@@ -2109,6 +2170,7 @@ function CoaBatchDetail({
             <p>
               <span className="coa-detail__subtitle-product">
                 {result.peptideName} {formatMassWithUnits(result.mass)}
+                <CoaIdentityConfirmationBadge result={result} />
               </span>
               , tested at the {formatTestingTierLabel(result.testingTier)} tier.
             </p>
@@ -2169,11 +2231,13 @@ function CoaBatchDetail({
                   <dd>
                     {item.status ? (
                       <span className={getCoaStatusClassName(item.value)}>{item.value}</span>
-                    ) : item.label === 'Cap Color' ? (
+                    ) : item.capColor ? (
                       <span className="coa-cap-color">
                         <span aria-hidden="true" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
                         {item.value}
                       </span>
+                    ) : item.pillClassName ? (
+                      <span className={`coa-pill ${item.pillClassName}`}>{item.value}</span>
                     ) : (
                       item.value
                     )}
@@ -2202,6 +2266,50 @@ function CoaBatchDetail({
 
       {result.coaBlobKey && <CoaPdfPreview result={result} pdfUrl={getCoaPdfUrl(result)} />}
     </div>
+  );
+}
+
+function CoaIdentityConfirmationBadge({ result }: { result: CoaResult }) {
+  const [activeBadge, setActiveBadge] = useState<{ pinned: boolean } | null>(null);
+
+  if (!hasCoaIdentityConfirmation(result)) {
+    return null;
+  }
+
+  const tooltipId = `coa-identity-${createCoaId(result.id || result.batchNumber)}-tooltip`;
+  const isOpen = Boolean(activeBadge);
+
+  const closeIfTransient = () => {
+    setActiveBadge((current) => (current && !current.pinned ? null : current));
+  };
+
+  return (
+    <span
+      className={`coa-identity-confirmation${activeBadge?.pinned ? ' is-pinned' : ''}`}
+      onMouseEnter={() => setActiveBadge({ pinned: false })}
+      onMouseLeave={closeIfTransient}
+    >
+      <button
+        className="coa-identity-confirmation__button"
+        type="button"
+        aria-label="Identity confirmation"
+        aria-describedby={isOpen ? tooltipId : undefined}
+        aria-expanded={isOpen}
+        onFocus={() => setActiveBadge({ pinned: false })}
+        onBlur={closeIfTransient}
+        onClick={(event) => {
+          event.stopPropagation();
+          setActiveBadge((current) => (current?.pinned ? null : { pinned: true }));
+        }}
+      >
+        <CircleCheckBig size={15} strokeWidth={2.7} />
+      </button>
+      {isOpen && (
+        <span className="coa-identity-confirmation__bubble" id={tooltipId} role="tooltip">
+          confirmed as {result.peptideName} by HPLC
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -2592,16 +2700,44 @@ function filterCoaResults(results: CoaResult[], searchTerm: string, peptideFilte
       result.roundName,
       result.dateTested,
       formatTestingTierLabel(result.testingTier),
-      result.averageNetContent,
-      result.purity,
-      result.endotoxins,
-      result.heavyMetals,
-      result.sterility,
+      ...coaResultColumns
+        .map((column) => getCoaResultValueForTier(result, column.key))
+        .filter((value) => value !== '-'),
       result.capColor,
     ]
       .join(' '))
       .includes(normalizedSearchTerm);
   });
+}
+
+function renderCoaResultTableValue(result: CoaResult, column: CoaResultColumn) {
+  const value = getCoaResultValueForTier(result, column.key);
+
+  if (value === '-') {
+    return value;
+  }
+
+  if (column.status) {
+    return <span className={getCoaStatusClassName(value)}>{value}</span>;
+  }
+
+  return <span className={`coa-pill ${column.pillClassName ?? 'coa-pill--neutral'}`}>{value}</span>;
+}
+
+function hasCoaIdentityConfirmation(result: CoaResult) {
+  return Boolean(result.coaBlobKey && result.parsedCoa?.fields.identityConfirmation);
+}
+
+function getCoaResultValueForTier(result: CoaResult, key: CoaTestResultKey) {
+  if (!isCoaTestResultIncluded(result.testingTier, key)) {
+    return '-';
+  }
+
+  return result[key] || 'Pending';
+}
+
+function isCoaTestResultIncluded(tier: TestingTierId, key: CoaTestResultKey) {
+  return coaTestResultsByTier[tier].includes(key);
 }
 
 function normalizeCoaSearchText(value: string) {
@@ -2705,6 +2841,7 @@ function normalizeParsedCoa(value: unknown): ParsedCoa | undefined {
       lotNumber: sanitizeClientText(fields.lotNumber),
       accessionNumber: sanitizeClientText(fields.accessionNumber),
       productName: sanitizeClientText(fields.productName),
+      identityConfirmation: sanitizeClientText(fields.identityConfirmation),
       analysisDate: sanitizeClientText(fields.analysisDate),
       dateReceived: sanitizeClientText(fields.dateReceived),
       issuedDate: sanitizeClientText(fields.issuedDate),

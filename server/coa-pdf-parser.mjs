@@ -420,6 +420,7 @@ function parseIlsFields(pages, fullText, verificationUrl) {
   const issuedDate = normalizeDate(readValueAfterLabel(lines, ['Issued']));
   const productLabel = lines.find((line) => /\s-\s*\d+(?:\.\d+)?\s*mg\b/i.test(line)) || '';
   const productMatch = productLabel.match(/^(.+?)\s*-\s*([0-9.]+\s*mg)\b/i);
+  const identityConfirmation = readValueAfterLabel(lines, ['Identity Confirmation', 'Identity']) || productMatch?.[1] || '';
   const conformity = parseConformityMean(lines);
 
   return compactFields({
@@ -427,7 +428,8 @@ function parseIlsFields(pages, fullText, verificationUrl) {
     coaNumber: readValueAfterLabel(lines, ['COA #']) || readInlineMatch(fullText, /\bCOA:\s*([A-Z0-9-]+)/i),
     lotNumber: readValueAfterLabel(lines, ['Lot Number']) || readInlineMatch(fullText, /\bLot:\s*([A-Z0-9-]+)/i),
     accessionNumber: readValueAfterLabel(lines, ['Accession #']),
-    productName: productMatch?.[1] || readValueAfterLabel(lines, ['Identity']),
+    productName: productMatch?.[1] || identityConfirmation,
+    identityConfirmation,
     analysisDate: normalizeDate(readValueAfterLabel(lines, ['Analysis Date']) || readInlineMatch(fullText, /Date Tested:\s*([0-9/.-]+)/i)),
     dateReceived: normalizeDate(readValueAfterLabel(lines, ['Date Received'])),
     issuedDate,
@@ -447,12 +449,16 @@ function parseIlsFields(pages, fullText, verificationUrl) {
 
 function parseGenericFields(pages, fullText, verificationUrl) {
   const lines = pages.flatMap((page) => page.lines);
+  const identityConfirmation = readValueAfterLabel(lines, ['Identity Confirmation', 'Identity']);
+  const productName = identityConfirmation || readValueAfterLabel(lines, ['Product Name', 'Product', 'Sample Name', 'Compound']);
 
   return compactFields({
     lab: readLikelyLab(lines),
     coaNumber: readValueAfterLabel(lines, ['COA #', 'COA Number', 'Certificate Number']),
     lotNumber: readValueAfterLabel(lines, ['Lot Number', 'Batch Number', 'Batch', 'Lot']),
     accessionNumber: readValueAfterLabel(lines, ['Accession #', 'Accession Number']),
+    productName,
+    identityConfirmation: identityConfirmation || productName,
     analysisDate: normalizeDate(readValueAfterLabel(lines, ['Analysis Date', 'Date Tested', 'Test Date'])),
     dateReceived: normalizeDate(readValueAfterLabel(lines, ['Date Received', 'Received Date'])),
     issuedDate: normalizeDate(readValueAfterLabel(lines, ['Issued', 'Issue Date', 'Issued Date'])),
@@ -665,6 +671,7 @@ function compactFields(fields) {
     lotNumber: sanitizeText(fields.lotNumber).slice(0, 160),
     accessionNumber: sanitizeText(fields.accessionNumber).slice(0, 80),
     productName: sanitizeText(fields.productName).slice(0, 120),
+    identityConfirmation: sanitizeText(fields.identityConfirmation).slice(0, 120),
     analysisDate: sanitizeText(fields.analysisDate).slice(0, 40),
     dateReceived: sanitizeText(fields.dateReceived).slice(0, 40),
     issuedDate: sanitizeText(fields.issuedDate).slice(0, 40),

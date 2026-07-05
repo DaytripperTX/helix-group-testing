@@ -129,6 +129,7 @@ test('coa pdf uploads return parsed payload and stored entries preserve parsed f
 
   assert.equal(asset.parsedCoa.templateId, 'ils_laboratories_coa');
   assert.equal(asset.parsedCoa.fields.lotNumber, 'CR-3XAG-30MG-2606-2');
+  assert.ok(asset.parsedCoa.fields.identityConfirmation);
   assert.equal(asset.parsedCoa.fields.purity, '99.85%');
   assert.equal(asset.parsedCoa.fields.averageNetContent, '31.71 mg');
   assert.ok(asset.parsedCoa.fields.verificationUrl.endsWith('/2qgRtQeSmLEps64L'));
@@ -175,6 +176,7 @@ test('coa pdf uploads return parsed payload and stored entries preserve parsed f
   assert.equal(stored.sterility, 'Pass');
   assert.equal(stored.fentanyl, 'Pass');
   assert.ok(stored.verificationUrl.endsWith('/2qgRtQeSmLEps64L'));
+  assert.equal(stored.parsedCoa.fields.identityConfirmation, asset.parsedCoa.fields.identityConfirmation);
   assert.equal(stored.parsedCoa.fields.lotNumber, 'CR-3XAG-30MG-2606-2');
   assert.equal(stored.vialImageAssetKey, asset.vialImageAssetKey);
   assert.equal(stored.vialImageMode, 'extracted');
