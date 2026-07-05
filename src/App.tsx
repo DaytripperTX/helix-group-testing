@@ -1,4 +1,6 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import * as pdfjs from 'pdfjs-dist';
+import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import AdminPage from './AdminPage';
 import FaqsPage from './FaqsPage';
 import LabelsPage from './LabelsPage';
@@ -7,6 +9,8 @@ import DisclaimerSection from './Helpers/DisclaimerSection';
 import PageHero from './Helpers/PageHero';
 import { publicPageItems, type PublicPageId } from './page-disables';
 import { fetchRounds, getCurrentRounds, sortRoundsForDisplay, type Round, type RoundPeptide, type TestingTierId } from './rounds';
+
+pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
 const coordinationPoints = [
   'Members coordinate current testing rounds, selected peptides, and shared third-party lab testing scope.',
@@ -179,6 +183,13 @@ type ParsedCoa = {
     } | null;
   };
   error?: string;
+};
+
+type CoaPreviewPage = {
+  pageNumber: number;
+  src: string;
+  width: number;
+  height: number;
 };
 
 type CoaBatchFormRow = {
@@ -2089,100 +2100,345 @@ function CoaBatchDetail({
   ].filter((item) => item.value);
 
   return (
-    <article className="coa-detail" aria-labelledby="coa-detail-title">
-      <div className="coa-detail__header">
-        <div>
-          <p className="eyebrow">Batch detail</p>
-          <h2 id="coa-detail-title">{result.batchNumber}</h2>
-          <p>
-            <span className="coa-detail__subtitle-product">
-              {result.peptideName} {formatMassWithUnits(result.mass)}
-            </span>
-            , tested at the {formatTestingTierLabel(result.testingTier)} tier.
-          </p>
+    <div className="coa-detail-stack">
+      <article className="coa-detail" aria-labelledby="coa-detail-title">
+        <div className="coa-detail__header">
+          <div>
+            <p className="eyebrow">Batch detail</p>
+            <h2 id="coa-detail-title">{result.batchNumber}</h2>
+            <p>
+              <span className="coa-detail__subtitle-product">
+                {result.peptideName} {formatMassWithUnits(result.mass)}
+              </span>
+              , tested at the {formatTestingTierLabel(result.testingTier)} tier.
+            </p>
+          </div>
+          <div className="coa-detail__actions">
+            <button type="button" onClick={onClear}>
+              Back to all results
+            </button>
+            {!result.coaBlobKey && <span className="coa-pill coa-pill--pending">Pending</span>}
+            {isAdmin && (
+              <>
+                {result.vialImageAssetKey && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleVialImage(result, result.vialImageMode === 'placeholder' ? 'extracted' : 'placeholder')}
+                  >
+                    {result.vialImageMode === 'placeholder' ? 'Use COA vial' : 'Use generated vial'}
+                  </button>
+                )}
+                <button type="button" onClick={() => onAttach(result)}>
+                  Add COA
+                </button>
+                <button type="button" onClick={() => onEdit(result)}>
+                  Edit
+                </button>
+              </>
+            )}
+          </div>
         </div>
-        <div className="coa-detail__actions">
-          <button type="button" onClick={onClear}>
-            Back to all results
-          </button>
-          {result.coaBlobKey ? (
-            <a href={getCoaPdfUrl(result)} target="_blank" rel="noreferrer">
+
+        <div className="coa-detail__body">
+          <div className="coa-vial-slot" aria-label={`Vial image for ${result.batchNumber}`}>
+            {vialImageUrl ? (
+              <img src={vialImageUrl} alt={`${result.batchNumber} vial`} />
+            ) : (
+              <div className="coa-vial-placeholder" aria-hidden="true">
+                <span className="coa-vial-placeholder__cap" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
+                <span className="coa-vial-placeholder__bottle" />
+                <strong>Vial image</strong>
+              </div>
+            )}
+          </div>
+
+          <div className="coa-detail__info">
+            <div className="coa-detail__summary" aria-label="COA summary">
+              {detailSummaryItems.map((item) => (
+                <div className="coa-detail__summary-item" key={item.label}>
+                  <span className="coa-detail__summary-label">{item.label}</span>
+                  <span className="coa-detail__summary-value">{item.value}</span>
+                </div>
+              ))}
+            </div>
+
+            <dl className="coa-detail__grid">
+              {detailRows.map((item) => (
+                <div key={item.label}>
+                  <dt>{item.label}</dt>
+                  <dd>
+                    {item.status ? (
+                      <span className={getCoaStatusClassName(item.value)}>{item.value}</span>
+                    ) : item.label === 'Cap Color' ? (
+                      <span className="coa-cap-color">
+                        <span aria-hidden="true" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
+                        {item.value}
+                      </span>
+                    ) : (
+                      item.value
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      </article>
+
+      {(result.coaBlobKey || result.verificationUrl) && (
+        <div className="coa-detail__preview-actions" aria-label="COA document actions">
+          {result.coaBlobKey && (
+            <a className="coa-detail__open-link" href={getCoaPdfUrl(result)} target="_blank" rel="noreferrer">
               Open COA
             </a>
-          ) : (
-            <span className="coa-pill coa-pill--pending">Pending</span>
           )}
           {result.verificationUrl && (
             <a className="coa-detail__verify-link" href={result.verificationUrl} target="_blank" rel="noreferrer">
               Verify COA
             </a>
           )}
-          {isAdmin && (
-            <>
-              {result.vialImageAssetKey && (
-                <button
-                  type="button"
-                  onClick={() => onToggleVialImage(result, result.vialImageMode === 'placeholder' ? 'extracted' : 'placeholder')}
-                >
-                  {result.vialImageMode === 'placeholder' ? 'Use COA vial' : 'Use generated vial'}
-                </button>
-              )}
-              <button type="button" onClick={() => onAttach(result)}>
-                Add COA
-              </button>
-              <button type="button" onClick={() => onEdit(result)}>
-                Edit
-              </button>
-            </>
-          )}
         </div>
-      </div>
+      )}
 
-      <div className="coa-detail__body">
-        <div className="coa-vial-slot" aria-label={`Vial image for ${result.batchNumber}`}>
-          {vialImageUrl ? (
-            <img src={vialImageUrl} alt={`${result.batchNumber} vial`} />
-          ) : (
-            <div className="coa-vial-placeholder" aria-hidden="true">
-              <span className="coa-vial-placeholder__cap" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
-              <span className="coa-vial-placeholder__bottle" />
-              <strong>Vial image</strong>
-            </div>
-          )}
+      {result.coaBlobKey && <CoaPdfPreview result={result} pdfUrl={getCoaPdfUrl(result)} />}
+    </div>
+  );
+}
+
+function CoaPdfPreview({ result, pdfUrl }: { result: CoaResult; pdfUrl: string }) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const animationStartScrollY = useRef(0);
+  const [pages, setPages] = useState<CoaPreviewPage[]>([]);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+
+  useEffect(() => {
+    let isCancelled = false;
+    const renderedPages: CoaPreviewPage[] = [];
+    const loadingTask = pdfjs.getDocument({ url: pdfUrl });
+
+    setPages([]);
+    setStatus('loading');
+
+    void (async () => {
+      try {
+        const pdf = await loadingTask.promise;
+
+        for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+          if (isCancelled) {
+            break;
+          }
+
+          const page = await pdf.getPage(pageNumber);
+          const baseViewport = page.getViewport({ scale: 1 });
+          const renderScale = Math.min(2.2, Math.max(1.35, 1120 / baseViewport.width));
+          const viewport = page.getViewport({ scale: renderScale });
+          const canvas = document.createElement('canvas');
+
+          canvas.width = Math.ceil(viewport.width);
+          canvas.height = Math.ceil(viewport.height);
+
+          await page.render({ canvas, viewport }).promise;
+
+          if (isCancelled) {
+            break;
+          }
+
+          renderedPages.push({
+            pageNumber,
+            src: canvas.toDataURL('image/png'),
+            width: viewport.width,
+            height: viewport.height,
+          });
+          setPages([...renderedPages]);
+        }
+
+        if (!isCancelled) {
+          setStatus('ready');
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          console.error(error);
+          setStatus('error');
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+      void loadingTask.destroy();
+    };
+  }, [pdfUrl]);
+
+  useEffect(() => {
+    const shell = shellRef.current;
+
+    if (!shell) {
+      return undefined;
+    }
+
+    let layoutFrame = 0;
+    let smoothFrame = 0;
+    let currentProgress = 0;
+    let targetProgress = 0;
+    let latestPreviewHeight = 360;
+    let latestPageWidth = 248;
+    let latestPageShift = 0;
+    animationStartScrollY.current = window.scrollY || window.pageYOffset || 0;
+
+    const measurePreviewLayout = () => {
+      const rect = shell.getBoundingClientRect();
+      const scrollY = window.scrollY || window.pageYOffset || 0;
+      const viewportHeight = window.innerHeight || 800;
+      const viewportWidth = window.innerWidth || 1280;
+      const remainingHeight = viewportHeight - rect.top - 28;
+      latestPreviewHeight = Math.max(320, Math.min(760, remainingHeight));
+      const progressDistance = Math.max(360, viewportHeight * 0.52);
+      const scrollProgress = (scrollY - animationStartScrollY.current) / progressDistance;
+      targetProgress = Math.max(0, Math.min(1, scrollProgress));
+
+      const easedProgress = 1 - Math.pow(1 - currentProgress, 3);
+      const compactWidth = 248;
+      const expandedWidth = Math.min(1160, viewportWidth * 0.6, shell.clientWidth - 24);
+      latestPageWidth = viewportWidth <= 760
+        ? Math.max(260, Math.min(shell.clientWidth - 12, viewportWidth - 32))
+        : compactWidth + (Math.max(compactWidth, expandedWidth) - compactWidth) * easedProgress;
+      latestPageShift = easedProgress * 62;
+    };
+
+    const applyPreviewLayout = () => {
+      shell.style.setProperty('--coa-preview-min-height', `${Math.round(latestPreviewHeight)}px`);
+      shell.style.setProperty('--coa-preview-progress', currentProgress.toFixed(3));
+      shell.style.setProperty('--coa-preview-page-width', `${Math.round(latestPageWidth)}px`);
+      shell.style.setProperty('--coa-preview-page-shift', `${Math.round(latestPageShift)}px`);
+    };
+
+    const animatePreviewLayout = () => {
+      const progressDelta = targetProgress - currentProgress;
+
+      currentProgress += progressDelta * 0.12;
+
+      if (Math.abs(progressDelta) < 0.001) {
+        currentProgress = targetProgress;
+      }
+
+      measurePreviewLayout();
+      applyPreviewLayout();
+
+      if (currentProgress !== targetProgress) {
+        smoothFrame = window.requestAnimationFrame(animatePreviewLayout);
+      } else {
+        smoothFrame = 0;
+      }
+    };
+
+    const scheduleUpdate = () => {
+      if (layoutFrame) {
+        return;
+      }
+
+      layoutFrame = window.requestAnimationFrame(() => {
+        layoutFrame = 0;
+        measurePreviewLayout();
+
+        if (!smoothFrame) {
+          smoothFrame = window.requestAnimationFrame(animatePreviewLayout);
+        }
+      });
+    };
+
+    scheduleUpdate();
+    window.addEventListener('scroll', scheduleUpdate, { passive: true });
+    window.addEventListener('resize', scheduleUpdate);
+
+    let wheelFrame = 0;
+    let wheelTargetY = window.scrollY || window.pageYOffset || 0;
+
+    const getMaxScrollY = () => Math.max(
+      0,
+      document.documentElement.scrollHeight - (window.innerHeight || document.documentElement.clientHeight),
+    );
+
+    const animateWheelScroll = () => {
+      const currentScrollY = window.scrollY || window.pageYOffset || 0;
+      const scrollDelta = wheelTargetY - currentScrollY;
+
+      if (Math.abs(scrollDelta) < 0.75) {
+        window.scrollTo({ top: wheelTargetY, left: 0, behavior: 'auto' });
+        wheelFrame = 0;
+        return;
+      }
+
+      window.scrollTo({ top: currentScrollY + scrollDelta * 0.16, left: 0, behavior: 'auto' });
+      wheelFrame = window.requestAnimationFrame(animateWheelScroll);
+    };
+
+    const syncWheelTarget = () => {
+      if (!wheelFrame) {
+        wheelTargetY = window.scrollY || window.pageYOffset || 0;
+      }
+    };
+
+    const handleWheel = (event: WheelEvent) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+        return;
+      }
+
+      const deltaUnit = event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? window.innerHeight
+        : event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? 16
+          : 1;
+      const softenedDelta = event.deltaY * deltaUnit * 0.55;
+
+      event.preventDefault();
+      wheelTargetY = Math.max(0, Math.min(getMaxScrollY(), wheelTargetY + softenedDelta));
+
+      if (!wheelFrame) {
+        wheelFrame = window.requestAnimationFrame(animateWheelScroll);
+      }
+    };
+
+    window.addEventListener('scroll', syncWheelTarget, { passive: true });
+    window.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      if (layoutFrame) {
+        window.cancelAnimationFrame(layoutFrame);
+      }
+
+      if (smoothFrame) {
+        window.cancelAnimationFrame(smoothFrame);
+      }
+
+      if (wheelFrame) {
+        window.cancelAnimationFrame(wheelFrame);
+      }
+
+      window.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('scroll', syncWheelTarget);
+      window.removeEventListener('resize', scheduleUpdate);
+      window.removeEventListener('wheel', handleWheel);
+    };
+  }, [pdfUrl]);
+
+  return (
+    <section className="coa-pdf-preview" ref={shellRef} aria-label={`PDF preview for ${result.batchNumber}`}>
+      {status === 'loading' && pages.length === 0 && <div className="coa-pdf-preview__status">Loading COA preview...</div>}
+      {status === 'error' && <div className="coa-pdf-preview__status coa-pdf-preview__status--error">COA preview could not be loaded.</div>}
+      {pages.length > 0 && (
+        <div className="coa-pdf-preview__pages">
+          {pages.map((page) => (
+            <figure className="coa-pdf-preview__page" key={page.pageNumber}>
+              <img
+                src={page.src}
+                alt={`${result.batchNumber} COA page ${page.pageNumber}`}
+                style={{ aspectRatio: `${page.width} / ${page.height}` }}
+              />
+            </figure>
+          ))}
         </div>
-
-        <div className="coa-detail__info">
-          <div className="coa-detail__summary" aria-label="COA summary">
-            {detailSummaryItems.map((item) => (
-              <div className="coa-detail__summary-item" key={item.label}>
-                <span className="coa-detail__summary-label">{item.label}</span>
-                <span className="coa-detail__summary-value">{item.value}</span>
-              </div>
-            ))}
-          </div>
-
-          <dl className="coa-detail__grid">
-            {detailRows.map((item) => (
-              <div key={item.label}>
-                <dt>{item.label}</dt>
-                <dd>
-                  {item.status ? (
-                    <span className={getCoaStatusClassName(item.value)}>{item.value}</span>
-                  ) : item.label === 'Cap Color' ? (
-                    <span className="coa-cap-color">
-                      <span aria-hidden="true" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
-                      {item.value}
-                    </span>
-                  ) : (
-                    item.value
-                  )}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      </div>
-    </article>
+      )}
+    </section>
   );
 }
 
