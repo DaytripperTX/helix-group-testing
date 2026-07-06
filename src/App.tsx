@@ -1743,7 +1743,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <section className="coa-page" aria-labelledby="coa-title">
-      <div className="section__content coa-page__content">
+      <div className={`section__content coa-page__content${isAdmin ? ' coa-page__content--admin' : ''}`}>
         <header className="coa-page__header">
           <div>
             <p className="eyebrow">COAs</p>
@@ -1815,7 +1815,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
             </div>
 
             <div className="coa-table-shell" tabIndex={0} aria-label="Scrollable COA results table">
-              <table className="coa-results-table" aria-describedby="coa-results-count">
+              <table className={`coa-results-table${isAdmin ? ' coa-results-table--admin' : ''}`} aria-describedby="coa-results-count">
                 <colgroup>
                   <col className="coa-col-peptide" />
                   <col className="coa-col-mass" />
