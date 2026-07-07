@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch, parseCoaPdfUploadBuffer } from './coa-pdf-parser.mjs';
+import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch } from './coa-pdf-normalizer.mjs';
 
 const rootDir = process.env.HELIX_ROOT_DIR
   ? path.resolve(process.env.HELIX_ROOT_DIR)
@@ -345,6 +345,8 @@ export async function writeCoaPdfAsset(asset) {
 
 async function parseStoredCoaPdf(buffer, fileName) {
   try {
+    const { parseCoaPdfUploadBuffer } = await import('./coa-pdf-parser.mjs');
+
     return await parseCoaPdfUploadBuffer(buffer, { fileName });
   } catch (error) {
     return {

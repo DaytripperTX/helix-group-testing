@@ -1,8 +1,11 @@
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { PNG } from 'pngjs';
+import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch } from './coa-pdf-normalizer.mjs';
 
 const parserVersion = 'coa-pdf-parser-v1';
 const maxRawSnippetLength = 1200;
+
+export { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch };
 
 export async function parseCoaPdfBuffer(buffer, options = {}) {
   return (await parseCoaPdfUploadBuffer(buffer, options)).parsedCoa;
@@ -81,56 +84,6 @@ export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
       pageNumber: vialImage.pageNumber,
       operatorIndex: vialImage.operatorIndex,
     } : null,
-  };
-}
-
-export function createFailedParsedCoa(error) {
-  return compactParsedCoa({
-    parserVersion,
-    extractionMethod: 'native_pdf',
-    templateId: 'unknown',
-    templateConfidence: 0,
-    matchedAnchors: [],
-    pageCount: 0,
-    confidence: 0,
-    fields: {},
-    warnings: ['COA PDF was stored, but parser could not extract text from it.'],
-    error: error?.message ? String(error.message).slice(0, 180) : 'PDF parsing failed.',
-    raw: {
-      verificationUrls: [],
-      snippets: {},
-      vialImage: null,
-    },
-  });
-}
-
-export function doesParsedLotMatchBatch(parsedCoa, batchNumber) {
-  const parsedLot = normalizeMatchText(parsedCoa?.fields?.lotNumber);
-  const targetBatch = normalizeMatchText(batchNumber);
-
-  return !parsedLot || !targetBatch || parsedLot === targetBatch;
-}
-
-export function compactParsedCoa(value) {
-  const fields = value?.fields && typeof value.fields === 'object' ? value.fields : {};
-  const raw = value?.raw && typeof value.raw === 'object' ? value.raw : {};
-
-  return {
-    parserVersion,
-    extractionMethod: sanitizeText(value?.extractionMethod) || 'native_pdf',
-    templateId: sanitizeText(value?.templateId) || 'unknown',
-    templateConfidence: normalizeConfidence(value?.templateConfidence),
-    matchedAnchors: sanitizeStringList(value?.matchedAnchors, 12, 80),
-    pageCount: Math.max(0, Math.round(Number(value?.pageCount) || 0)),
-    confidence: normalizeConfidence(value?.confidence),
-    fields: compactFields(fields),
-    warnings: sanitizeStringList(value?.warnings, 12, 180),
-    ...(value?.error ? { error: sanitizeText(value.error).slice(0, 180) } : {}),
-    raw: {
-      verificationUrls: sanitizeStringList(raw.verificationUrls, 8, 240),
-      snippets: compactSnippets(raw.snippets),
-      vialImage: compactVialImageMetadata(raw.vialImage),
-    },
   };
 }
 
