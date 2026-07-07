@@ -175,11 +175,13 @@ export async function upsertCollectionItem(collectionName, itemId, item) {
 }
 
 export async function exportPeptideCollectionTransfer() {
+  const items = await readCollection('peptides');
+
   return {
     version: 1,
     collection: 'peptides',
     exportedAt: new Date().toISOString(),
-    items: await readCollection('peptides'),
+    items: items.map(normalizePeptideTransferItem),
   };
 }
 
@@ -1590,8 +1592,18 @@ function normalizePeptideImportItem(item) {
       .filter((category, index, categoryList) => categoryList.indexOf(category) === index)
     : [];
 
-  if (!id || !name || categories.length === 0) {
-    throw createHttpError(400, 'Peptide import contains invalid records.');
+  const invalidFields = [];
+
+  if (!id) {
+    invalidFields.push('missing id');
+  }
+
+  if (!name) {
+    invalidFields.push('missing name');
+  }
+
+  if (invalidFields.length > 0) {
+    throw createHttpError(400, `Invalid peptide record: ${invalidFields.join(', ')}.`);
   }
 
   return normalizePeptideItem({
@@ -1601,6 +1613,13 @@ function normalizePeptideImportItem(item) {
     categories,
     description: typeof item.description === 'string' ? item.description.trim() : '',
   }, {}, { requireBlendComponents: true });
+}
+
+function normalizePeptideTransferItem(item) {
+  return {
+    ...item,
+    categories: Array.isArray(item?.categories) ? item.categories : [],
+  };
 }
 
 function getImportRowNumber(row, index) {

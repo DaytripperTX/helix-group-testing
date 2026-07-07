@@ -42,6 +42,26 @@ test('owner can export peptide transfer shape', async () => {
   assert.ok(body.items.length > 0);
 });
 
+test('owner peptide export adds blank categories arrays for legacy records', async () => {
+  await resetData();
+
+  const ownerCookie = createAdminSessionCookie('owner');
+
+  await apiRequest('/api/admin/data/peptides/legacy-no-categories', 'PUT', {
+    id: 'legacy-no-categories',
+    name: 'Legacy No Categories',
+    description: 'Older local record without a categories field.',
+    wikiLinks: [],
+  }, ownerCookie);
+
+  const response = await apiRequest('/api/admin/data/peptides/export', 'GET', undefined, ownerCookie);
+  const body = JSON.parse(response.body);
+  const exportedPeptide = body.items.find((item) => item.id === 'legacy-no-categories');
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(exportedPeptide.categories, []);
+});
+
 test('owner peptide import replaces stale target peptides', async () => {
   await resetData();
 
@@ -83,6 +103,25 @@ test('owner peptide import preserves sanitized blend metadata', async () => {
     { peptideId: 'bpc-157', name: 'BPC-157', ratio: '1' },
     { peptideId: '..-tb-500', name: 'TB-500', ratio: '1' },
   ]);
+});
+
+test('owner peptide import accepts category-less peptide records', async () => {
+  await resetData();
+
+  const response = await apiRequest('/api/admin/data/peptides/import', 'POST', {
+    ...createTransfer(),
+    items: [
+      {
+        ...createPeptide('uncategorized-peptide', 'Uncategorized Peptide'),
+        categories: [],
+      },
+    ],
+  }, createAdminSessionCookie('owner'));
+  const storedPeptides = await readCollection('peptides');
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(storedPeptides[0].categories, []);
+  assert.equal(storedPeptides[0].name, 'Uncategorized Peptide');
 });
 
 test('owner peptide import rejects invalid files and duplicate ids', async () => {
