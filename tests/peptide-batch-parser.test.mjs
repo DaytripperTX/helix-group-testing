@@ -9,6 +9,7 @@ process.env.HELIX_ALLOW_LOCAL_DEFAULTS = 'true';
 
 const { handleHelixApiRequest } = await import('../server/helix-api.mjs');
 const { createAdminSessionCookie } = await import('../server/helix-auth.mjs');
+const { readCollection } = await import('../server/helix-data.mjs');
 const { peptideXlsxFixtureBase64 } = await import('./fixtures/spreadsheet-fixtures.mjs');
 
 test('peptide batch parse requires an admin session', async () => {
@@ -175,6 +176,44 @@ test('peptide batch parse rejects corrupt XLSX uploads', async () => {
   assert.equal(response.statusCode, 400);
 });
 
+test('peptide batch import saves reviewed rows in one request', async () => {
+  await resetData();
+  const response = await apiBatchImport([
+    createBatchRow(2, 'batch-alpha', 'Batch Alpha', ['Recovery']),
+    createBatchRow(3, 'batch-beta', 'Batch Beta', ['Recovery']),
+  ]);
+  const result = JSON.parse(response.body);
+  const storedPeptides = await readCollection('peptides');
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(result.savedCount, 2);
+  assert.equal(result.failedCount, 0);
+  assert.ok(result.items.some((item) => item.id === 'batch-alpha'));
+  assert.ok(result.items.some((item) => item.id === 'batch-beta'));
+  assert.ok(storedPeptides.some((item) => item.id === 'batch-alpha'));
+  assert.ok(storedPeptides.some((item) => item.id === 'batch-beta'));
+});
+
+test('peptide batch import reports row-level save failures', async () => {
+  await resetData();
+  const response = await apiBatchImport([
+    createBatchRow(2, 'valid-bpc-157', 'BPC-157', ['Recovery']),
+    createBatchRow(3, 'empty-blend', 'Empty Blend', ['Recovery'], {
+      kind: 'blend',
+      components: [],
+    }),
+  ]);
+  const result = JSON.parse(response.body);
+  const storedPeptides = await readCollection('peptides');
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(result.error, 'Peptide batch import contains rows that could not be saved.');
+  assert.equal(result.details.failedCount, 1);
+  assert.equal(result.details.rowErrors[0].rowNumber, 3);
+  assert.match(result.details.rowErrors[0].error, /Blend components/);
+  assert.equal(storedPeptides.some((item) => item.id === 'valid-bpc-157'), false);
+});
+
 async function resetData() {
   await rm(testDataDir, { recursive: true, force: true });
 }
@@ -204,4 +243,29 @@ function apiRequest({ headers, body }) {
     headers,
     bodyText: JSON.stringify(body),
   });
+}
+
+function apiBatchImport(rows) {
+  return handleHelixApiRequest({
+    method: 'POST',
+    pathname: '/api/admin/peptides/import-batch',
+    url: '/api/admin/peptides/import-batch',
+    headers: adminHeaders(),
+    bodyText: JSON.stringify({ rows }),
+  });
+}
+
+function createBatchRow(rowNumber, id, name, categories, overrides = {}) {
+  return {
+    rowNumber,
+    id,
+    name,
+    kind: 'peptide',
+    categories,
+    description: `${name} description`,
+    components: [],
+    wikiLinks: [],
+    errors: [],
+    ...overrides,
+  };
 }

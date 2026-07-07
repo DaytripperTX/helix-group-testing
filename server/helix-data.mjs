@@ -193,14 +193,40 @@ export async function importPeptideCollectionTransfer(transfer) {
   }
 
   const seenIds = new Set();
-  const items = transfer.items.map((item) => normalizePeptideImportItem(item));
+  const items = [];
+  const rowErrors = [];
 
-  for (const item of items) {
-    if (seenIds.has(item.id)) {
-      throw createHttpError(400, 'Peptide import contains duplicate ids.');
+  for (const [index, item] of transfer.items.entries()) {
+    try {
+      const normalizedItem = normalizePeptideImportItem(item);
+
+      if (seenIds.has(normalizedItem.id)) {
+        rowErrors.push({
+          rowNumber: index + 1,
+          id: normalizedItem.id,
+          name: normalizedItem.name,
+          error: 'Duplicate peptide id.',
+        });
+        continue;
+      }
+
+      seenIds.add(normalizedItem.id);
+      items.push(normalizedItem);
+    } catch (error) {
+      rowErrors.push({
+        rowNumber: index + 1,
+        id: typeof item?.id === 'string' ? item.id : '',
+        name: typeof item?.name === 'string' ? item.name : '',
+        error: error?.message || 'Record could not be imported.',
+      });
     }
+  }
 
-    seenIds.add(item.id);
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'Peptide import contains invalid records.', {
+      failedCount: rowErrors.length,
+      rowErrors,
+    });
   }
 
   const nextDocument = createCollectionDocument('peptides', items);
@@ -208,6 +234,81 @@ export async function importPeptideCollectionTransfer(transfer) {
   await writeCollectionDocument('peptides', nextDocument);
 
   return nextDocument.items;
+}
+
+export async function importPeptideBatchItems(rows) {
+  if (!Array.isArray(rows)) {
+    throw createHttpError(400, 'Peptide batch rows are required.');
+  }
+
+  const document = await readCollectionDocument('peptides');
+  let nextItems = Array.isArray(document.items) ? document.items : [];
+  const seenNames = new Set();
+  const rowErrors = [];
+  let savedCount = 0;
+
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = getImportRowNumber(row, index);
+    const rowName = typeof row?.name === 'string' ? row.name.trim() : '';
+    const normalizedRowName = normalizeRoundName(rowName);
+
+    try {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw new Error('Row is not an object.');
+      }
+
+      if (Array.isArray(row.errors) && row.errors.length > 0) {
+        throw new Error(`Row has unresolved errors: ${row.errors.join('; ')}`);
+      }
+
+      if (normalizedRowName && seenNames.has(normalizedRowName)) {
+        throw new Error('Duplicate name in import.');
+      }
+
+      if (normalizedRowName) {
+        seenNames.add(normalizedRowName);
+      }
+
+      const existingPeptide = findPeptideByNormalizedName(nextItems, rowName);
+      const importItem = normalizePeptideImportItem({
+        ...row,
+        id: existingPeptide?.id || sanitizeRoundToken(row.id, 120) || createUniquePeptideId(rowName, nextItems),
+        name: rowName,
+      });
+
+      nextItems = [
+        importItem,
+        ...nextItems.filter((currentItem) => currentItem?.id !== importItem.id),
+      ];
+      savedCount += 1;
+    } catch (error) {
+      rowErrors.push({
+        rowNumber,
+        id: typeof row?.id === 'string' ? row.id : '',
+        name: rowName,
+        error: error?.message || 'Row could not be saved.',
+      });
+    }
+  }
+
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'Peptide batch import contains rows that could not be saved.', {
+      failedCount: rowErrors.length,
+      savedCount: 0,
+      rowErrors,
+    });
+  }
+
+  const nextDocument = createCollectionDocument('peptides', nextItems);
+
+  await writeCollectionDocument('peptides', nextDocument);
+
+  return {
+    items: nextDocument.items,
+    savedCount,
+    failedCount: 0,
+    rowErrors: [],
+  };
 }
 
 export async function deleteCollectionItem(collectionName, itemId) {
@@ -523,9 +624,12 @@ export async function permanentlyDeleteLabelTemplate(itemId) {
   return hardDeleteLabelTemplate(itemId);
 }
 
-export function createHttpError(statusCode, message) {
+export function createHttpError(statusCode, message, details) {
   const error = new Error(message);
   error.statusCode = statusCode;
+  if (details !== undefined) {
+    error.details = details;
+  }
   return error;
 }
 
@@ -1497,6 +1601,42 @@ function normalizePeptideImportItem(item) {
     categories,
     description: typeof item.description === 'string' ? item.description.trim() : '',
   }, {}, { requireBlendComponents: true });
+}
+
+function getImportRowNumber(row, index) {
+  const parsedRowNumber = Number(row?.rowNumber);
+
+  return Number.isFinite(parsedRowNumber) && parsedRowNumber > 0
+    ? Math.trunc(parsedRowNumber)
+    : index + 1;
+}
+
+function createUniquePeptideId(name, items) {
+  const baseId = slugifyPeptideId(name) || `peptide-${Date.now()}`;
+  const usedIds = new Set(items.map((item) => item?.id).filter(Boolean));
+  let nextId = baseId;
+  let suffix = 2;
+
+  while (usedIds.has(nextId)) {
+    nextId = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+
+  return nextId;
+}
+
+function findPeptideByNormalizedName(items, name) {
+  const normalizedName = normalizeRoundName(name);
+
+  return items.find((item) => normalizeRoundName(item?.name) === normalizedName) ?? null;
+}
+
+function slugifyPeptideId(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 async function enrichDocumentFromSeed(collectionName, config, document) {

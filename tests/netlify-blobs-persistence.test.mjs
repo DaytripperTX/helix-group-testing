@@ -311,6 +311,124 @@ test('Netlify label admin edits persist when the base label document is stale', 
   }
 });
 
+test('Netlify peptide batch import writes all rows from one stale Blob snapshot', async () => {
+  const previousEnv = {
+    HELIX_ADMIN_SESSION_SECRET: process.env.HELIX_ADMIN_SESSION_SECRET,
+    HELIX_DATA_ADAPTER: process.env.HELIX_DATA_ADAPTER,
+    NETLIFY: process.env.NETLIFY,
+    NETLIFY_BLOBS_CONTEXT: process.env.NETLIFY_BLOBS_CONTEXT,
+  };
+  const previousFetch = globalThis.fetch;
+  const previousBlobsContext = globalThis.netlifyBlobsContext;
+  const blobs = new Map();
+  const requests = [];
+  const peptidesKey = '/site123/site:helix-data/peptides.json';
+  let stalePeptidesBody = null;
+
+  delete process.env.HELIX_DATA_ADAPTER;
+  process.env.HELIX_ADMIN_SESSION_SECRET = 'test-admin-session-secret';
+  process.env.NETLIFY = 'true';
+  globalThis.fetch = async (url, options = {}) => {
+    const method = String(options.method ?? 'GET').toUpperCase();
+    const requestUrl = new URL(url);
+    const key = requestUrl.pathname;
+
+    requests.push({ method, key });
+
+    if (method === 'GET') {
+      if (requestUrl.searchParams.has('prefix')) {
+        return createBlobListResponse(blobs, key, requestUrl.searchParams.get('prefix') ?? '');
+      }
+
+      if (key === peptidesKey && stalePeptidesBody) {
+        return createJsonResponse(stalePeptidesBody);
+      }
+
+      if (!blobs.has(key)) {
+        return new Response('', { status: 404 });
+      }
+
+      return createJsonResponse(blobs.get(key));
+    }
+
+    if (method === 'PUT') {
+      blobs.set(key, String(options.body ?? ''));
+      return new Response('', {
+        status: 200,
+        headers: { etag: `"${blobs.size}"` },
+      });
+    }
+
+    return new Response('', { status: 405 });
+  };
+
+  try {
+    const importId = Date.now();
+    const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?peptideBatchBlobs=${importId}`);
+    const { handler } = await import(`../netlify/functions/data.mjs?peptideBatchBlobs=${importId}`);
+    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?peptideBatchBlobs=${importId}`);
+    const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
+
+    const seedResponse = await handler({
+      ...eventBase,
+      httpMethod: 'GET',
+      path: '/api/data/peptides',
+      rawUrl: 'https://example.netlify.app/api/data/peptides',
+    });
+
+    assert.equal(seedResponse.statusCode, 200);
+    stalePeptidesBody = blobs.get(peptidesKey);
+
+    const writeCountBeforeImport = requests.filter((request) =>
+      request.method === 'PUT' && request.key === peptidesKey
+    ).length;
+    const importResponse = await adminHandler({
+      ...eventBase,
+      httpMethod: 'POST',
+      path: '/api/admin/peptides/import-batch',
+      rawUrl: 'https://example.netlify.app/api/admin/peptides/import-batch',
+      headers: {
+        ...eventBase.headers,
+        cookie: createAdminSessionCookie('admin'),
+        'content-type': 'application/json',
+        'user-agent': 'netlify-blobs-test',
+      },
+      body: JSON.stringify({
+        rows: [
+          createPeptideBatchRow(2, 'netlify-batch-a', 'Netlify Batch A'),
+          createPeptideBatchRow(3, 'netlify-batch-b', 'Netlify Batch B'),
+        ],
+      }),
+      isBase64Encoded: false,
+    });
+    const result = JSON.parse(importResponse.body);
+    const writeCountAfterImport = requests.filter((request) =>
+      request.method === 'PUT' && request.key === peptidesKey
+    ).length;
+    const storedDocument = JSON.parse(blobs.get(peptidesKey));
+    const storedIds = storedDocument.items.map((item) => item.id);
+
+    assert.equal(importResponse.statusCode, 200);
+    assert.equal(result.savedCount, 2);
+    assert.ok(result.items.some((item) => item.id === 'netlify-batch-a'));
+    assert.ok(result.items.some((item) => item.id === 'netlify-batch-b'));
+    assert.equal(writeCountAfterImport, writeCountBeforeImport + 1);
+    assert.ok(storedIds.includes('netlify-batch-a'));
+    assert.ok(storedIds.includes('netlify-batch-b'));
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.netlifyBlobsContext = previousBlobsContext;
+
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
 function createNetlifyBlobsEvent({ includeUncached = true } = {}) {
   const blobsContext = {
     token: 'test-token',
@@ -381,6 +499,20 @@ function createAdminLabelEvent(eventBase, adminCookie, labelId, method, body, ac
     },
     body: body === undefined ? null : JSON.stringify(body),
     isBase64Encoded: false,
+  };
+}
+
+function createPeptideBatchRow(rowNumber, id, name) {
+  return {
+    rowNumber,
+    id,
+    name,
+    kind: 'peptide',
+    categories: ['Recovery'],
+    description: `${name} description`,
+    components: [],
+    wikiLinks: [],
+    errors: [],
   };
 }
 

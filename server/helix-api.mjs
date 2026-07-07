@@ -7,6 +7,7 @@ import {
   adminUpsertLabelTemplate,
   exportPeptideCollectionTransfer,
   getCollectionNames,
+  importPeptideBatchItems,
   importPeptideCollectionTransfer,
   isPublicCollectionRead,
   publicReportLabelTemplate,
@@ -229,6 +230,17 @@ export async function handleHelixApiRequest(request) {
       });
     }
 
+    if (pathname === '/api/admin/peptides/import-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await importPeptideBatchItems(body?.rows));
+    }
+
     if (pathname === '/api/admin/rounds/parse-peptides' && method === 'POST') {
       const session = getAdminSession(request.headers);
 
@@ -331,12 +343,19 @@ export async function handleHelixApiRequest(request) {
   } catch (error) {
     const statusCode = Number(error?.statusCode) || 500;
     const message = statusCode === 500 ? 'Server error' : error.message;
+    const details = error?.details;
 
-    if (statusCode === 500) {
-      console.error(error);
-    }
+    logApiError(error, {
+      method,
+      pathname,
+      statusCode,
+      bodyBytes: typeof request.bodyText === 'string' ? Buffer.byteLength(request.bodyText, 'utf8') : 0,
+    });
 
-    return jsonResponse(statusCode, { error: message });
+    return jsonResponse(statusCode, {
+      error: message,
+      ...(details !== undefined ? { details } : {}),
+    });
   }
 }
 
@@ -367,11 +386,24 @@ function parseJsonBody(bodyText) {
 
   try {
     return JSON.parse(bodyText);
-  } catch {
+  } catch (cause) {
     const error = new Error('Invalid JSON body.');
     error.statusCode = 400;
+    error.cause = cause;
     throw error;
   }
+}
+
+function logApiError(error, context) {
+  const payload = {
+    ...context,
+    message: error?.message || 'Unknown error',
+    details: error?.details,
+    cause: error?.cause?.message,
+    stack: error?.stack,
+  };
+
+  console.error('[helix-api] request failed', payload);
 }
 
 function normalizeApiPath(pathname) {

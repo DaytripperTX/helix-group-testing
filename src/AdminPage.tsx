@@ -123,6 +123,18 @@ type PeptideTransfer = {
   items: Peptide[];
 };
 
+type PeptideBatchImportResult = {
+  items: Peptide[];
+  savedCount: number;
+  failedCount: number;
+  rowErrors: {
+    rowNumber: number;
+    id: string;
+    name: string;
+    error: string;
+  }[];
+};
+
 type AdminNote = {
   id: string;
   sender: string;
@@ -1482,58 +1494,51 @@ function AdminPage({
   };
 
   const savePeptideBatch = async () => {
-    const seenNames = new Set<string>();
-    const validRows = batchRows.filter((row) => {
-      if (row.errors.length > 0) {
-        return false;
-      }
+    const invalidRows = batchRows.filter((row) => row.errors.length > 0);
 
-      const normalizedRowName = normalizeName(row.name);
-
-      if (seenNames.has(normalizedRowName)) {
-        return false;
-      }
-
-      seenNames.add(normalizedRowName);
-      return true;
-    });
-
-    if (validRows.length === 0) {
+    if (batchRows.length === 0) {
       setBatchStatus('No valid rows to save.');
+      return;
+    }
+
+    if (invalidRows.length > 0) {
+      const firstInvalidRow = invalidRows[0];
+      setBatchStatus(
+        `${invalidRows.length} rows need review before saving. Row ${firstInvalidRow.rowNumber}: ${firstInvalidRow.errors.join('; ')}`,
+      );
+      console.error('[peptide-batch] save blocked by row errors', invalidRows);
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      let nextPeptides = peptides;
       let nextPeptideCategories = peptideCategories;
 
-      for (const row of validRows) {
-        const existingPeptide = findByNormalizedName(nextPeptides, row.name);
+      for (const row of batchRows) {
         nextPeptideCategories = await ensurePeptideCategories(row.categories, nextPeptideCategories);
-        const peptide = {
-          id: existingPeptide?.id ?? row.id,
-          name: normalizePeptideName(row.name),
-          kind: normalizePeptideKind(row.kind),
-          categories: row.categories,
-          description: row.description ?? '',
-          components: normalizePeptideKind(row.kind) === 'blend' ? normalizeBlendComponents(row.components) : [],
-          wikiLinks: normalizeWikiLinks(row),
-        };
-
-        nextPeptides = await saveCollectionItem<Peptide>('peptides', peptide);
       }
 
-      setPeptides(nextPeptides);
+      const result = await importPeptideBatchRows(batchRows.map((row) => ({
+        ...row,
+        name: normalizePeptideName(row.name),
+        kind: normalizePeptideKind(row.kind),
+        components: normalizePeptideKind(row.kind) === 'blend' ? normalizeBlendComponents(row.components) : [],
+        wikiLinks: normalizeWikiLinks(row),
+      })));
+
+      setPeptides(result.items);
       setPeptideCategories(nextPeptideCategories);
       setIsBatchModalOpen(false);
       setBatchRows([]);
       setBatchStatus('');
-      setStatus(`${validRows.length} peptide rows saved.`);
+      setStatus(`${result.savedCount} peptide rows saved. ${result.items.length} total peptides.`);
     } catch (error) {
-      console.error(error);
-      setBatchStatus('Batch save failed.');
+      console.error('[peptide-batch] save failed', {
+        error,
+        rows: batchRows,
+      });
+      setBatchStatus(getErrorMessage(error, 'Batch save failed.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -1549,8 +1554,8 @@ function AdminPage({
       setStatus(`${transfer.items.length} peptides exported.`);
       return transfer;
     } catch (error) {
-      console.error(error);
-      setStatus('Peptide export failed.');
+      console.error('[peptide-export] export failed', { error });
+      setStatus(getErrorMessage(error, 'Peptide export failed.'));
       return null;
     } finally {
       setIsSubmitting(false);
@@ -1572,7 +1577,7 @@ function AdminPage({
     setIsSubmitting(true);
 
     try {
-      const transfer = normalizePeptideTransfer(JSON.parse(await file.text()));
+      const transfer = normalizePeptideTransfer(await readPeptideTransferFile(file));
       const shouldImport = window.confirm(
         `Import ${transfer.items.length} peptides and replace the current peptide collection? A backup will download first.`,
       );
@@ -1590,8 +1595,13 @@ function AdminPage({
       setPeptides(nextPeptides);
       setStatus(`${nextPeptides.length} peptides imported.`);
     } catch (error) {
-      console.error(error);
-      setStatus('Peptide import failed.');
+      console.error('[peptide-import] import failed', {
+        error,
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+      });
+      setStatus(getErrorMessage(error, 'Peptide import failed.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -2738,6 +2748,69 @@ function AdminTextArea({
   );
 }
 
+async function readJsonResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    return undefined as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    console.error('[admin-api] response JSON parse failed', {
+      fallbackMessage,
+      status: response.status,
+      statusText: response.statusText,
+      bodyPreview: text.slice(0, 500),
+      error,
+    });
+    throw new Error(`${fallbackMessage} Response was not valid JSON.`);
+  }
+}
+
+async function throwResponseError(response: Response, fallbackMessage: string): Promise<never> {
+  let payload: unknown = null;
+  let bodyText = '';
+
+  try {
+    bodyText = await response.text();
+    payload = bodyText ? JSON.parse(bodyText) : null;
+  } catch (error) {
+    console.error('[admin-api] error response could not be parsed', {
+      fallbackMessage,
+      status: response.status,
+      statusText: response.statusText,
+      bodyPreview: bodyText.slice(0, 500),
+      error,
+    });
+  }
+
+  const apiError = payload && typeof payload === 'object' && 'error' in payload
+    ? String((payload as { error?: unknown }).error ?? '')
+    : '';
+  const details = payload && typeof payload === 'object' && 'details' in payload
+    ? (payload as { details?: unknown }).details
+    : undefined;
+  const detailsMessage = details === undefined ? '' : ` Details: ${JSON.stringify(details)}`;
+  const message = `${fallbackMessage} (${response.status} ${response.statusText || 'HTTP error'})${apiError ? `: ${apiError}` : ''}${detailsMessage}`;
+
+  console.error('[admin-api] request failed', {
+    fallbackMessage,
+    status: response.status,
+    statusText: response.statusText,
+    apiError,
+    details,
+    bodyPreview: bodyText.slice(0, 1000),
+  });
+
+  throw new Error(message);
+}
+
+function getErrorMessage(error: unknown, fallbackMessage: string) {
+  return error instanceof Error && error.message ? error.message : fallbackMessage;
+}
+
 async function loginAdmin(password: string, role: AdminRole): Promise<AdminSession> {
   const response = await fetch('/api/admin/login', {
     method: 'POST',
@@ -2749,10 +2822,10 @@ async function loginAdmin(password: string, role: AdminRole): Promise<AdminSessi
   });
 
   if (!response.ok) {
-    throw new Error('Admin login failed.');
+    await throwResponseError(response, 'Admin login failed.');
   }
 
-  return normalizeAdminSession(await response.json());
+  return normalizeAdminSession(await readJsonResponse<unknown>(response, 'Admin login failed.'));
 }
 
 async function logoutAdmin() {
@@ -2762,7 +2835,7 @@ async function logoutAdmin() {
   });
 
   if (!response.ok) {
-    throw new Error('Admin logout failed.');
+    await throwResponseError(response, 'Admin logout failed.');
   }
 }
 
@@ -2770,10 +2843,10 @@ async function fetchCollection<T>(collectionName: string): Promise<T[]> {
   const response = await fetch(`/api/data/${collectionName}`);
 
   if (!response.ok) {
-    throw new Error(`${collectionName} could not be loaded.`);
+    await throwResponseError(response, `${collectionName} could not be loaded.`);
   }
 
-  const records = (await response.json()) as unknown;
+  const records = await readJsonResponse<unknown>(response, `${collectionName} could not be loaded.`);
   return Array.isArray(records) ? (records as T[]) : [];
 }
 
@@ -2788,10 +2861,10 @@ async function saveCollectionItem<T extends { id: string }>(collectionName: stri
   });
 
   if (!response.ok) {
-    throw new Error(`${collectionName} item could not be saved.`);
+    await throwResponseError(response, `${collectionName} item could not be saved.`);
   }
 
-  const records = (await response.json()) as unknown;
+  const records = await readJsonResponse<unknown>(response, `${collectionName} item could not be saved.`);
   return Array.isArray(records) ? (records as T[]) : [];
 }
 
@@ -2802,10 +2875,10 @@ async function deleteCollectionItem<T>(collectionName: string, itemId: string): 
   });
 
   if (!response.ok) {
-    throw new Error(`${collectionName} item could not be deleted.`);
+    await throwResponseError(response, `${collectionName} item could not be deleted.`);
   }
 
-  const records = (await response.json()) as unknown;
+  const records = await readJsonResponse<unknown>(response, `${collectionName} item could not be deleted.`);
   return Array.isArray(records) ? (records as T[]) : [];
 }
 
@@ -2815,10 +2888,10 @@ async function exportPeptideTransfer(): Promise<PeptideTransfer> {
   });
 
   if (!response.ok) {
-    throw new Error('Peptide export failed.');
+    await throwResponseError(response, 'Peptide export failed.');
   }
 
-  return normalizePeptideTransfer(await response.json());
+  return normalizePeptideTransfer(await readJsonResponse<unknown>(response, 'Peptide export failed.'));
 }
 
 async function importPeptideTransfer(transfer: PeptideTransfer): Promise<Peptide[]> {
@@ -2832,11 +2905,35 @@ async function importPeptideTransfer(transfer: PeptideTransfer): Promise<Peptide
   });
 
   if (!response.ok) {
-    throw new Error('Peptide import failed.');
+    await throwResponseError(response, 'Peptide import failed.');
   }
 
-  const records = (await response.json()) as unknown;
+  const records = await readJsonResponse<unknown>(response, 'Peptide import failed.');
   return Array.isArray(records) ? (records as Peptide[]) : [];
+}
+
+async function importPeptideBatchRows(rows: BatchPeptideRow[]): Promise<PeptideBatchImportResult> {
+  const response = await fetch('/api/admin/peptides/import-batch', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ rows }),
+  });
+
+  if (!response.ok) {
+    await throwResponseError(response, 'Peptide batch import failed.');
+  }
+
+  const result = await readJsonResponse<Partial<PeptideBatchImportResult>>(response, 'Peptide batch import failed.');
+
+  return {
+    items: Array.isArray(result.items) ? result.items : [],
+    savedCount: Number(result.savedCount) || 0,
+    failedCount: Number(result.failedCount) || 0,
+    rowErrors: Array.isArray(result.rowErrors) ? result.rowErrors : [],
+  };
 }
 
 async function resolveVendorPriceSheet(
@@ -2875,10 +2972,10 @@ async function resolveVendorPriceSheet(
   });
 
   if (!response.ok) {
-    throw new Error('Vendor price sheet could not be uploaded.');
+    await throwResponseError(response, 'Vendor price sheet could not be uploaded.');
   }
 
-  return (await response.json()) as VendorPriceSheet;
+  return await readJsonResponse<VendorPriceSheet>(response, 'Vendor price sheet could not be uploaded.');
 }
 
 function validateGoogleSheetSourceInput(value: string) {
@@ -2968,10 +3065,10 @@ async function parseVendorPriceListSource(
   });
 
   if (!response.ok) {
-    throw new Error('Vendor price list could not be parsed.');
+    await throwResponseError(response, 'Vendor price list could not be parsed.');
   }
 
-  return (await response.json()) as VendorPriceList;
+  return await readJsonResponse<VendorPriceList>(response, 'Vendor price list could not be parsed.');
 }
 
 async function parsePeptideBatchFile(file: File) {
@@ -2992,10 +3089,10 @@ async function parsePeptideBatchFile(file: File) {
   });
 
   if (!response.ok) {
-    throw new Error('Peptide batch file could not be parsed.');
+    await throwResponseError(response, 'Peptide batch file could not be parsed.');
   }
 
-  const result = (await response.json()) as { rows?: BatchPeptideRow[] };
+  const result = await readJsonResponse<{ rows?: BatchPeptideRow[] }>(response, 'Peptide batch file could not be parsed.');
   return Array.isArray(result.rows) ? result.rows : [];
 }
 
@@ -3023,10 +3120,10 @@ async function parseRoundPeptideBatchFile(
   });
 
   if (!response.ok) {
-    throw new Error('Round peptide batch file could not be parsed.');
+    await throwResponseError(response, 'Round peptide batch file could not be parsed.');
   }
 
-  const result = (await response.json()) as { rows?: RoundPeptideBatchRow[] };
+  const result = await readJsonResponse<{ rows?: RoundPeptideBatchRow[] }>(response, 'Round peptide batch file could not be parsed.');
   return Array.isArray(result.rows) ? result.rows : [];
 }
 
@@ -3169,10 +3266,10 @@ async function uploadVendorPriceSheetFile(file: File): Promise<VendorPriceSheet>
   });
 
   if (!response.ok) {
-    throw new Error('Vendor price sheet could not be uploaded.');
+    await throwResponseError(response, 'Vendor price sheet could not be uploaded.');
   }
 
-  return (await response.json()) as VendorPriceSheet;
+  return await readJsonResponse<VendorPriceSheet>(response, 'Vendor price sheet could not be uploaded.');
 }
 
 async function searchWikiLinks(name: string): Promise<{ name: string; wikiLinks: WikiLink[]; categories?: string[] } | null> {
@@ -3181,10 +3278,13 @@ async function searchWikiLinks(name: string): Promise<{ name: string; wikiLinks:
   });
 
   if (!response.ok) {
-    throw new Error('Wiki search failed.');
+    await throwResponseError(response, 'Wiki search failed.');
   }
 
-  const result = (await response.json()) as { match?: { name: string; wikiLinks: WikiLink[]; categories?: string[] } | null };
+  const result = await readJsonResponse<{ match?: { name: string; wikiLinks: WikiLink[]; categories?: string[] } | null }>(
+    response,
+    'Wiki search failed.',
+  );
   return result.match ?? null;
 }
 
@@ -4016,6 +4116,35 @@ function formatDateTime(value: string) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
+}
+
+async function readPeptideTransferFile(file: File) {
+  let text = '';
+
+  try {
+    text = await file.text();
+  } catch (error) {
+    console.error('[peptide-import] file read failed', {
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      error,
+    });
+    throw new Error(`Peptide import failed. Could not read ${file.name}.`);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    console.error('[peptide-import] JSON parse failed', {
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      bodyPreview: text.slice(0, 1000),
+      error,
+    });
+    throw new Error(`Peptide import failed. ${file.name} is not valid JSON.`);
+  }
 }
 
 function normalizePeptideTransfer(value: unknown): PeptideTransfer {
