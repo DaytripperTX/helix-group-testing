@@ -715,6 +715,13 @@ async function parseStoredCoaPdf(buffer, fileName) {
 
     return await parseCoaPdfUploadBuffer(buffer, { fileName });
   } catch (error) {
+    console.error('[coa-pdf-parser] parse failed', {
+      fileName,
+      message: error?.message || 'Unknown parser error',
+      cause: error?.cause?.message,
+      stack: error?.stack,
+    });
+
     return {
       parsedCoa: createFailedParsedCoa(error),
       vialImage: null,

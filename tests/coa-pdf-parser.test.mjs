@@ -70,6 +70,42 @@ for (const fixtureCase of fixtureCases) {
   });
 }
 
+{
+  const fixtureCase = fixtureCases[0];
+  const fixturePath = resolveLocalCoaFixture(fixtureCase.fileName);
+
+  test('continues parsing COA text when vial image extraction fails', { skip: !fixturePath }, async () => {
+    const pdf = await readFile(fixturePath);
+    const originalConsoleError = console.error;
+
+    console.error = () => {};
+
+    try {
+      const result = await parseCoaPdfUploadBuffer(pdf, {
+        fileName: fixtureCase.fileName,
+        imageExtractor: () => {
+          throw new Error('Simulated image extraction failure.');
+        },
+      });
+      const parsed = result.parsedCoa;
+
+      assert.equal(parsed.templateId, 'ils_laboratories_coa');
+      assert.equal(parsed.fields.lab, 'ILS Laboratories');
+      assert.equal(parsed.fields.lotNumber, fixtureCase.lotNumber);
+      assert.equal(parsed.fields.purity, fixtureCase.purity);
+      assert.equal(parsed.fields.averageNetContent, fixtureCase.averageNetContent);
+      assert.equal(parsed.fields.endotoxins, 'Pass');
+      assert.equal(parsed.fields.sterility, 'Pass');
+      assert.equal(parsed.fields.heavyMetals, 'Pass');
+      assert.equal(parsed.fields.fentanyl, 'Pass');
+      assert.equal(result.vialImage, null);
+      assert.ok(parsed.warnings.includes('COA vial image could not be extracted.'));
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+}
+
 test('parsed lot matching blocks obvious mismatches', () => {
   const parsedCoa = {
     fields: {

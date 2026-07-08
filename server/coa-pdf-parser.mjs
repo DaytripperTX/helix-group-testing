@@ -12,6 +12,7 @@ export async function parseCoaPdfBuffer(buffer, options = {}) {
 }
 
 export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
+  const imageExtractor = options.imageExtractor || extractPageImageCandidates;
   const data = new Uint8Array(buffer);
   const document = await pdfjs.getDocument({
     data,
@@ -21,12 +22,17 @@ export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
   const pages = [];
   const annotationUrls = [];
   const imageCandidates = [];
+  const parserWarnings = [];
 
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
     const page = await document.getPage(pageNumber);
     const textContent = await page.getTextContent();
     const lines = createPageLines(textContent.items);
-    const annotations = await page.getAnnotations();
+    const annotations = await readPageAnnotations(page, {
+      fileName: options.fileName,
+      pageNumber,
+      parserWarnings,
+    });
 
     for (const annotation of annotations) {
       const url = sanitizeUrl(annotation?.url || annotation?.unsafeUrl);
@@ -43,7 +49,12 @@ export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
     });
 
     if (pageNumber === 1) {
-      imageCandidates.push(...await extractPageImageCandidates(page, pageNumber));
+      imageCandidates.push(...await readPageImageCandidates(page, {
+        fileName: options.fileName,
+        imageExtractor,
+        pageNumber,
+        parserWarnings,
+      }));
     }
   }
 
@@ -54,7 +65,10 @@ export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
   const fields = template.templateId === 'ils_laboratories_coa'
     ? parseIlsFields(pages, fullText, verificationUrl)
     : parseGenericFields(pages, fullText, verificationUrl);
-  const warnings = validateParsedFields(fields, { fileName: options.fileName });
+  const warnings = [
+    ...validateParsedFields(fields, { fileName: options.fileName }),
+    ...parserWarnings,
+  ];
   const confidence = calculateConfidence(fields, template, warnings);
   const vialImage = selectVialImageCandidate(imageCandidates);
 
@@ -85,6 +99,34 @@ export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
       operatorIndex: vialImage.operatorIndex,
     } : null,
   };
+}
+
+async function readPageAnnotations(page, { fileName, pageNumber, parserWarnings }) {
+  try {
+    return await page.getAnnotations();
+  } catch (error) {
+    parserWarnings.push('PDF annotations could not be read.');
+    console.error('[coa-pdf-parser] annotation extraction failed', {
+      fileName,
+      pageNumber,
+      error,
+    });
+    return [];
+  }
+}
+
+async function readPageImageCandidates(page, { fileName, imageExtractor, pageNumber, parserWarnings }) {
+  try {
+    return await imageExtractor(page, pageNumber);
+  } catch (error) {
+    parserWarnings.push('COA vial image could not be extracted.');
+    console.error('[coa-pdf-parser] vial image extraction failed', {
+      fileName,
+      pageNumber,
+      error,
+    });
+    return [];
+  }
 }
 
 async function extractPageImageCandidates(page, pageNumber) {
