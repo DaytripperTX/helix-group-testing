@@ -313,6 +313,70 @@ export async function importPeptideBatchItems(rows) {
   };
 }
 
+export async function importCoaBatchItems(rows) {
+  if (!Array.isArray(rows)) {
+    throw createHttpError(400, 'COA batch rows are required.');
+  }
+
+  const document = await readCollectionDocument('coas');
+  const rounds = await readCollection('rounds');
+  let nextItems = Array.isArray(document.items) ? document.items : [];
+  const rowErrors = [];
+  let savedCount = 0;
+
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = getImportRowNumber(row, index);
+
+    try {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw new Error('Row is not an object.');
+      }
+
+      const normalizedItem = normalizeCollectionItem('coas', row, {
+        rounds,
+        requireLinked: true,
+        updateTimestamp: true,
+      });
+
+      if (!normalizedItem) {
+        throw new Error('Invalid COA entry.');
+      }
+
+      nextItems = [
+        normalizedItem,
+        ...nextItems.filter((currentItem) => currentItem?.id !== normalizedItem.id),
+      ];
+      savedCount += 1;
+    } catch (error) {
+      rowErrors.push({
+        rowNumber,
+        id: typeof row?.id === 'string' ? row.id : '',
+        batchNumber: typeof row?.batchNumber === 'string' ? row.batchNumber : '',
+        error: error?.message || 'COA row could not be saved.',
+      });
+    }
+  }
+
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'COA batch import contains rows that could not be saved.', {
+      failedCount: rowErrors.length,
+      savedCount: 0,
+      rowErrors,
+    });
+  }
+
+  const nextDocument = createCollectionDocument('coas', nextItems);
+
+  await writeCollectionDocument('coas', nextDocument);
+
+  return {
+    items: nextDocument.items,
+    savedCount,
+    failedCount: 0,
+    rowErrors: [],
+  };
+}
+
 export async function deleteCollectionItem(collectionName, itemId) {
   if (collectionName === 'label-templates') {
     return softDeleteLabelTemplate(itemId, 'admin');

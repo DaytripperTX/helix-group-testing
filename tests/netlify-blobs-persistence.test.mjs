@@ -429,6 +429,156 @@ test('Netlify peptide batch import writes all rows from one stale Blob snapshot'
   }
 });
 
+test('Netlify COA batch import writes all rows from one stale Blob snapshot', async () => {
+  const previousEnv = {
+    HELIX_ADMIN_SESSION_SECRET: process.env.HELIX_ADMIN_SESSION_SECRET,
+    HELIX_DATA_ADAPTER: process.env.HELIX_DATA_ADAPTER,
+    NETLIFY: process.env.NETLIFY,
+    NETLIFY_BLOBS_CONTEXT: process.env.NETLIFY_BLOBS_CONTEXT,
+  };
+  const previousFetch = globalThis.fetch;
+  const previousBlobsContext = globalThis.netlifyBlobsContext;
+  const blobs = new Map();
+  const requests = [];
+  const coasKey = '/site123/site:helix-data/coas.json';
+  let staleCoasBody = null;
+
+  delete process.env.HELIX_DATA_ADAPTER;
+  process.env.HELIX_ADMIN_SESSION_SECRET = 'test-admin-session-secret';
+  process.env.NETLIFY = 'true';
+  globalThis.fetch = async (url, options = {}) => {
+    const method = String(options.method ?? 'GET').toUpperCase();
+    const requestUrl = new URL(url);
+    const key = requestUrl.pathname;
+
+    requests.push({ method, key });
+
+    if (method === 'GET') {
+      if (requestUrl.searchParams.has('prefix')) {
+        return createBlobListResponse(blobs, key, requestUrl.searchParams.get('prefix') ?? '');
+      }
+
+      if (key === coasKey && staleCoasBody) {
+        return createJsonResponse(staleCoasBody);
+      }
+
+      if (!blobs.has(key)) {
+        return new Response('', { status: 404 });
+      }
+
+      return createJsonResponse(blobs.get(key));
+    }
+
+    if (method === 'PUT') {
+      blobs.set(key, String(options.body ?? ''));
+      return new Response('', {
+        status: 200,
+        headers: { etag: `"${blobs.size}"` },
+      });
+    }
+
+    return new Response('', { status: 405 });
+  };
+
+  try {
+    const importId = Date.now();
+    const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?coaBatchBlobs=${importId}`);
+    const { handler } = await import(`../netlify/functions/data.mjs?coaBatchBlobs=${importId}`);
+    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?coaBatchBlobs=${importId}`);
+    const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
+    const adminCookie = createAdminSessionCookie('admin');
+
+    assert.equal((await adminHandler(createNetlifyAdminEvent(eventBase, adminCookie, '/api/admin/data/peptides/bpc-157', 'PUT', {
+      id: 'bpc-157',
+      name: 'BPC-157',
+      kind: 'peptide',
+      categories: ['Recovery'],
+    }))).statusCode, 200);
+    assert.equal((await adminHandler(createNetlifyAdminEvent(eventBase, adminCookie, '/api/admin/data/rounds/round-coa-batch', 'PUT', {
+      id: 'round-coa-batch',
+      name: 'Round COA Batch',
+      status: 'Collecting signups',
+      vendorId: 'vendor-one',
+      isCurrent: false,
+      startDate: '',
+      endDate: '',
+      targetWindow: '',
+      participants: 0,
+      roundDiscountPercent: 0,
+      priceSourceMode: 'none',
+      priceListSnapshot: null,
+      peptides: [
+        {
+          id: 'round-row-bpc',
+          peptideId: 'bpc-157',
+          peptideName: 'BPC-157',
+          priceListItemId: '',
+          vendorCode: 'BPC10',
+          vendorPrice: 42,
+          vendorPriceOverridden: false,
+          mass: '10 mg',
+          testingTier: 'gold',
+          additionalTesting: '',
+          batchConformity: false,
+          capColor: '',
+          notes: '',
+          participantCount: 0,
+          totalOrdered: 0,
+        },
+      ],
+    }))).statusCode, 200);
+
+    const seedResponse = await handler({
+      ...eventBase,
+      httpMethod: 'GET',
+      path: '/api/data/coas',
+      rawUrl: 'https://example.netlify.app/api/data/coas',
+    });
+
+    assert.equal(seedResponse.statusCode, 200);
+    staleCoasBody = blobs.get(coasKey);
+
+    const writeCountBeforeImport = requests.filter((request) =>
+      request.method === 'PUT' && request.key === coasKey
+    ).length;
+    const importResponse = await adminHandler(createNetlifyAdminEvent(
+      eventBase,
+      adminCookie,
+      '/api/admin/coas/import-batch',
+      'POST',
+      {
+        rows: [
+          createCoaBatchItem('netlify-coa-a', 'HLX-MIA-BPC10-0626-BLUE', 'Blue'),
+          createCoaBatchItem('netlify-coa-b', 'HLX-MIA-BPC10-0626-WHITE', 'White'),
+        ],
+      },
+    ));
+    const result = JSON.parse(importResponse.body);
+    const writeCountAfterImport = requests.filter((request) =>
+      request.method === 'PUT' && request.key === coasKey
+    ).length;
+    const storedDocument = JSON.parse(blobs.get(coasKey));
+    const storedIds = storedDocument.items.map((item) => item.id);
+
+    assert.equal(importResponse.statusCode, 200);
+    assert.equal(result.savedCount, 2);
+    assert.equal(writeCountAfterImport, writeCountBeforeImport + 1);
+    assert.ok(storedIds.includes('netlify-coa-a'));
+    assert.ok(storedIds.includes('netlify-coa-b'));
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.netlifyBlobsContext = previousBlobsContext;
+
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
 function createNetlifyBlobsEvent({ includeUncached = true } = {}) {
   const blobsContext = {
     token: 'test-token',
@@ -502,6 +652,23 @@ function createAdminLabelEvent(eventBase, adminCookie, labelId, method, body, ac
   };
 }
 
+function createNetlifyAdminEvent(eventBase, adminCookie, path, method, body) {
+  return {
+    ...eventBase,
+    httpMethod: method,
+    path,
+    rawUrl: `https://example.netlify.app${path}`,
+    headers: {
+      ...eventBase.headers,
+      cookie: adminCookie,
+      'content-type': 'application/json',
+      'user-agent': 'netlify-blobs-test',
+    },
+    body: body === undefined ? null : JSON.stringify(body),
+    isBase64Encoded: false,
+  };
+}
+
 function createPeptideBatchRow(rowNumber, id, name) {
   return {
     rowNumber,
@@ -513,6 +680,33 @@ function createPeptideBatchRow(rowNumber, id, name) {
     components: [],
     wikiLinks: [],
     errors: [],
+  };
+}
+
+function createCoaBatchItem(id, batchNumber, capColor) {
+  return {
+    id,
+    roundId: 'round-coa-batch',
+    roundName: 'Round COA Batch',
+    roundPeptideId: 'round-row-bpc',
+    peptideId: 'bpc-157',
+    peptideName: 'BPC-157',
+    code: 'BPC10',
+    batchNumber,
+    capColor,
+    mass: '10 mg',
+    testingTier: 'gold',
+    dateTested: '',
+    lab: '',
+    coaNumber: '',
+    accessionNumber: '',
+    verificationUrl: '',
+    averageNetContent: 'Pending',
+    purity: 'Pending',
+    endotoxins: 'Pending',
+    heavyMetals: 'Pending',
+    sterility: 'Pending',
+    fentanyl: 'Pending',
   };
 }
 

@@ -238,6 +238,18 @@ type CoaBatchImportRow = {
   capColor: string;
 };
 
+type CoaBatchImportResult = {
+  items: CoaResult[];
+  savedCount: number;
+  failedCount: number;
+  rowErrors: {
+    rowNumber: number;
+    id: string;
+    batchNumber: string;
+    error: string;
+  }[];
+};
+
 type CoaPdfAsset = {
   coaFileName: string;
   coaMimeType: 'application/pdf';
@@ -1512,7 +1524,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
     setIsSubmittingCoa(true);
 
     try {
-      let nextCoas = coaResults;
+      const entries: CoaResult[] = [];
 
       for (const row of validRows) {
         const roundPeptide = selectedBatchRound.peptides.find((peptide) => peptide.id === row.roundPeptideId);
@@ -1522,17 +1534,22 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
         }
 
         const asset = row.file ? await uploadCoaPdf(row.file) : {};
-        nextCoas = await saveCoaEntry(mergeCoaPdfAsset(
+        entries.push(mergeCoaPdfAsset(
           createCoaEntryFromRoundRow(selectedBatchRound, roundPeptide, row),
           asset,
         ));
       }
 
-      setCoaResults(nextCoas);
+      const result = await saveCoaEntriesBatch(entries);
+
+      setCoaResults(result.items);
       setIsBatchModalOpen(false);
-      setCoaStatus(`${validRows.length} batch ${validRows.length === 1 ? 'entry' : 'entries'} saved.`);
+      setCoaStatus(`${result.savedCount} batch ${result.savedCount === 1 ? 'entry' : 'entries'} saved.`);
     } catch (error) {
-      console.error(error);
+      console.error('[coa-batch] save failed', {
+        error,
+        rows: batchRows,
+      });
       setCoaStatus(getCoaErrorMessage(error, 'Batch entries could not be saved.'));
     } finally {
       setIsSubmittingCoa(false);
@@ -2973,6 +2990,36 @@ async function saveCoaEntry(entry: CoaResult) {
     : [];
 }
 
+async function saveCoaEntriesBatch(entries: CoaResult[]): Promise<CoaBatchImportResult> {
+  const response = await fetch('/api/admin/coas/import-batch', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ rows: entries }),
+  });
+
+  const payload = await readCoaJsonResponse<Partial<CoaBatchImportResult> & { error?: string; details?: unknown }>(
+    response,
+    'COA batch entries could not be saved.',
+  );
+
+  if (!response.ok) {
+    const details = payload.details === undefined ? '' : ` Details: ${JSON.stringify(payload.details)}`;
+    throw new Error(`${payload.error || 'COA batch entries could not be saved.'}${details}`);
+  }
+
+  return {
+    items: Array.isArray(payload.items)
+      ? payload.items.map(normalizeCoaResult).filter((result): result is CoaResult => Boolean(result))
+      : [],
+    savedCount: Number(payload.savedCount) || 0,
+    failedCount: Number(payload.failedCount) || 0,
+    rowErrors: Array.isArray(payload.rowErrors) ? payload.rowErrors : [],
+  };
+}
+
 async function deleteCoaEntry(entryId: string) {
   const response = await fetch(`/api/admin/data/coas/${encodeURIComponent(entryId)}`, {
     method: 'DELETE',
@@ -2987,6 +3034,27 @@ async function deleteCoaEntry(entryId: string) {
   return Array.isArray(records)
     ? records.map(normalizeCoaResult).filter((result): result is CoaResult => Boolean(result))
     : [];
+}
+
+async function readCoaJsonResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    return {} as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    console.error('[coa-api] response JSON parse failed', {
+      fallbackMessage,
+      status: response.status,
+      statusText: response.statusText,
+      bodyPreview: text.slice(0, 500),
+      error,
+    });
+    throw new Error(`${fallbackMessage} Response was not valid JSON.`);
+  }
 }
 
 async function uploadCoaPdf(file: File): Promise<CoaPdfAsset> {

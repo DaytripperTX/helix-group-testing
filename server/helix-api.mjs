@@ -7,6 +7,7 @@ import {
   adminUpsertLabelTemplate,
   exportPeptideCollectionTransfer,
   getCollectionNames,
+  importCoaBatchItems,
   importPeptideBatchItems,
   importPeptideCollectionTransfer,
   isPublicCollectionRead,
@@ -272,6 +273,17 @@ export async function handleHelixApiRequest(request) {
           source: body?.source,
         }),
       });
+    }
+
+    if (pathname === '/api/admin/coas/import-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await importCoaBatchItems(body?.rows));
     }
 
     if (pathname.startsWith('/api/admin/data/')) {

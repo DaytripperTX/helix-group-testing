@@ -60,6 +60,36 @@ test('coa entries link to round peptides and keep one row per batch', async () =
   assert.equal(secondCoa.code, 'BPC10');
 });
 
+test('coa batch import saves multiple entries in one request', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  await seedRound(adminCookie);
+
+  const response = await apiRequest('/api/admin/coas/import-batch', 'POST', {
+    rows: [
+      createCoa({
+        id: 'batch-import-blue',
+        batchNumber: 'HLX-MIA-BPC10-0626-BLUE',
+        capColor: 'Blue',
+      }),
+      createCoa({
+        id: 'batch-import-white',
+        batchNumber: 'HLX-MIA-BPC10-0626-WHITE',
+        capColor: 'White',
+      }),
+    ],
+  }, { cookie: adminCookie });
+  const result = JSON.parse(response.body);
+  const storedCoas = await readCollection('coas');
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(result.savedCount, 2);
+  assert.equal(result.failedCount, 0);
+  assert.ok(storedCoas.some((coa) => coa.id === 'batch-import-blue'));
+  assert.ok(storedCoas.some((coa) => coa.id === 'batch-import-white'));
+});
+
 test('coa admin writes reject unlinked new entries', async () => {
   await resetData();
   const adminCookie = await loginAdmin();
