@@ -17,10 +17,13 @@ test('coas are public readable and admin writable only', async () => {
   await resetData();
 
   const publicRead = await apiRequest('/api/data/coas', 'GET');
+  const netlifyPublicRead = await apiRequest('/.netlify/functions/data/coas', 'GET');
   const deniedWrite = await apiRequest('/api/admin/data/coas/public-write-test', 'PUT', createCoa());
 
   assert.equal(publicRead.statusCode, 200);
   assert.equal(Array.isArray(JSON.parse(publicRead.body)), true);
+  assert.equal(netlifyPublicRead.statusCode, 200);
+  assert.equal(Array.isArray(JSON.parse(netlifyPublicRead.body)), true);
   assert.equal(deniedWrite.statusCode, 401);
 });
 
@@ -173,12 +176,56 @@ test('coa pdf uploads are admin only, pdf only, and publicly served when attache
   assert.equal(saveResponse.statusCode, 200);
 
   const pdfResponse = await apiRequest('/api/coas/batch-with-pdf/pdf', 'GET');
+  const netlifyPdfResponse = await apiRequest('/.netlify/functions/data/coas/batch-with-pdf/pdf', 'GET');
   const missingPdfResponse = await apiRequest('/api/coas/missing/pdf', 'GET');
 
   assert.equal(pdfResponse.statusCode, 200);
   assert.equal(pdfResponse.headers['Content-Type'], 'application/pdf');
   assert.equal(Buffer.from(pdfResponse.body, 'base64').subarray(0, 5).toString('utf8'), '%PDF-');
+  assert.equal(netlifyPdfResponse.statusCode, 200);
+  assert.equal(netlifyPdfResponse.headers['Content-Type'], 'application/pdf');
+  assert.equal(Buffer.from(netlifyPdfResponse.body, 'base64').subarray(0, 5).toString('utf8'), '%PDF-');
   assert.equal(missingPdfResponse.statusCode, 404);
+});
+
+test('replacing and deleting COA PDFs removes detached stored PDF assets', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+  await seedRound(adminCookie);
+
+  const firstUpload = JSON.parse((await apiRequest('/api/admin/assets/coa-pdf', 'POST', createPdfUpload({
+    fileName: 'first-coa.pdf',
+  }), { cookie: adminCookie })).body);
+  const firstSave = await apiRequest('/api/admin/data/coas/replaced-pdf', 'PUT', {
+    ...createCoa({
+      id: 'replaced-pdf',
+      batchNumber: 'HLX-MIA-BPC10-0626-FIRST',
+    }),
+    ...firstUpload,
+  }, { cookie: adminCookie });
+
+  assert.equal(firstSave.statusCode, 200);
+  assert.equal(existsSync(path.join(testDataDir, firstUpload.coaBlobKey)), true);
+
+  const secondUpload = JSON.parse((await apiRequest('/api/admin/assets/coa-pdf', 'POST', createPdfUpload({
+    fileName: 'second-coa.pdf',
+  }), { cookie: adminCookie })).body);
+  const secondSave = await apiRequest('/api/admin/data/coas/replaced-pdf', 'PUT', {
+    ...createCoa({
+      id: 'replaced-pdf',
+      batchNumber: 'HLX-MIA-BPC10-0626-SECOND',
+    }),
+    ...secondUpload,
+  }, { cookie: adminCookie });
+
+  assert.equal(secondSave.statusCode, 200);
+  assert.equal(existsSync(path.join(testDataDir, firstUpload.coaBlobKey)), false);
+  assert.equal(existsSync(path.join(testDataDir, secondUpload.coaBlobKey)), true);
+
+  const deleteResponse = await apiRequest('/api/admin/data/coas/replaced-pdf', 'DELETE', undefined, { cookie: adminCookie });
+
+  assert.equal(deleteResponse.statusCode, 200);
+  assert.equal(existsSync(path.join(testDataDir, secondUpload.coaBlobKey)), false);
 });
 
 const sampleCoaFixturePath = resolveLocalCoaFixture('CR-3XAG-30MG-2606-2.pdf');
@@ -416,11 +463,12 @@ function createCoa(overrides = {}) {
   };
 }
 
-function createPdfUpload() {
+function createPdfUpload(overrides = {}) {
   return {
     fileName: 'coa.pdf',
     mimeType: 'application/pdf',
     base64: Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF').toString('base64'),
+    ...overrides,
   };
 }
 

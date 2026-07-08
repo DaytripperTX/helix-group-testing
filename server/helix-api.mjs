@@ -462,6 +462,10 @@ function normalizeApiPath(pathname) {
       return nextPathname.replace('/api/data/labels', '/api/labels');
     }
 
+    if (nextPathname.startsWith('/api/data/coas/')) {
+      return nextPathname.replace('/api/data/coas', '/api/coas');
+    }
+
     return nextPathname;
   }
 

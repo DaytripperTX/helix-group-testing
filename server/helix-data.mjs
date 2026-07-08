@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -170,6 +170,12 @@ export async function upsertCollectionItem(collectionName, itemId, item) {
   const nextDocument = createCollectionDocument(collectionName, nextItems);
 
   await writeCollectionDocument(collectionName, nextDocument);
+  if (collectionName === 'coas') {
+    await cleanupDetachedCoaAssets(currentItems, nextItems, {
+      action: 'upsert',
+      itemId,
+    });
+  }
 
   return nextItems;
 }
@@ -368,6 +374,10 @@ export async function importCoaBatchItems(rows) {
   const nextDocument = createCollectionDocument('coas', nextItems);
 
   await writeCollectionDocument('coas', nextDocument);
+  await cleanupDetachedCoaAssets(Array.isArray(document.items) ? document.items : [], nextDocument.items, {
+    action: 'batch-import',
+    savedCount,
+  });
 
   return {
     items: nextDocument.items,
@@ -419,6 +429,10 @@ export async function deleteCoaBatchItems(ids) {
   const nextDocument = createCollectionDocument('coas', nextItems);
 
   await writeCollectionDocument('coas', nextDocument);
+  await cleanupDetachedCoaAssets(currentItems, nextDocument.items, {
+    action: 'batch-delete',
+    deletedCount,
+  });
 
   return {
     items: nextDocument.items,
@@ -556,6 +570,12 @@ export async function deleteCollectionItem(collectionName, itemId) {
   const nextDocument = createCollectionDocument(collectionName, nextItems);
 
   await writeCollectionDocument(collectionName, nextDocument);
+  if (collectionName === 'coas') {
+    await cleanupDetachedCoaAssets(currentItems, nextItems, {
+      action: 'delete',
+      itemId,
+    });
+  }
 
   return nextItems;
 }
@@ -662,6 +682,8 @@ export async function writeCoaPdfAsset(asset) {
     await writeFile(localAssetPath, buffer);
   }
 
+  await verifyStoredCoaPdfAsset(blobKey, buffer.length);
+
   return {
     coaFileName: asset.fileName,
     coaMimeType: 'application/pdf',
@@ -670,6 +692,21 @@ export async function writeCoaPdfAsset(asset) {
     parsedCoa,
     ...vialImageFields,
   };
+}
+
+async function verifyStoredCoaPdfAsset(blobKey, expectedByteLength) {
+  const storedBuffer = await readCoaPdfBuffer(blobKey);
+
+  if (
+    storedBuffer.length !== expectedByteLength ||
+    storedBuffer.subarray(0, 5).toString('utf8') !== '%PDF-'
+  ) {
+    throw createHttpError(500, 'COA PDF was uploaded but could not be verified after storage.', {
+      blobKey,
+      expectedByteLength,
+      storedByteLength: storedBuffer.length,
+    });
+  }
 }
 
 async function parseStoredCoaPdf(buffer, fileName) {
@@ -1109,6 +1146,63 @@ async function readCoaVialImageBuffer(assetKey) {
   } catch {
     throw createHttpError(404, 'COA vial image not found.');
   }
+}
+
+async function cleanupDetachedCoaAssets(previousItems, nextItems, context = {}) {
+  const previousKeys = collectCoaAssetKeys(previousItems);
+  const nextKeys = collectCoaAssetKeys(nextItems);
+  const detachedKeys = [...previousKeys].filter((assetKey) => !nextKeys.has(assetKey));
+
+  for (const assetKey of detachedKeys) {
+    try {
+      await deleteCoaAsset(assetKey);
+    } catch (error) {
+      console.error('[coa-assets] detached asset delete failed', {
+        ...context,
+        assetKey,
+        error,
+      });
+    }
+  }
+}
+
+function collectCoaAssetKeys(items) {
+  const keys = new Set();
+
+  if (!Array.isArray(items)) {
+    return keys;
+  }
+
+  for (const item of items) {
+    const pdfAssetKey = normalizeCoaAssetKey(item?.coaBlobKey);
+    const vialImageAssetKey = normalizeCoaVialImageAssetKey(item?.vialImageAssetKey);
+
+    if (pdfAssetKey) {
+      keys.add(pdfAssetKey);
+    }
+
+    if (vialImageAssetKey) {
+      keys.add(vialImageAssetKey);
+    }
+  }
+
+  return keys;
+}
+
+async function deleteCoaAsset(assetKey) {
+  const cleanAssetKey = normalizeCoaAssetKey(assetKey) || normalizeCoaVialImageAssetKey(assetKey);
+
+  if (!cleanAssetKey) {
+    return;
+  }
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    await store.delete(cleanAssetKey);
+    return;
+  }
+
+  await rm(path.join(localDataDir, cleanAssetKey), { force: true });
 }
 
 function normalizeCoaVialImageAssetKey(value) {

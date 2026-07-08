@@ -730,6 +730,144 @@ test('Netlify COA batch delete removes all requested rows from one stale Blob sn
   }
 });
 
+test('Netlify COA replacement deletes the detached PDF Blob immediately', async () => {
+  const previousEnv = {
+    HELIX_ADMIN_SESSION_SECRET: process.env.HELIX_ADMIN_SESSION_SECRET,
+    HELIX_DATA_ADAPTER: process.env.HELIX_DATA_ADAPTER,
+    NETLIFY: process.env.NETLIFY,
+    NETLIFY_BLOBS_CONTEXT: process.env.NETLIFY_BLOBS_CONTEXT,
+  };
+  const previousFetch = globalThis.fetch;
+  const previousBlobsContext = globalThis.netlifyBlobsContext;
+  const blobs = new Map();
+  const requests = [];
+
+  delete process.env.HELIX_DATA_ADAPTER;
+  process.env.HELIX_ADMIN_SESSION_SECRET = 'test-admin-session-secret';
+  process.env.NETLIFY = 'true';
+  globalThis.fetch = async (url, options = {}) => {
+    const method = String(options.method ?? 'GET').toUpperCase();
+    const requestUrl = new URL(url);
+    const key = requestUrl.pathname;
+
+    requests.push({ method, key });
+
+    if (method === 'GET') {
+      if (requestUrl.searchParams.has('prefix')) {
+        return createBlobListResponse(blobs, key, requestUrl.searchParams.get('prefix') ?? '');
+      }
+
+      if (!blobs.has(key)) {
+        return new Response('', { status: 404 });
+      }
+
+      return createJsonResponse(blobs.get(key));
+    }
+
+    if (method === 'PUT') {
+      blobs.set(key, options.body ?? '');
+      return new Response('', {
+        status: 200,
+        headers: { etag: `"${blobs.size}"` },
+      });
+    }
+
+    if (method === 'DELETE') {
+      blobs.delete(key);
+      return new Response(null, { status: 204 });
+    }
+
+    return new Response('', { status: 405 });
+  };
+
+  try {
+    const importId = Date.now();
+    const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?coaReplaceBlob=${importId}`);
+    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?coaReplaceBlob=${importId}`);
+    const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
+    const adminCookie = createAdminSessionCookie('admin');
+
+    assert.equal((await adminHandler(createNetlifyAdminEvent(eventBase, adminCookie, '/api/admin/data/peptides/bpc-157', 'PUT', {
+      id: 'bpc-157',
+      name: 'BPC-157',
+      kind: 'peptide',
+      categories: ['Recovery'],
+    }))).statusCode, 200);
+    assert.equal((await adminHandler(createNetlifyAdminEvent(eventBase, adminCookie, '/api/admin/data/rounds/round-coa-batch', 'PUT', createRoundBatchItem({
+      id: 'round-coa-batch',
+      name: 'Round COA Batch',
+      peptides: [
+        {
+          id: 'round-row-bpc',
+          peptideId: 'bpc-157',
+          peptideName: 'BPC-157',
+          priceListItemId: '',
+          vendorCode: 'BPC10',
+          vendorPrice: 42,
+          vendorPriceOverridden: false,
+          mass: '10 mg',
+          testingTier: 'gold',
+          additionalTesting: '',
+          batchConformity: false,
+          capColor: '',
+          notes: '',
+          participantCount: 0,
+          totalOrdered: 0,
+        },
+      ],
+    })))).statusCode, 200);
+
+    const firstUploadResponse = await adminHandler(createNetlifyAdminEvent(
+      eventBase,
+      adminCookie,
+      '/api/admin/assets/coa-pdf',
+      'POST',
+      createCoaPdfUpload('first-netlify-coa.pdf'),
+    ));
+    const firstAsset = JSON.parse(firstUploadResponse.body);
+
+    assert.equal(firstUploadResponse.statusCode, 200);
+    assert.equal((await adminHandler(createNetlifyAdminEvent(eventBase, adminCookie, '/api/admin/data/coas/netlify-replace-pdf', 'PUT', {
+      ...createCoaBatchItem('netlify-replace-pdf', 'HLX-MIA-BPC10-0626-FIRST', 'Blue'),
+      ...firstAsset,
+    }))).statusCode, 200);
+
+    const firstBlobKey = `/site123/site:helix-data/${firstAsset.coaBlobKey}`;
+
+    assert.equal(blobs.has(firstBlobKey), true);
+
+    const secondUploadResponse = await adminHandler(createNetlifyAdminEvent(
+      eventBase,
+      adminCookie,
+      '/api/admin/assets/coa-pdf',
+      'POST',
+      createCoaPdfUpload('second-netlify-coa.pdf'),
+    ));
+    const secondAsset = JSON.parse(secondUploadResponse.body);
+
+    assert.equal(secondUploadResponse.statusCode, 200);
+    assert.equal((await adminHandler(createNetlifyAdminEvent(eventBase, adminCookie, '/api/admin/data/coas/netlify-replace-pdf', 'PUT', {
+      ...createCoaBatchItem('netlify-replace-pdf', 'HLX-MIA-BPC10-0626-SECOND', 'White'),
+      ...secondAsset,
+    }))).statusCode, 200);
+
+    assert.equal(blobs.has(firstBlobKey), false);
+    assert.ok(requests.some((request) => request.method === 'DELETE' && request.key === firstBlobKey));
+    assert.equal(blobs.has(`/site123/site:helix-data/${secondAsset.coaBlobKey}`), true);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.netlifyBlobsContext = previousBlobsContext;
+
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
 test('Netlify round batch import writes all rows from one stale Blob snapshot', async () => {
   const previousEnv = {
     HELIX_ADMIN_SESSION_SECRET: process.env.HELIX_ADMIN_SESSION_SECRET,
@@ -1095,6 +1233,14 @@ function createCoaBatchItem(id, batchNumber, capColor) {
     heavyMetals: 'Pending',
     sterility: 'Pending',
     fentanyl: 'Pending',
+  };
+}
+
+function createCoaPdfUpload(fileName) {
+  return {
+    fileName,
+    mimeType: 'application/pdf',
+    base64: Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF').toString('base64'),
   };
 }
 
