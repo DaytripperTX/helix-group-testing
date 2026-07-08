@@ -579,6 +579,375 @@ test('Netlify COA batch import writes all rows from one stale Blob snapshot', as
   }
 });
 
+test('Netlify COA batch delete removes all requested rows from one stale Blob snapshot', async () => {
+  const previousEnv = {
+    HELIX_ADMIN_SESSION_SECRET: process.env.HELIX_ADMIN_SESSION_SECRET,
+    HELIX_DATA_ADAPTER: process.env.HELIX_DATA_ADAPTER,
+    NETLIFY: process.env.NETLIFY,
+    NETLIFY_BLOBS_CONTEXT: process.env.NETLIFY_BLOBS_CONTEXT,
+  };
+  const previousFetch = globalThis.fetch;
+  const previousBlobsContext = globalThis.netlifyBlobsContext;
+  const blobs = new Map();
+  const requests = [];
+  const coasKey = '/site123/site:helix-data/coas.json';
+  let staleCoasBody = null;
+
+  delete process.env.HELIX_DATA_ADAPTER;
+  process.env.HELIX_ADMIN_SESSION_SECRET = 'test-admin-session-secret';
+  process.env.NETLIFY = 'true';
+  globalThis.fetch = async (url, options = {}) => {
+    const method = String(options.method ?? 'GET').toUpperCase();
+    const requestUrl = new URL(url);
+    const key = requestUrl.pathname;
+
+    requests.push({ method, key });
+
+    if (method === 'GET') {
+      if (requestUrl.searchParams.has('prefix')) {
+        return createBlobListResponse(blobs, key, requestUrl.searchParams.get('prefix') ?? '');
+      }
+
+      if (key === coasKey && staleCoasBody) {
+        return createJsonResponse(staleCoasBody);
+      }
+
+      if (!blobs.has(key)) {
+        return new Response('', { status: 404 });
+      }
+
+      return createJsonResponse(blobs.get(key));
+    }
+
+    if (method === 'PUT') {
+      blobs.set(key, String(options.body ?? ''));
+      return new Response('', {
+        status: 200,
+        headers: { etag: `"${blobs.size}"` },
+      });
+    }
+
+    return new Response('', { status: 405 });
+  };
+
+  try {
+    const importId = Date.now();
+    const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?coaDeleteBlobs=${importId}`);
+    const { handler } = await import(`../netlify/functions/data.mjs?coaDeleteBlobs=${importId}`);
+    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?coaDeleteBlobs=${importId}`);
+    const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
+    const adminCookie = createAdminSessionCookie('admin');
+
+    assert.equal((await adminHandler(createNetlifyAdminEvent(eventBase, adminCookie, '/api/admin/data/peptides/bpc-157', 'PUT', {
+      id: 'bpc-157',
+      name: 'BPC-157',
+      kind: 'peptide',
+      categories: ['Recovery'],
+    }))).statusCode, 200);
+    assert.equal((await adminHandler(createNetlifyAdminEvent(eventBase, adminCookie, '/api/admin/data/rounds/round-coa-batch', 'PUT', createRoundBatchItem({
+      id: 'round-coa-batch',
+      name: 'Round COA Batch',
+      peptides: [
+        {
+          id: 'round-row-bpc',
+          peptideId: 'bpc-157',
+          peptideName: 'BPC-157',
+          priceListItemId: '',
+          vendorCode: 'BPC10',
+          vendorPrice: 42,
+          vendorPriceOverridden: false,
+          mass: '10 mg',
+          testingTier: 'gold',
+          additionalTesting: '',
+          batchConformity: false,
+          capColor: '',
+          notes: '',
+          participantCount: 0,
+          totalOrdered: 0,
+        },
+      ],
+    })))).statusCode, 200);
+    assert.equal((await adminHandler(createNetlifyAdminEvent(
+      eventBase,
+      adminCookie,
+      '/api/admin/coas/import-batch',
+      'POST',
+      {
+        rows: [
+          createCoaBatchItem('netlify-delete-a', 'HLX-MIA-BPC10-0626-BLUE', 'Blue'),
+          createCoaBatchItem('netlify-delete-b', 'HLX-MIA-BPC10-0626-WHITE', 'White'),
+          createCoaBatchItem('netlify-delete-keep', 'HLX-MIA-BPC10-0626-KEEP', 'Clear'),
+        ],
+      },
+    ))).statusCode, 200);
+
+    const seedResponse = await handler({
+      ...eventBase,
+      httpMethod: 'GET',
+      path: '/api/data/coas',
+      rawUrl: 'https://example.netlify.app/api/data/coas',
+    });
+
+    assert.equal(seedResponse.statusCode, 200);
+    staleCoasBody = blobs.get(coasKey);
+
+    const writeCountBeforeDelete = requests.filter((request) =>
+      request.method === 'PUT' && request.key === coasKey
+    ).length;
+    const deleteResponse = await adminHandler(createNetlifyAdminEvent(
+      eventBase,
+      adminCookie,
+      '/api/admin/coas/delete-batch',
+      'POST',
+      {
+        ids: ['netlify-delete-a', 'netlify-delete-b'],
+      },
+    ));
+    const result = JSON.parse(deleteResponse.body);
+    const writeCountAfterDelete = requests.filter((request) =>
+      request.method === 'PUT' && request.key === coasKey
+    ).length;
+    const storedDocument = JSON.parse(blobs.get(coasKey));
+    const storedIds = storedDocument.items.map((item) => item.id);
+
+    assert.equal(deleteResponse.statusCode, 200);
+    assert.equal(result.deletedCount, 2);
+    assert.equal(writeCountAfterDelete, writeCountBeforeDelete + 1);
+    assert.equal(storedIds.includes('netlify-delete-a'), false);
+    assert.equal(storedIds.includes('netlify-delete-b'), false);
+    assert.ok(storedIds.includes('netlify-delete-keep'));
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.netlifyBlobsContext = previousBlobsContext;
+
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test('Netlify round batch import writes all rows from one stale Blob snapshot', async () => {
+  const previousEnv = {
+    HELIX_ADMIN_SESSION_SECRET: process.env.HELIX_ADMIN_SESSION_SECRET,
+    HELIX_DATA_ADAPTER: process.env.HELIX_DATA_ADAPTER,
+    NETLIFY: process.env.NETLIFY,
+    NETLIFY_BLOBS_CONTEXT: process.env.NETLIFY_BLOBS_CONTEXT,
+  };
+  const previousFetch = globalThis.fetch;
+  const previousBlobsContext = globalThis.netlifyBlobsContext;
+  const blobs = new Map();
+  const requests = [];
+  const roundsKey = '/site123/site:helix-data/rounds.json';
+  let staleRoundsBody = null;
+
+  delete process.env.HELIX_DATA_ADAPTER;
+  process.env.HELIX_ADMIN_SESSION_SECRET = 'test-admin-session-secret';
+  process.env.NETLIFY = 'true';
+  globalThis.fetch = async (url, options = {}) => {
+    const method = String(options.method ?? 'GET').toUpperCase();
+    const requestUrl = new URL(url);
+    const key = requestUrl.pathname;
+
+    requests.push({ method, key });
+
+    if (method === 'GET') {
+      if (requestUrl.searchParams.has('prefix')) {
+        return createBlobListResponse(blobs, key, requestUrl.searchParams.get('prefix') ?? '');
+      }
+
+      if (key === roundsKey && staleRoundsBody) {
+        return createJsonResponse(staleRoundsBody);
+      }
+
+      if (!blobs.has(key)) {
+        return new Response('', { status: 404 });
+      }
+
+      return createJsonResponse(blobs.get(key));
+    }
+
+    if (method === 'PUT') {
+      blobs.set(key, String(options.body ?? ''));
+      return new Response('', {
+        status: 200,
+        headers: { etag: `"${blobs.size}"` },
+      });
+    }
+
+    return new Response('', { status: 405 });
+  };
+
+  try {
+    const importId = Date.now();
+    const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?roundBatchBlobs=${importId}`);
+    const { handler } = await import(`../netlify/functions/data.mjs?roundBatchBlobs=${importId}`);
+    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?roundBatchBlobs=${importId}`);
+    const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
+
+    const seedResponse = await handler({
+      ...eventBase,
+      httpMethod: 'GET',
+      path: '/api/data/rounds',
+      rawUrl: 'https://example.netlify.app/api/data/rounds',
+    });
+
+    assert.equal(seedResponse.statusCode, 200);
+    staleRoundsBody = blobs.get(roundsKey);
+
+    const writeCountBeforeImport = requests.filter((request) =>
+      request.method === 'PUT' && request.key === roundsKey
+    ).length;
+    const importResponse = await adminHandler(createNetlifyAdminEvent(
+      eventBase,
+      createAdminSessionCookie('admin'),
+      '/api/admin/rounds/import-batch',
+      'POST',
+      {
+        rows: [
+          createRoundBatchItem({ id: 'netlify-round-a', name: 'Netlify Round A' }),
+          createRoundBatchItem({ id: 'netlify-round-b', name: 'Netlify Round B' }),
+        ],
+      },
+    ));
+    const result = JSON.parse(importResponse.body);
+    const writeCountAfterImport = requests.filter((request) =>
+      request.method === 'PUT' && request.key === roundsKey
+    ).length;
+    const storedDocument = JSON.parse(blobs.get(roundsKey));
+    const storedIds = storedDocument.items.map((item) => item.id);
+
+    assert.equal(importResponse.statusCode, 200);
+    assert.equal(result.savedCount, 2);
+    assert.equal(writeCountAfterImport, writeCountBeforeImport + 1);
+    assert.ok(storedIds.includes('netlify-round-a'));
+    assert.ok(storedIds.includes('netlify-round-b'));
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.netlifyBlobsContext = previousBlobsContext;
+
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test('Netlify peptide category batch import writes all rows from one stale Blob snapshot', async () => {
+  const previousEnv = {
+    HELIX_ADMIN_SESSION_SECRET: process.env.HELIX_ADMIN_SESSION_SECRET,
+    HELIX_DATA_ADAPTER: process.env.HELIX_DATA_ADAPTER,
+    NETLIFY: process.env.NETLIFY,
+    NETLIFY_BLOBS_CONTEXT: process.env.NETLIFY_BLOBS_CONTEXT,
+  };
+  const previousFetch = globalThis.fetch;
+  const previousBlobsContext = globalThis.netlifyBlobsContext;
+  const blobs = new Map();
+  const requests = [];
+  const categoriesKey = '/site123/site:helix-data/peptide-categories.json';
+  let staleCategoriesBody = null;
+
+  delete process.env.HELIX_DATA_ADAPTER;
+  process.env.HELIX_ADMIN_SESSION_SECRET = 'test-admin-session-secret';
+  process.env.NETLIFY = 'true';
+  globalThis.fetch = async (url, options = {}) => {
+    const method = String(options.method ?? 'GET').toUpperCase();
+    const requestUrl = new URL(url);
+    const key = requestUrl.pathname;
+
+    requests.push({ method, key });
+
+    if (method === 'GET') {
+      if (requestUrl.searchParams.has('prefix')) {
+        return createBlobListResponse(blobs, key, requestUrl.searchParams.get('prefix') ?? '');
+      }
+
+      if (key === categoriesKey && staleCategoriesBody) {
+        return createJsonResponse(staleCategoriesBody);
+      }
+
+      if (!blobs.has(key)) {
+        return new Response('', { status: 404 });
+      }
+
+      return createJsonResponse(blobs.get(key));
+    }
+
+    if (method === 'PUT') {
+      blobs.set(key, String(options.body ?? ''));
+      return new Response('', {
+        status: 200,
+        headers: { etag: `"${blobs.size}"` },
+      });
+    }
+
+    return new Response('', { status: 405 });
+  };
+
+  try {
+    const importId = Date.now();
+    const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?categoryBatchBlobs=${importId}`);
+    const { handler } = await import(`../netlify/functions/data.mjs?categoryBatchBlobs=${importId}`);
+    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?categoryBatchBlobs=${importId}`);
+    const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
+
+    const seedResponse = await handler({
+      ...eventBase,
+      httpMethod: 'GET',
+      path: '/api/data/peptide-categories',
+      rawUrl: 'https://example.netlify.app/api/data/peptide-categories',
+    });
+
+    assert.equal(seedResponse.statusCode, 200);
+    staleCategoriesBody = blobs.get(categoriesKey);
+
+    const writeCountBeforeImport = requests.filter((request) =>
+      request.method === 'PUT' && request.key === categoriesKey
+    ).length;
+    const importResponse = await adminHandler(createNetlifyAdminEvent(
+      eventBase,
+      createAdminSessionCookie('admin'),
+      '/api/admin/peptide-categories/import-batch',
+      'POST',
+      {
+        rows: [
+          { id: 'netlify-category-a', name: 'Netlify Category A' },
+          { id: 'netlify-category-b', name: 'Netlify Category B' },
+        ],
+      },
+    ));
+    const result = JSON.parse(importResponse.body);
+    const writeCountAfterImport = requests.filter((request) =>
+      request.method === 'PUT' && request.key === categoriesKey
+    ).length;
+    const storedDocument = JSON.parse(blobs.get(categoriesKey));
+    const storedIds = storedDocument.items.map((item) => item.id);
+
+    assert.equal(importResponse.statusCode, 200);
+    assert.equal(result.savedCount, 2);
+    assert.equal(writeCountAfterImport, writeCountBeforeImport + 1);
+    assert.ok(storedIds.includes('netlify-category-a'));
+    assert.ok(storedIds.includes('netlify-category-b'));
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.netlifyBlobsContext = previousBlobsContext;
+
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
 function createNetlifyBlobsEvent({ includeUncached = true } = {}) {
   const blobsContext = {
     token: 'test-token',
@@ -680,6 +1049,25 @@ function createPeptideBatchRow(rowNumber, id, name) {
     components: [],
     wikiLinks: [],
     errors: [],
+  };
+}
+
+function createRoundBatchItem(overrides = {}) {
+  return {
+    id: 'round-batch',
+    name: 'Round Batch',
+    status: 'Collecting signups',
+    vendorId: 'vendor-one',
+    isCurrent: false,
+    startDate: '',
+    endDate: '',
+    targetWindow: '',
+    participants: 0,
+    roundDiscountPercent: 0,
+    priceSourceMode: 'none',
+    priceListSnapshot: null,
+    peptides: [],
+    ...overrides,
   };
 }
 

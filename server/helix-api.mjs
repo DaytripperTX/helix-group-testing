@@ -3,13 +3,16 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  deleteCoaBatchItems,
   deleteCollectionItem,
   adminUpsertLabelTemplate,
   exportPeptideCollectionTransfer,
   getCollectionNames,
   importCoaBatchItems,
   importPeptideBatchItems,
+  importPeptideCategoryBatchItems,
   importPeptideCollectionTransfer,
+  importRoundBatchItems,
   isPublicCollectionRead,
   publicReportLabelTemplate,
   publicUpsertLabelTemplate,
@@ -242,6 +245,17 @@ export async function handleHelixApiRequest(request) {
       return jsonResponse(200, await importPeptideBatchItems(body?.rows));
     }
 
+    if (pathname === '/api/admin/peptide-categories/import-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await importPeptideCategoryBatchItems(body?.rows));
+    }
+
     if (pathname === '/api/admin/rounds/parse-peptides' && method === 'POST') {
       const session = getAdminSession(request.headers);
 
@@ -258,6 +272,17 @@ export async function handleHelixApiRequest(request) {
           existingRows: body?.existingRows,
         }),
       });
+    }
+
+    if (pathname === '/api/admin/rounds/import-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await importRoundBatchItems(body?.rows));
     }
 
     if (pathname === '/api/admin/coas/parse-batch-numbers' && method === 'POST') {
@@ -284,6 +309,17 @@ export async function handleHelixApiRequest(request) {
 
       const body = parseJsonBody(request.bodyText);
       return jsonResponse(200, await importCoaBatchItems(body?.rows));
+    }
+
+    if (pathname === '/api/admin/coas/delete-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await deleteCoaBatchItems(body?.ids));
     }
 
     if (pathname.startsWith('/api/admin/data/')) {

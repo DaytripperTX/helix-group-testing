@@ -250,6 +250,17 @@ type CoaBatchImportResult = {
   }[];
 };
 
+type CoaBatchDeleteResult = {
+  items: CoaResult[];
+  deletedCount: number;
+  failedCount: number;
+  rowErrors: {
+    rowNumber: number;
+    id: string;
+    error: string;
+  }[];
+};
+
 type CoaPdfAsset = {
   coaFileName: string;
   coaMimeType: 'application/pdf';
@@ -1583,24 +1594,33 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
     setIsSubmittingCoa(true);
 
     try {
-      let nextCoas = coaResults;
+      const entries: CoaResult[] = [];
 
       for (const draft of uploadRows) {
-        const currentCoa = nextCoas.find((coa) => coa.id === draft.matchedCoaId);
+        const currentCoa = coaResults.find((coa) => coa.id === draft.matchedCoaId);
 
         if (!currentCoa) {
           continue;
         }
 
         const asset = await uploadCoaPdf(draft.file);
-        nextCoas = await saveCoaEntry(mergeCoaPdfAsset(currentCoa, asset));
+        entries.push(mergeCoaPdfAsset(currentCoa, asset));
       }
 
-      setCoaResults(nextCoas);
+      const result = await saveCoaEntriesBatch(entries);
+
+      setCoaResults(result.items);
       setIsBulkUploadModalOpen(false);
-      setCoaStatus(`${uploadRows.length} COA ${uploadRows.length === 1 ? 'PDF' : 'PDFs'} attached.`);
+      setCoaStatus(`${result.savedCount} COA ${result.savedCount === 1 ? 'PDF' : 'PDFs'} attached.`);
     } catch (error) {
-      console.error(error);
+      console.error('[coa-bulk-pdf] save failed', {
+        error,
+        rows: uploadRows.map((row) => ({
+          id: row.id,
+          fileName: row.file.name,
+          matchedCoaId: row.matchedCoaId,
+        })),
+      });
       setCoaStatus(getCoaErrorMessage(error, 'COA PDFs could not be uploaded.'));
     } finally {
       setIsSubmittingCoa(false);
@@ -1706,22 +1726,21 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
     setIsSubmittingCoa(true);
 
     try {
-      let nextCoas = coaResults;
+      const result = await deleteCoaEntriesBatch(entriesToDelete.map((entry) => entry.id));
 
-      for (const entry of entriesToDelete) {
-        nextCoas = await deleteCoaEntry(entry.id);
-      }
-
-      setCoaResults(nextCoas);
+      setCoaResults(result.items);
 
       if (selectedCoaId && entriesToDelete.some((entry) => entry.id === selectedCoaId)) {
         clearSelectedCoaResult();
       }
 
-      setCoaStatus(`${entriesToDelete.length} COA ${entryLabel} deleted from ${selectedFilterRound.name}.`);
+      setCoaStatus(`${result.deletedCount} COA ${result.deletedCount === 1 ? 'entry' : 'entries'} deleted from ${selectedFilterRound.name}.`);
     } catch (error) {
-      console.error(error);
-      setCoaStatus('COA entries could not be deleted.');
+      console.error('[coa-bulk-delete] delete failed', {
+        error,
+        ids: entriesToDelete.map((entry) => entry.id),
+      });
+      setCoaStatus(getCoaErrorMessage(error, 'COA entries could not be deleted.'));
     } finally {
       setIsSubmittingCoa(false);
     }
@@ -3034,6 +3053,36 @@ async function deleteCoaEntry(entryId: string) {
   return Array.isArray(records)
     ? records.map(normalizeCoaResult).filter((result): result is CoaResult => Boolean(result))
     : [];
+}
+
+async function deleteCoaEntriesBatch(ids: string[]): Promise<CoaBatchDeleteResult> {
+  const response = await fetch('/api/admin/coas/delete-batch', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ids }),
+  });
+
+  const payload = await readCoaJsonResponse<Partial<CoaBatchDeleteResult> & { error?: string; details?: unknown }>(
+    response,
+    'COA entries could not be deleted.',
+  );
+
+  if (!response.ok) {
+    const details = payload.details === undefined ? '' : ` Details: ${JSON.stringify(payload.details)}`;
+    throw new Error(`${payload.error || 'COA entries could not be deleted.'}${details}`);
+  }
+
+  return {
+    items: Array.isArray(payload.items)
+      ? payload.items.map(normalizeCoaResult).filter((result): result is CoaResult => Boolean(result))
+      : [],
+    deletedCount: Number(payload.deletedCount) || 0,
+    failedCount: Number(payload.failedCount) || 0,
+    rowErrors: Array.isArray(payload.rowErrors) ? payload.rowErrors : [],
+  };
 }
 
 async function readCoaJsonResponse<T>(response: Response, fallbackMessage: string): Promise<T> {

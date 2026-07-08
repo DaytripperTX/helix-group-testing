@@ -214,6 +214,22 @@ test('peptide batch import reports row-level save failures', async () => {
   assert.equal(storedPeptides.some((item) => item.id === 'valid-bpc-157'), false);
 });
 
+test('peptide category batch import saves multiple categories in one request', async () => {
+  await resetData();
+  const response = await apiCategoryBatchImport([
+    { id: 'category-alpha', name: 'Category Alpha' },
+    { id: 'category-beta', name: 'Category Beta' },
+  ]);
+  const result = JSON.parse(response.body);
+  const storedCategories = await readCollection('peptide-categories');
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(result.savedCount, 2);
+  assert.equal(result.failedCount, 0);
+  assert.ok(storedCategories.some((item) => item.id === 'category-alpha'));
+  assert.ok(storedCategories.some((item) => item.id === 'category-beta'));
+});
+
 async function resetData() {
   await rm(testDataDir, { recursive: true, force: true });
 }
@@ -250,6 +266,16 @@ function apiBatchImport(rows) {
     method: 'POST',
     pathname: '/api/admin/peptides/import-batch',
     url: '/api/admin/peptides/import-batch',
+    headers: adminHeaders(),
+    bodyText: JSON.stringify({ rows }),
+  });
+}
+
+function apiCategoryBatchImport(rows) {
+  return handleHelixApiRequest({
+    method: 'POST',
+    pathname: '/api/admin/peptide-categories/import-batch',
+    url: '/api/admin/peptide-categories/import-batch',
     headers: adminHeaders(),
     bodyText: JSON.stringify({ rows }),
   });

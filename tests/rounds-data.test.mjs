@@ -254,6 +254,32 @@ test('round default price source mode persists after save', async () => {
   assert.equal(storedRound.priceSourceMode, 'vendor-default');
 });
 
+test('round batch import saves multiple rounds in one request', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  const response = await apiRequest('/api/admin/rounds/import-batch', 'POST', {
+    rows: [
+      createRound({
+        id: 'batch-round-a',
+        name: 'Batch Round A',
+      }),
+      createRound({
+        id: 'batch-round-b',
+        name: 'Batch Round B',
+      }),
+    ],
+  }, { cookie: adminCookie });
+  const result = JSON.parse(response.body);
+  const storedRounds = await readCollection('rounds');
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(result.savedCount, 2);
+  assert.equal(result.failedCount, 0);
+  assert.ok(storedRounds.some((round) => round.id === 'batch-round-a'));
+  assert.ok(storedRounds.some((round) => round.id === 'batch-round-b'));
+});
+
 test('round save links dictionary names and clears stale peptide ids', async () => {
   await resetData();
   const adminCookie = await loginAdmin();

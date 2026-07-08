@@ -90,6 +90,45 @@ test('coa batch import saves multiple entries in one request', async () => {
   assert.ok(storedCoas.some((coa) => coa.id === 'batch-import-white'));
 });
 
+test('coa batch delete removes multiple entries in one request', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  await seedRound(adminCookie);
+  await apiRequest('/api/admin/coas/import-batch', 'POST', {
+    rows: [
+      createCoa({
+        id: 'batch-delete-blue',
+        batchNumber: 'HLX-MIA-BPC10-0626-BLUE',
+        capColor: 'Blue',
+      }),
+      createCoa({
+        id: 'batch-delete-white',
+        batchNumber: 'HLX-MIA-BPC10-0626-WHITE',
+        capColor: 'White',
+      }),
+      createCoa({
+        id: 'batch-delete-keep',
+        batchNumber: 'HLX-MIA-BPC10-0626-KEEP',
+        capColor: 'Clear',
+      }),
+    ],
+  }, { cookie: adminCookie });
+
+  const response = await apiRequest('/api/admin/coas/delete-batch', 'POST', {
+    ids: ['batch-delete-blue', 'batch-delete-white'],
+  }, { cookie: adminCookie });
+  const result = JSON.parse(response.body);
+  const storedCoas = await readCollection('coas');
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(result.deletedCount, 2);
+  assert.equal(result.failedCount, 0);
+  assert.equal(storedCoas.some((coa) => coa.id === 'batch-delete-blue'), false);
+  assert.equal(storedCoas.some((coa) => coa.id === 'batch-delete-white'), false);
+  assert.ok(storedCoas.some((coa) => coa.id === 'batch-delete-keep'));
+});
+
 test('coa admin writes reject unlinked new entries', async () => {
   await resetData();
   const adminCookie = await loginAdmin();

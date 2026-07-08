@@ -377,6 +377,168 @@ export async function importCoaBatchItems(rows) {
   };
 }
 
+export async function deleteCoaBatchItems(ids) {
+  if (!Array.isArray(ids)) {
+    throw createHttpError(400, 'COA batch delete ids are required.');
+  }
+
+  const normalizedIds = [];
+  const rowErrors = [];
+
+  for (const [index, id] of ids.entries()) {
+    const rowNumber = index + 1;
+    const normalizedId = sanitizeRoundToken(id, 180);
+
+    if (!normalizedId) {
+      rowErrors.push({
+        rowNumber,
+        id: typeof id === 'string' ? id : '',
+        error: 'COA id is required.',
+      });
+      continue;
+    }
+
+    if (!normalizedIds.includes(normalizedId)) {
+      normalizedIds.push(normalizedId);
+    }
+  }
+
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'COA batch delete contains rows that could not be deleted.', {
+      failedCount: rowErrors.length,
+      deletedCount: 0,
+      rowErrors,
+    });
+  }
+
+  const document = await readCollectionDocument('coas');
+  const currentItems = Array.isArray(document.items) ? document.items : [];
+  const deleteIds = new Set(normalizedIds);
+  const nextItems = currentItems.filter((currentItem) => !deleteIds.has(currentItem?.id));
+  const deletedCount = currentItems.length - nextItems.length;
+  const nextDocument = createCollectionDocument('coas', nextItems);
+
+  await writeCollectionDocument('coas', nextDocument);
+
+  return {
+    items: nextDocument.items,
+    deletedCount,
+    failedCount: 0,
+    rowErrors: [],
+  };
+}
+
+export async function importRoundBatchItems(rows) {
+  if (!Array.isArray(rows)) {
+    throw createHttpError(400, 'Round batch rows are required.');
+  }
+
+  const document = await readCollectionDocument('rounds');
+  const peptides = await readCollection('peptides');
+  let nextItems = Array.isArray(document.items) ? document.items : [];
+  const rowErrors = [];
+  let savedCount = 0;
+
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = getImportRowNumber(row, index);
+
+    try {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw new Error('Row is not an object.');
+      }
+
+      const normalizedItem = normalizeCollectionItem('rounds', row, { peptides });
+
+      nextItems = [
+        normalizedItem,
+        ...nextItems.filter((currentItem) => currentItem?.id !== normalizedItem.id),
+      ];
+      savedCount += 1;
+    } catch (error) {
+      rowErrors.push({
+        rowNumber,
+        id: typeof row?.id === 'string' ? row.id : '',
+        name: typeof row?.name === 'string' ? row.name : '',
+        error: error?.message || 'Round row could not be saved.',
+      });
+    }
+  }
+
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'Round batch import contains rows that could not be saved.', {
+      failedCount: rowErrors.length,
+      savedCount: 0,
+      rowErrors,
+    });
+  }
+
+  const nextDocument = createCollectionDocument('rounds', nextItems);
+
+  await writeCollectionDocument('rounds', nextDocument);
+
+  return {
+    items: nextDocument.items,
+    savedCount,
+    failedCount: 0,
+    rowErrors: [],
+  };
+}
+
+export async function importPeptideCategoryBatchItems(rows) {
+  if (!Array.isArray(rows)) {
+    throw createHttpError(400, 'Peptide category batch rows are required.');
+  }
+
+  const document = await readCollectionDocument('peptide-categories');
+  let nextItems = Array.isArray(document.items) ? document.items : [];
+  const rowErrors = [];
+  let savedCount = 0;
+
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = getImportRowNumber(row, index);
+
+    try {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw new Error('Row is not an object.');
+      }
+
+      const normalizedItem = normalizeCollectionItem('peptide-categories', row);
+
+      nextItems = [
+        normalizedItem,
+        ...nextItems.filter((currentItem) => currentItem?.id !== normalizedItem.id),
+      ];
+      savedCount += 1;
+    } catch (error) {
+      rowErrors.push({
+        rowNumber,
+        id: typeof row?.id === 'string' ? row.id : '',
+        name: typeof row?.name === 'string' ? row.name : '',
+        error: error?.message || 'Peptide category row could not be saved.',
+      });
+    }
+  }
+
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'Peptide category batch import contains rows that could not be saved.', {
+      failedCount: rowErrors.length,
+      savedCount: 0,
+      rowErrors,
+    });
+  }
+
+  const nextDocument = createCollectionDocument('peptide-categories', nextItems);
+
+  await writeCollectionDocument('peptide-categories', nextDocument);
+
+  return {
+    items: nextDocument.items,
+    savedCount,
+    failedCount: 0,
+    rowErrors: [],
+  };
+}
+
 export async function deleteCollectionItem(collectionName, itemId) {
   if (collectionName === 'label-templates') {
     return softDeleteLabelTemplate(itemId, 'admin');
@@ -1144,6 +1306,10 @@ function normalizeCollectionItems(collectionName, items) {
     return items.map((item) => normalizePeptideItem(item));
   }
 
+  if (collectionName === 'peptide-categories') {
+    return items.map((item) => normalizePeptideCategoryItem(item)).filter(Boolean);
+  }
+
   if (collectionName === 'rounds') {
     return items.map((item) => normalizeRoundItem(item)).filter(Boolean);
   }
@@ -1170,6 +1336,16 @@ function normalizeCollectionItem(collectionName, item, options = {}) {
     return normalizedRound;
   }
 
+  if (collectionName === 'peptide-categories') {
+    const normalizedCategory = normalizePeptideCategoryItem(item);
+
+    if (!normalizedCategory) {
+      throw createHttpError(400, 'Invalid peptide category.');
+    }
+
+    return normalizedCategory;
+  }
+
   if (collectionName === 'coas') {
     const normalizedCoa = normalizeCoaItem(item, options);
 
@@ -1181,6 +1357,21 @@ function normalizeCollectionItem(collectionName, item, options = {}) {
   }
 
   return item;
+}
+
+function normalizePeptideCategoryItem(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  const name = sanitizeRoundText(item.name, 120);
+  const id = sanitizeRoundToken(item.id, 120);
+
+  if (!id || !name) {
+    return null;
+  }
+
+  return { id, name };
 }
 
 function normalizeRoundItem(item, options = {}) {

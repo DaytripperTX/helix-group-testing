@@ -135,6 +135,18 @@ type PeptideBatchImportResult = {
   }[];
 };
 
+type BatchSaveResult<T> = {
+  items: T[];
+  savedCount: number;
+  failedCount: number;
+  rowErrors: {
+    rowNumber: number;
+    id: string;
+    name?: string;
+    error: string;
+  }[];
+};
+
 type AdminNote = {
   id: string;
   sender: string;
@@ -734,8 +746,11 @@ function AdminPage({
         setPriceListVendor(nextVendor);
       }
 
-      for (const round of nextRounds.filter((round) => round.vendorId === priceListDraft.vendorId && round.priceSourceMode === 'vendor-default')) {
-        nextRounds = await saveCollectionItem<Round>('rounds', round);
+      const roundsToSave = nextRounds.filter((round) => round.vendorId === priceListDraft.vendorId && round.priceSourceMode === 'vendor-default');
+
+      if (roundsToSave.length > 0) {
+        const roundBatchResult = await saveRoundBatchItems(roundsToSave);
+        nextRounds = roundBatchResult.items;
       }
 
       setPriceLists(nextPriceLists);
@@ -747,8 +762,11 @@ function AdminPage({
       setSavedPriceListVendorId(priceListDraft.vendorId);
       setStatus('');
     } catch (error) {
-      console.error(error);
-      setPriceListStatus('Price list could not be saved.');
+      console.error('[vendor-price-list] save failed', {
+        error,
+        priceListDraft,
+      });
+      setPriceListStatus(getErrorMessage(error, 'Price list could not be saved.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -1269,8 +1287,7 @@ function AdminPage({
     setStatus(`Searching wiki links for ${candidates.length} peptides...`);
 
     try {
-      let nextPeptides = peptides;
-      let updatedCount = 0;
+      const updatedPeptides: Peptide[] = [];
 
       for (const peptide of candidates) {
         const match = await searchWikiLinks(peptide.name);
@@ -1286,18 +1303,31 @@ function AdminPage({
           continue;
         }
 
-        nextPeptides = await saveCollectionItem<Peptide>('peptides', {
+        updatedPeptides.push({
           ...peptide,
           wikiLinks,
         });
-        updatedCount += 1;
       }
 
-      setPeptides(nextPeptides);
-      setStatus(updatedCount > 0 ? `Wiki links updated for ${updatedCount} peptides.` : 'No new wiki links found.');
+      if (updatedPeptides.length === 0) {
+        setStatus('No new wiki links found.');
+        return;
+      }
+
+      const result = await importPeptideBatchRows(updatedPeptides.map((peptide, index) => ({
+        ...peptide,
+        rowNumber: index + 1,
+        errors: [],
+      })));
+
+      setPeptides(result.items);
+      setStatus(result.savedCount > 0 ? `Wiki links updated for ${result.savedCount} peptides.` : 'No new wiki links found.');
     } catch (error) {
-      console.error(error);
-      setStatus('Batch wiki link search failed.');
+      console.error('[peptide-wiki-batch] save failed', {
+        error,
+        candidateIds: candidates.map((peptide) => peptide.id),
+      });
+      setStatus(getErrorMessage(error, 'Batch wiki link search failed.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -1513,11 +1543,10 @@ function AdminPage({
     setIsSubmitting(true);
 
     try {
-      let nextPeptideCategories = peptideCategories;
-
-      for (const row of batchRows) {
-        nextPeptideCategories = await ensurePeptideCategories(row.categories, nextPeptideCategories);
-      }
+      const nextPeptideCategories = await ensurePeptideCategories(
+        batchRows.flatMap((row) => row.categories),
+        peptideCategories,
+      );
 
       const result = await importPeptideBatchRows(batchRows.map((row) => ({
         ...row,
@@ -2936,6 +2965,53 @@ async function importPeptideBatchRows(rows: BatchPeptideRow[]): Promise<PeptideB
   };
 }
 
+async function saveRoundBatchItems(rows: Round[]): Promise<BatchSaveResult<Round>> {
+  const response = await fetch('/api/admin/rounds/import-batch', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ rows }),
+  });
+
+  if (!response.ok) {
+    await throwResponseError(response, 'Round batch save failed.');
+  }
+
+  return normalizeBatchSaveResult<Round>(
+    await readJsonResponse<Partial<BatchSaveResult<Round>>>(response, 'Round batch save failed.'),
+  );
+}
+
+async function savePeptideCategoryBatchItems(rows: PeptideCategory[]): Promise<BatchSaveResult<PeptideCategory>> {
+  const response = await fetch('/api/admin/peptide-categories/import-batch', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ rows }),
+  });
+
+  if (!response.ok) {
+    await throwResponseError(response, 'Peptide category batch save failed.');
+  }
+
+  return normalizeBatchSaveResult<PeptideCategory>(
+    await readJsonResponse<Partial<BatchSaveResult<PeptideCategory>>>(response, 'Peptide category batch save failed.'),
+  );
+}
+
+function normalizeBatchSaveResult<T>(result: Partial<BatchSaveResult<T>> | undefined): BatchSaveResult<T> {
+  return {
+    items: Array.isArray(result?.items) ? result.items : [],
+    savedCount: Number(result?.savedCount) || 0,
+    failedCount: Number(result?.failedCount) || 0,
+    rowErrors: Array.isArray(result?.rowErrors) ? result.rowErrors : [],
+  };
+}
+
 async function resolveVendorPriceSheet(
   editingVendor: Vendor | null,
   form: VendorForm,
@@ -3505,6 +3581,7 @@ async function ensurePeptideCategories(
   existingCategories: PeptideCategory[],
 ) {
   let nextCategories = existingCategories;
+  const categoriesToSave: PeptideCategory[] = [];
 
   for (const categoryName of categoryNames) {
     const existingCategory = findByNormalizedName(nextCategories, categoryName);
@@ -3518,10 +3595,16 @@ async function ensurePeptideCategories(
       name: categoryName,
     };
 
-    nextCategories = await saveCollectionItem<PeptideCategory>('peptide-categories', category);
+    categoriesToSave.push(category);
+    nextCategories = [category, ...nextCategories];
   }
 
-  return nextCategories;
+  if (categoriesToSave.length === 0) {
+    return nextCategories;
+  }
+
+  const result = await savePeptideCategoryBatchItems(categoriesToSave);
+  return result.items;
 }
 
 function mergeCategoryText(
