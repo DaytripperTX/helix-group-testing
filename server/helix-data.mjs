@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch } from './coa-pdf-normalizer.mjs';
 
@@ -632,6 +632,19 @@ export async function publicUpsertLabelTemplate(template) {
 }
 
 export async function writeCoaPdfAsset(asset) {
+  const uploadId = randomUUID();
+  const diagnostics = {
+    uploadId,
+    storageAdapter: shouldUseNetlifyBlobs() ? 'netlify-blobs' : 'local-files',
+    steps: [],
+  };
+
+  logCoaPdfUpload(uploadId, diagnostics, 'received', {
+    fileName: typeof asset?.fileName === 'string' ? asset.fileName : '',
+    mimeType: typeof asset?.mimeType === 'string' ? asset.mimeType : '',
+    base64Length: typeof asset?.base64 === 'string' ? asset.base64.length : 0,
+  });
+
   if (
     !asset ||
     typeof asset !== 'object' ||
@@ -639,33 +652,55 @@ export async function writeCoaPdfAsset(asset) {
     typeof asset.mimeType !== 'string' ||
     typeof asset.base64 !== 'string'
   ) {
+    logCoaPdfUpload(uploadId, diagnostics, 'invalid-upload-object', {
+      hasAsset: Boolean(asset),
+      fileNameType: typeof asset?.fileName,
+      mimeTypeType: typeof asset?.mimeType,
+      base64Type: typeof asset?.base64,
+    }, 'error');
     throw createHttpError(400, 'Invalid COA PDF upload.');
   }
 
   if (asset.mimeType !== 'application/pdf') {
+    logCoaPdfUpload(uploadId, diagnostics, 'invalid-mime-type', {
+      mimeType: asset.mimeType,
+    }, 'error');
     throw createHttpError(400, 'COA file must be a PDF.');
   }
 
   const safeFileName = asset.fileName.replace(/[^a-zA-Z0-9._-]/g, '-');
   const buffer = Buffer.from(asset.base64, 'base64');
+  const uploadBufferSummary = summarizeBufferForDiagnostics(buffer);
+
+  diagnostics.input = {
+    fileName: asset.fileName,
+    mimeType: asset.mimeType,
+    safeFileName,
+    base64Length: asset.base64.length,
+    ...uploadBufferSummary,
+  };
+
+  logCoaPdfUpload(uploadId, diagnostics, 'decoded-upload', diagnostics.input);
 
   if (buffer.length === 0 || buffer.length > maxCoaPdfBytes) {
+    logCoaPdfUpload(uploadId, diagnostics, 'invalid-size', {
+      byteLength: buffer.length,
+      maxCoaPdfBytes,
+    }, 'error');
     throw createHttpError(400, 'COA PDF is too large.');
   }
 
   if (buffer.subarray(0, 5).toString('utf8') !== '%PDF-') {
+    logCoaPdfUpload(uploadId, diagnostics, 'invalid-pdf-header', uploadBufferSummary, 'error');
     throw createHttpError(400, 'COA file must be a valid PDF.');
   }
 
   const blobKey = `${coaPdfAssetPrefix}${Date.now()}-${safeFileName || 'coa.pdf'}`;
-  const { parsedCoa, vialImage } = await parseStoredCoaPdf(buffer, asset.fileName);
-  const vialImageFields = vialImage
-    ? await storeCoaVialImageAsset({
-        fileName: asset.fileName,
-        safeFileName,
-        image: vialImage,
-      })
-    : {};
+
+  logCoaPdfUpload(uploadId, diagnostics, 'store-start', {
+    blobKey,
+    storageAdapter: diagnostics.storageAdapter,
+  });
 
   if (shouldUseNetlifyBlobs()) {
     const store = await getBlobStore();
@@ -682,7 +717,38 @@ export async function writeCoaPdfAsset(asset) {
     await writeFile(localAssetPath, buffer);
   }
 
-  await verifyStoredCoaPdfAsset(blobKey, buffer.length);
+  logCoaPdfUpload(uploadId, diagnostics, 'store-complete', {
+    blobKey,
+  });
+
+  const storedBuffer = await verifyStoredCoaPdfAsset(blobKey, buffer, uploadId, diagnostics);
+  const { parsedCoa, vialImage } = await parseStoredCoaPdf(storedBuffer, asset.fileName, uploadId, diagnostics);
+  const vialImageFields = vialImage
+    ? await storeCoaVialImageAsset({
+        fileName: asset.fileName,
+        safeFileName,
+        image: vialImage,
+      })
+    : {};
+
+  if (vialImage) {
+    logCoaPdfUpload(uploadId, diagnostics, 'vial-image-stored', {
+      width: vialImage.width,
+      height: vialImage.height,
+      sourceName: vialImage.sourceName,
+      assetKey: vialImageFields.vialImageAssetKey,
+    });
+  } else {
+    logCoaPdfUpload(uploadId, diagnostics, 'vial-image-not-stored', {
+      reason: 'Parser did not return an extracted vial image.',
+    });
+  }
+
+  diagnostics.parser = summarizeParsedCoaForDiagnostics(parsedCoa);
+  logCoaPdfUpload(uploadId, diagnostics, 'complete', {
+    blobKey,
+    parser: diagnostics.parser,
+  }, parsedCoa?.error ? 'error' : 'log');
 
   return {
     coaFileName: asset.fileName,
@@ -690,43 +756,206 @@ export async function writeCoaPdfAsset(asset) {
     coaBlobKey: blobKey,
     coaUploadedAt: new Date().toISOString(),
     parsedCoa,
+    diagnostics,
     ...vialImageFields,
   };
 }
 
-async function verifyStoredCoaPdfAsset(blobKey, expectedByteLength) {
+async function verifyStoredCoaPdfAsset(blobKey, expectedBuffer, uploadId, diagnostics) {
+  logCoaPdfUpload(uploadId, diagnostics, 'verify-start', {
+    blobKey,
+    expectedByteLength: expectedBuffer.length,
+    expectedSha256: sha256Hex(expectedBuffer),
+  });
+
   const storedBuffer = await readCoaPdfBuffer(blobKey);
+  const storedSummary = summarizeBufferForDiagnostics(storedBuffer);
+  const expectedSha256 = sha256Hex(expectedBuffer);
+  const hashMatches = storedSummary.sha256 === expectedSha256;
+  const byteLengthMatches = storedBuffer.length === expectedBuffer.length;
+
+  diagnostics.stored = {
+    blobKey,
+    ...storedSummary,
+    expectedByteLength: expectedBuffer.length,
+    expectedSha256,
+    byteLengthMatches,
+    hashMatches,
+  };
+
+  logCoaPdfUpload(uploadId, diagnostics, 'verify-complete', diagnostics.stored, hashMatches && byteLengthMatches ? 'log' : 'error');
 
   if (
-    storedBuffer.length !== expectedByteLength ||
+    !byteLengthMatches ||
+    !hashMatches ||
     storedBuffer.subarray(0, 5).toString('utf8') !== '%PDF-'
   ) {
     throw createHttpError(500, 'COA PDF was uploaded but could not be verified after storage.', {
       blobKey,
-      expectedByteLength,
+      expectedByteLength: expectedBuffer.length,
       storedByteLength: storedBuffer.length,
+      expectedSha256,
+      storedSha256: storedSummary.sha256,
     });
   }
+
+  return storedBuffer;
 }
 
-async function parseStoredCoaPdf(buffer, fileName) {
+async function parseStoredCoaPdf(buffer, fileName, uploadId, diagnostics) {
   try {
+    logCoaPdfUpload(uploadId, diagnostics, 'parser-import-start', {
+      fileName,
+    });
     const { parseCoaPdfUploadBuffer } = await import('./coa-pdf-parser.mjs');
 
-    return await parseCoaPdfUploadBuffer(buffer, { fileName });
-  } catch (error) {
-    console.error('[coa-pdf-parser] parse failed', {
+    logCoaPdfUpload(uploadId, diagnostics, 'parser-import-complete', {
       fileName,
-      message: error?.message || 'Unknown parser error',
-      cause: error?.cause?.message,
-      stack: error?.stack,
     });
+
+    const result = await parseCoaPdfUploadBuffer(buffer, {
+      fileName,
+      uploadId,
+      log: (step, detail = {}, level = 'log') => {
+        logCoaPdfUpload(uploadId, diagnostics, step, detail, level);
+      },
+    });
+
+    logCoaPdfUpload(uploadId, diagnostics, 'parser-complete', {
+      parsedCoa: summarizeParsedCoaForDiagnostics(result.parsedCoa),
+      vialImage: result.vialImage
+        ? {
+            width: result.vialImage.width,
+            height: result.vialImage.height,
+            sourceName: result.vialImage.sourceName,
+            pageNumber: result.vialImage.pageNumber,
+            operatorIndex: result.vialImage.operatorIndex,
+          }
+        : null,
+    }, result.parsedCoa?.error ? 'error' : 'log');
+
+    return result;
+  } catch (error) {
+    const errorDetails = serializeErrorForDiagnostics(error);
+
+    logCoaPdfUpload(uploadId, diagnostics, 'parser-failed', {
+      fileName,
+      error: errorDetails,
+    }, 'error');
 
     return {
       parsedCoa: createFailedParsedCoa(error),
       vialImage: null,
     };
   }
+}
+
+function logCoaPdfUpload(uploadId, diagnostics, step, details = {}, level = 'log') {
+  const entry = {
+    at: new Date().toISOString(),
+    step,
+    level,
+    ...sanitizeDiagnostics(details),
+  };
+
+  if (diagnostics && Array.isArray(diagnostics.steps)) {
+    diagnostics.steps.push(entry);
+  }
+
+  const logPayload = {
+    uploadId,
+    step,
+    ...sanitizeDiagnostics(details),
+  };
+
+  if (level === 'error') {
+    console.error('[coa-pdf-upload]', logPayload);
+    return;
+  }
+
+  if (level === 'warn') {
+    console.warn('[coa-pdf-upload]', logPayload);
+    return;
+  }
+
+  console.log('[coa-pdf-upload]', logPayload);
+}
+
+function summarizeBufferForDiagnostics(buffer) {
+  return {
+    byteLength: buffer.length,
+    sha256: sha256Hex(buffer),
+    headerText: buffer.subarray(0, 12).toString('latin1'),
+    headerHex: buffer.subarray(0, 12).toString('hex'),
+    trailerText: buffer.subarray(Math.max(0, buffer.length - 24)).toString('latin1'),
+  };
+}
+
+function sha256Hex(buffer) {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+function summarizeParsedCoaForDiagnostics(parsedCoa) {
+  const fields = parsedCoa?.fields && typeof parsedCoa.fields === 'object' ? parsedCoa.fields : {};
+
+  return {
+    status: parsedCoa?.error ? 'failed' : 'parsed',
+    parserVersion: parsedCoa?.parserVersion,
+    extractionMethod: parsedCoa?.extractionMethod,
+    templateId: parsedCoa?.templateId,
+    templateConfidence: parsedCoa?.templateConfidence,
+    pageCount: parsedCoa?.pageCount,
+    confidence: parsedCoa?.confidence,
+    warnings: Array.isArray(parsedCoa?.warnings) ? parsedCoa.warnings : [],
+    error: parsedCoa?.error || '',
+    fieldPresence: Object.fromEntries(
+      Object.entries(fields).map(([key, value]) => [key, Boolean(String(value ?? '').trim())]),
+    ),
+    snippetKeys: parsedCoa?.raw?.snippets && typeof parsedCoa.raw.snippets === 'object'
+      ? Object.keys(parsedCoa.raw.snippets)
+      : [],
+    verificationUrlCount: Array.isArray(parsedCoa?.raw?.verificationUrls) ? parsedCoa.raw.verificationUrls.length : 0,
+    vialImage: parsedCoa?.raw?.vialImage ?? null,
+  };
+}
+
+function serializeErrorForDiagnostics(error) {
+  if (!error || typeof error !== 'object') {
+    return {
+      message: String(error || 'Unknown error'),
+    };
+  }
+
+  return {
+    name: error.name,
+    message: error.message || 'Unknown error',
+    code: error.code,
+    cause: error.cause?.message || (error.cause ? String(error.cause) : ''),
+    stack: error.stack,
+  };
+}
+
+function sanitizeDiagnostics(value) {
+  if (Buffer.isBuffer(value)) {
+    return {
+      byteLength: value.length,
+      sha256: sha256Hex(value),
+    };
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 30).map(sanitizeDiagnostics);
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !/base64|password|secret|token/i.test(key))
+      .map(([key, entryValue]) => [key, sanitizeDiagnostics(entryValue)]),
+  );
 }
 
 async function storeCoaVialImageAsset({ fileName, safeFileName, image }) {

@@ -1,9 +1,10 @@
-import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { PNG } from 'pngjs';
 import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch } from './coa-pdf-normalizer.mjs';
 
 const parserVersion = 'coa-pdf-parser-v1';
 const maxRawSnippetLength = 1200;
+let pdfjsModulePromise;
+let pdfjsWorkerModulePromise;
 
 export { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch };
 
@@ -12,24 +13,105 @@ export async function parseCoaPdfBuffer(buffer, options = {}) {
 }
 
 export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
-  const imageExtractor = options.imageExtractor || extractPageImageCandidates;
+  const log = typeof options.log === 'function' ? options.log : () => {};
+  let pdfjs;
+
+  try {
+    pdfjs = await loadPdfJs();
+  } catch (error) {
+    log('parser-runtime-load-failed', {
+      fileName: options.fileName,
+      error: serializeErrorForDiagnostics(error),
+    }, 'error');
+    throw error;
+  }
+
+  const imageExtractor = options.imageExtractor || ((page, pageNumber) => extractPageImageCandidates(pdfjs, page, pageNumber));
   const data = new Uint8Array(buffer);
-  const document = await pdfjs.getDocument({
+  const pdfOptions = {
     data,
     disableWorker: true,
     verbosity: pdfjs.VerbosityLevel.ERRORS,
-  }).promise;
+  };
+
+  log('parser-document-open-start', {
+    fileName: options.fileName,
+    byteLength: buffer.length,
+    pdfjsVersion: pdfjs.version,
+    hasDOMMatrix: typeof globalThis.DOMMatrix !== 'undefined',
+    hasImageData: typeof globalThis.ImageData !== 'undefined',
+    hasPath2D: typeof globalThis.Path2D !== 'undefined',
+    hasPdfJsWorker: Boolean(globalThis.pdfjsWorker?.WorkerMessageHandler),
+    workerSrc: pdfjs.GlobalWorkerOptions?.workerSrc || '',
+  });
+
+  let document;
+
+  try {
+    document = await pdfjs.getDocument(pdfOptions).promise;
+  } catch (error) {
+    log('parser-document-open-failed', {
+      fileName: options.fileName,
+      error: serializeErrorForDiagnostics(error),
+    }, 'error');
+    throw error;
+  }
+
+  log('parser-document-open-complete', {
+    fileName: options.fileName,
+    pageCount: document.numPages,
+    fingerprints: Array.isArray(document.fingerprints) ? document.fingerprints : [],
+  });
+
   const pages = [];
   const annotationUrls = [];
   const imageCandidates = [];
   const parserWarnings = [];
 
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-    const page = await document.getPage(pageNumber);
-    const textContent = await page.getTextContent();
+    log('parser-page-start', {
+      fileName: options.fileName,
+      pageNumber,
+    });
+
+    let page;
+    let textContent;
+
+    try {
+      page = await document.getPage(pageNumber);
+    } catch (error) {
+      log('parser-page-open-failed', {
+        fileName: options.fileName,
+        pageNumber,
+        error: serializeErrorForDiagnostics(error),
+      }, 'error');
+      throw error;
+    }
+
+    try {
+      textContent = await page.getTextContent();
+    } catch (error) {
+      log('parser-page-text-failed', {
+        fileName: options.fileName,
+        pageNumber,
+        error: serializeErrorForDiagnostics(error),
+      }, 'error');
+      throw error;
+    }
+
     const lines = createPageLines(textContent.items);
+    log('parser-page-text-complete', {
+      fileName: options.fileName,
+      pageNumber,
+      textItemCount: Array.isArray(textContent.items) ? textContent.items.length : 0,
+      lineCount: lines.length,
+      textLength: lines.join('\n').length,
+      firstLines: lines.slice(0, 5),
+    });
+
     const annotations = await readPageAnnotations(page, {
       fileName: options.fileName,
+      log,
       pageNumber,
       parserWarnings,
     });
@@ -52,6 +134,7 @@ export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
       imageCandidates.push(...await readPageImageCandidates(page, {
         fileName: options.fileName,
         imageExtractor,
+        log,
         pageNumber,
         parserWarnings,
       }));
@@ -59,6 +142,17 @@ export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
   }
 
   const fullText = pages.map((page) => page.text).join('\n');
+  log('parser-text-assembled', {
+    fileName: options.fileName,
+    pageCount: pages.length,
+    totalTextLength: fullText.length,
+    pageLineCounts: pages.map((page) => ({
+      pageNumber: page.pageNumber,
+      lineCount: page.lines.length,
+      textLength: page.text.length,
+    })),
+  }, fullText.length > 0 ? 'log' : 'warn');
+
   const textUrls = extractVerificationUrls(fullText);
   const verificationUrl = [...annotationUrls, ...textUrls].find(isLikelyVerificationUrl) || textUrls[0] || '';
   const template = detectTemplate(fullText);
@@ -71,6 +165,30 @@ export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
   ];
   const confidence = calculateConfidence(fields, template, warnings);
   const vialImage = selectVialImageCandidate(imageCandidates);
+  const parsedSummary = {
+    fileName: options.fileName,
+    template,
+    confidence,
+    warnings,
+    fieldPresence: Object.fromEntries(
+      Object.entries(fields).map(([key, value]) => [key, Boolean(String(value ?? '').trim())]),
+    ),
+    annotationUrlCount: annotationUrls.length,
+    textUrlCount: textUrls.length,
+    imageCandidateCount: imageCandidates.length,
+    selectedVialImage: vialImage
+      ? {
+          name: vialImage.name,
+          pageNumber: vialImage.pageNumber,
+          operatorIndex: vialImage.operatorIndex,
+          width: vialImage.width,
+          height: vialImage.height,
+          score: vialImage.score,
+        }
+      : null,
+  };
+
+  log('parser-fields-complete', parsedSummary, warnings.length > 0 ? 'warn' : 'log');
 
   return {
     parsedCoa: compactParsedCoa({
@@ -101,35 +219,283 @@ export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
   };
 }
 
-async function readPageAnnotations(page, { fileName, pageNumber, parserWarnings }) {
+async function loadPdfJs() {
+  installPdfJsNodePolyfills();
+  pdfjsWorkerModulePromise ??= import('pdfjs-dist/legacy/build/pdf.worker.mjs');
+  pdfjsModulePromise ??= import('pdfjs-dist/legacy/build/pdf.mjs');
+  installPdfJsWorkerHandler(await pdfjsWorkerModulePromise);
+
+  return pdfjsModulePromise;
+}
+
+function installPdfJsWorkerHandler(workerModule) {
+  const workerHandler = workerModule?.WorkerMessageHandler;
+
+  if (!workerHandler) {
+    throw new Error('pdf.js worker module did not export WorkerMessageHandler.');
+  }
+
+  const existingWorker = globalThis.pdfjsWorker && typeof globalThis.pdfjsWorker === 'object'
+    ? globalThis.pdfjsWorker
+    : {};
+  globalThis.pdfjsWorker = {
+    ...existingWorker,
+    WorkerMessageHandler: workerHandler,
+  };
+}
+
+function installPdfJsNodePolyfills() {
+  if (typeof globalThis.DOMMatrix === 'undefined') {
+    globalThis.DOMMatrix = HelixDOMMatrix;
+  }
+
+  if (typeof globalThis.Path2D === 'undefined') {
+    globalThis.Path2D = HelixPath2D;
+  }
+
+  if (typeof globalThis.ImageData === 'undefined') {
+    globalThis.ImageData = HelixImageData;
+  }
+}
+
+class HelixDOMMatrix {
+  constructor(init) {
+    const values = Array.isArray(init) || ArrayBuffer.isView(init)
+      ? Array.from(init)
+      : typeof init === 'object' && init
+        ? [
+            init.a ?? init.m11,
+            init.b ?? init.m12,
+            init.c ?? init.m21,
+            init.d ?? init.m22,
+            init.e ?? init.m41,
+            init.f ?? init.m42,
+          ]
+        : [];
+    const [a = 1, b = 0, c = 0, d = 1, e = 0, f = 0] = values;
+
+    this.a = Number(a) || 0;
+    this.b = Number(b) || 0;
+    this.c = Number(c) || 0;
+    this.d = Number(d) || 0;
+    this.e = Number(e) || 0;
+    this.f = Number(f) || 0;
+  }
+
+  get m11() { return this.a; }
+  set m11(value) { this.a = Number(value) || 0; }
+  get m12() { return this.b; }
+  set m12(value) { this.b = Number(value) || 0; }
+  get m21() { return this.c; }
+  set m21(value) { this.c = Number(value) || 0; }
+  get m22() { return this.d; }
+  set m22(value) { this.d = Number(value) || 0; }
+  get m41() { return this.e; }
+  set m41(value) { this.e = Number(value) || 0; }
+  get m42() { return this.f; }
+  set m42(value) { this.f = Number(value) || 0; }
+  get is2D() { return true; }
+  get isIdentity() {
+    return this.a === 1 && this.b === 0 && this.c === 0 && this.d === 1 && this.e === 0 && this.f === 0;
+  }
+
+  multiply(other) {
+    return new HelixDOMMatrix(this.toFloat64Array()).multiplySelf(other);
+  }
+
+  multiplySelf(other) {
+    const matrix = new HelixDOMMatrix(other);
+    const a = this.a * matrix.a + this.c * matrix.b;
+    const b = this.b * matrix.a + this.d * matrix.b;
+    const c = this.a * matrix.c + this.c * matrix.d;
+    const d = this.b * matrix.c + this.d * matrix.d;
+    const e = this.a * matrix.e + this.c * matrix.f + this.e;
+    const f = this.b * matrix.e + this.d * matrix.f + this.f;
+
+    this.a = a;
+    this.b = b;
+    this.c = c;
+    this.d = d;
+    this.e = e;
+    this.f = f;
+    return this;
+  }
+
+  preMultiplySelf(other) {
+    const matrix = new HelixDOMMatrix(other);
+    const next = matrix.multiply(this);
+
+    this.a = next.a;
+    this.b = next.b;
+    this.c = next.c;
+    this.d = next.d;
+    this.e = next.e;
+    this.f = next.f;
+    return this;
+  }
+
+  translate(x = 0, y = 0) {
+    return new HelixDOMMatrix(this.toFloat64Array()).translateSelf(x, y);
+  }
+
+  translateSelf(x = 0, y = 0) {
+    return this.multiplySelf([1, 0, 0, 1, Number(x) || 0, Number(y) || 0]);
+  }
+
+  scale(scaleX = 1, scaleY = scaleX) {
+    return new HelixDOMMatrix(this.toFloat64Array()).scaleSelf(scaleX, scaleY);
+  }
+
+  scaleSelf(scaleX = 1, scaleY = scaleX) {
+    return this.multiplySelf([Number(scaleX) || 0, 0, 0, Number(scaleY) || 0, 0, 0]);
+  }
+
+  inverse() {
+    return new HelixDOMMatrix(this.toFloat64Array()).invertSelf();
+  }
+
+  invertSelf() {
+    const determinant = this.a * this.d - this.b * this.c;
+
+    if (!determinant) {
+      this.a = Number.NaN;
+      this.b = Number.NaN;
+      this.c = Number.NaN;
+      this.d = Number.NaN;
+      this.e = Number.NaN;
+      this.f = Number.NaN;
+      return this;
+    }
+
+    const a = this.d / determinant;
+    const b = -this.b / determinant;
+    const c = -this.c / determinant;
+    const d = this.a / determinant;
+    const e = (this.c * this.f - this.d * this.e) / determinant;
+    const f = (this.b * this.e - this.a * this.f) / determinant;
+
+    this.a = a;
+    this.b = b;
+    this.c = c;
+    this.d = d;
+    this.e = e;
+    this.f = f;
+    return this;
+  }
+
+  toFloat32Array() {
+    return Float32Array.from(this.toFloat64Array());
+  }
+
+  toFloat64Array() {
+    return [this.a, this.b, this.c, this.d, this.e, this.f];
+  }
+}
+
+class HelixPath2D {
+  addPath() {}
+  arc() {}
+  arcTo() {}
+  bezierCurveTo() {}
+  closePath() {}
+  ellipse() {}
+  lineTo() {}
+  moveTo() {}
+  quadraticCurveTo() {}
+  rect() {}
+  roundRect() {}
+}
+
+class HelixImageData {
+  constructor(dataOrWidth, widthOrHeight, heightOrSettings, settings = {}) {
+    if (typeof dataOrWidth === 'number') {
+      this.width = Math.max(0, Math.round(dataOrWidth));
+      this.height = Math.max(0, Math.round(Number(widthOrHeight) || 0));
+      this.data = new Uint8ClampedArray(this.width * this.height * 4);
+      this.colorSpace = heightOrSettings?.colorSpace || 'srgb';
+      return;
+    }
+
+    this.data = dataOrWidth;
+    this.width = Math.max(0, Math.round(Number(widthOrHeight) || 0));
+    this.height = Math.max(0, Math.round(Number(heightOrSettings) || 0));
+    this.colorSpace = settings?.colorSpace || 'srgb';
+  }
+}
+
+async function readPageAnnotations(page, { fileName, log, pageNumber, parserWarnings }) {
   try {
-    return await page.getAnnotations();
+    const annotations = await page.getAnnotations();
+
+    log('parser-page-annotations-complete', {
+      fileName,
+      pageNumber,
+      annotationCount: Array.isArray(annotations) ? annotations.length : 0,
+    });
+
+    return annotations;
   } catch (error) {
     parserWarnings.push('PDF annotations could not be read.');
-    console.error('[coa-pdf-parser] annotation extraction failed', {
+    log('parser-page-annotations-failed', {
       fileName,
       pageNumber,
-      error,
-    });
+      error: serializeErrorForDiagnostics(error),
+    }, 'warn');
     return [];
   }
 }
 
-async function readPageImageCandidates(page, { fileName, imageExtractor, pageNumber, parserWarnings }) {
+async function readPageImageCandidates(page, { fileName, imageExtractor, log, pageNumber, parserWarnings }) {
   try {
-    return await imageExtractor(page, pageNumber);
+    log('parser-page-image-start', {
+      fileName,
+      pageNumber,
+    });
+
+    const candidates = await imageExtractor(page, pageNumber);
+
+    log('parser-page-image-complete', {
+      fileName,
+      pageNumber,
+      candidateCount: candidates.length,
+      candidates: candidates.map((candidate) => ({
+        name: candidate.name,
+        operatorIndex: candidate.operatorIndex,
+        width: candidate.width,
+        height: candidate.height,
+        score: candidate.score,
+      })),
+    });
+
+    return candidates;
   } catch (error) {
     parserWarnings.push('COA vial image could not be extracted.');
-    console.error('[coa-pdf-parser] vial image extraction failed', {
+    log('parser-page-image-failed', {
       fileName,
       pageNumber,
-      error,
-    });
+      error: serializeErrorForDiagnostics(error),
+    }, 'warn');
     return [];
   }
 }
 
-async function extractPageImageCandidates(page, pageNumber) {
+function serializeErrorForDiagnostics(error) {
+  if (!error || typeof error !== 'object') {
+    return {
+      message: String(error || 'Unknown error'),
+    };
+  }
+
+  return {
+    name: error.name,
+    message: error.message || 'Unknown error',
+    code: error.code,
+    cause: error.cause?.message || (error.cause ? String(error.cause) : ''),
+    stack: error.stack,
+  };
+}
+
+async function extractPageImageCandidates(pdfjs, page, pageNumber) {
   const operatorList = await page.getOperatorList();
   const candidates = [];
   const pageWidth = Math.abs(Number(page.view?.[2]) - Number(page.view?.[0])) || 612;
@@ -167,7 +533,7 @@ async function extractPageImageCandidates(page, pageNumber) {
     }
 
     const image = await getPageImageObject(page, name);
-    const candidate = createImageCandidate({ image, name, pageNumber, operatorIndex: index, placement });
+    const candidate = createImageCandidate({ pdfjs, image, name, pageNumber, operatorIndex: index, placement });
 
     if (candidate) {
       candidates.push(candidate);
@@ -208,7 +574,7 @@ function getPageImageObject(page, name) {
   });
 }
 
-function createImageCandidate({ image, name, pageNumber, operatorIndex, placement }) {
+function createImageCandidate({ pdfjs, image, name, pageNumber, operatorIndex, placement }) {
   const width = Math.max(0, Math.round(Number(image?.width) || 0));
   const height = Math.max(0, Math.round(Number(image?.height) || 0));
 
@@ -216,14 +582,14 @@ function createImageCandidate({ image, name, pageNumber, operatorIndex, placemen
     return null;
   }
 
-  const rgba = toRgbaBuffer(image);
+  const rgba = toRgbaBuffer(pdfjs, image);
   const content = analyzeImageContent(rgba, width, height);
 
   if (content.visibleRatio < 0.02 || content.nonWhiteRatio < 0.01) {
     return null;
   }
 
-  const score = scoreVialImageCandidate({ width, height, kind: image.kind, operatorIndex, content, placement });
+  const score = scoreVialImageCandidate({ pdfjs, width, height, kind: image.kind, operatorIndex, content, placement });
   const png = new PNG({ width, height });
   png.data = rgba;
 
@@ -260,7 +626,7 @@ function isSaneVialImageSize(width, height, placement = {}) {
     && (!drawHeight || (drawHeight >= 45 && drawHeight <= 180));
 }
 
-function toRgbaBuffer(image) {
+function toRgbaBuffer(pdfjs, image) {
   const width = Math.max(0, Math.round(Number(image.width) || 0));
   const height = Math.max(0, Math.round(Number(image.height) || 0));
   const pixelCount = width * height;
@@ -321,7 +687,7 @@ function analyzeImageContent(rgba, width, height) {
   };
 }
 
-function scoreVialImageCandidate({ width, height, kind, operatorIndex, content, placement }) {
+function scoreVialImageCandidate({ pdfjs, width, height, kind, operatorIndex, content, placement }) {
   let score = 0;
   const aspectRatio = width / height;
   const isRightSide = placement.x >= placement.pageWidth * 0.72;

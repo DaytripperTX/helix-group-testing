@@ -36,6 +36,40 @@ const fixtureCases = [
   },
 ];
 
+{
+  const fixtureCase = fixtureCases[0];
+  const fixturePath = resolveLocalCoaFixture(fixtureCase.fileName);
+
+  test('parses COA fixture when serverless DOM canvas globals are missing', { skip: !fixturePath }, async () => {
+    const originalDOMMatrix = globalThis.DOMMatrix;
+    const originalPath2D = globalThis.Path2D;
+    const originalImageData = globalThis.ImageData;
+    const originalPdfJsWorker = globalThis.pdfjsWorker;
+
+    delete globalThis.DOMMatrix;
+    delete globalThis.Path2D;
+    delete globalThis.ImageData;
+    delete globalThis.pdfjsWorker;
+
+    try {
+      const pdf = await readFile(fixturePath);
+      const result = await parseCoaPdfUploadBuffer(pdf, { fileName: fixtureCase.fileName });
+
+      assert.equal(typeof globalThis.DOMMatrix, 'function');
+      assert.equal(typeof globalThis.Path2D, 'function');
+      assert.equal(typeof globalThis.ImageData, 'function');
+      assert.equal(typeof globalThis.pdfjsWorker?.WorkerMessageHandler, 'function');
+      assert.equal(result.parsedCoa.fields.lotNumber, fixtureCase.lotNumber);
+      assert.equal(result.parsedCoa.fields.purity, fixtureCase.purity);
+    } finally {
+      restoreGlobal('DOMMatrix', originalDOMMatrix);
+      restoreGlobal('Path2D', originalPath2D);
+      restoreGlobal('ImageData', originalImageData);
+      restoreGlobal('pdfjsWorker', originalPdfJsWorker);
+    }
+  });
+}
+
 for (const fixtureCase of fixtureCases) {
   const fixturePath = resolveLocalCoaFixture(fixtureCase.fileName);
 
@@ -124,4 +158,13 @@ function resolveLocalCoaFixture(fileName) {
   ];
 
   return candidates.find((candidate) => candidate && existsSync(candidate)) || '';
+}
+
+function restoreGlobal(name, value) {
+  if (typeof value === 'undefined') {
+    delete globalThis[name];
+    return;
+  }
+
+  globalThis[name] = value;
 }

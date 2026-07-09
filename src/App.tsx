@@ -273,6 +273,7 @@ type CoaPdfAsset = {
   vialImageMode?: 'extracted' | 'placeholder';
   vialImageExtractedAt?: string;
   parsedCoa?: ParsedCoa;
+  diagnostics?: Record<string, unknown>;
 };
 
 type CoaTestResultKey =
@@ -3107,6 +3108,21 @@ async function readCoaJsonResponse<T>(response: Response, fallbackMessage: strin
 }
 
 async function uploadCoaPdf(file: File): Promise<CoaPdfAsset> {
+  console.info('[coa-pdf] upload start', {
+    fileName: file.name,
+    mimeType: file.type || 'application/pdf',
+    size: file.size,
+    lastModified: file.lastModified,
+  });
+
+  const base64 = await fileToBase64(file);
+
+  console.info('[coa-pdf] upload file encoded', {
+    fileName: file.name,
+    size: file.size,
+    base64Length: base64.length,
+  });
+
   const response = await fetch('/api/admin/assets/coa-pdf', {
     method: 'POST',
     credentials: 'same-origin',
@@ -3116,15 +3132,52 @@ async function uploadCoaPdf(file: File): Promise<CoaPdfAsset> {
     body: JSON.stringify({
       fileName: file.name,
       mimeType: file.type || 'application/pdf',
-      base64: await fileToBase64(file),
+      base64,
     }),
   });
 
+  console.info('[coa-pdf] upload response received', {
+    fileName: file.name,
+    status: response.status,
+    statusText: response.statusText,
+    ok: response.ok,
+  });
+
   if (!response.ok) {
+    const text = await response.text();
+
+    console.error('[coa-pdf] upload request failed', {
+      fileName: file.name,
+      status: response.status,
+      statusText: response.statusText,
+      bodyPreview: text.slice(0, 1200),
+    });
+
     throw new Error('COA PDF could not be uploaded.');
   }
 
-  return (await response.json()) as CoaPdfAsset;
+  const asset = (await response.json()) as CoaPdfAsset;
+  const parserWarnings = asset.parsedCoa?.warnings ?? [];
+
+  if (asset.parsedCoa?.error || parserWarnings.length > 0) {
+    console.error('[coa-pdf] upload completed with parser diagnostics', {
+      fileName: file.name,
+      coaBlobKey: asset.coaBlobKey,
+      parserError: asset.parsedCoa?.error,
+      parserWarnings,
+      diagnostics: asset.diagnostics,
+      parsedCoa: asset.parsedCoa,
+    });
+  } else {
+    console.info('[coa-pdf] upload completed with parsed COA', {
+      fileName: file.name,
+      coaBlobKey: asset.coaBlobKey,
+      diagnostics: asset.diagnostics,
+      parsedFields: asset.parsedCoa?.fields,
+    });
+  }
+
+  return asset;
 }
 
 async function parseCoaBatchNumberFile(file: File): Promise<CoaBatchImportRow[]> {
@@ -3365,12 +3418,14 @@ function normalizeParsedStatus(value: string, fallback: string) {
 
 function createParsedCoaStatus(parsedCoa: ParsedCoa | undefined, fallback: string) {
   const warnings = parsedCoa?.warnings ?? [];
+  const parserError = parsedCoa?.error ? `Parser error: ${parsedCoa.error}` : '';
+  const details = [...warnings.slice(0, 2), parserError].filter(Boolean);
 
-  if (warnings.length === 0) {
+  if (details.length === 0) {
     return fallback;
   }
 
-  return `${fallback} ${warnings.slice(0, 2).join(' ')}`;
+  return `${fallback} ${details.join(' ')}`;
 }
 
 function getCoaErrorMessage(error: unknown, fallback: string) {
