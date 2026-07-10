@@ -138,6 +138,7 @@ type CoaResult = {
   vialImageUrl?: string;
   isResultLocked: boolean;
   hasRoundPasscode: boolean;
+  lockedResultStates: Record<string, 'pending' | 'populated'>;
 };
 
 type ParsedCoa = {
@@ -2014,12 +2015,17 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
         {unlockTarget && (
           <CoaModal title={`Unlock ${unlockTarget.roundName}`} onClose={closeRoundUnlockModal}>
             <form className="coa-modal-form" onSubmit={submitRoundUnlock}>
+              <p className="coa-modal-note">The password for this round can be found in the Helix Skool</p>
               <label className="coa-modal-field">
                 <span>Round passcode</span>
                 <input
+                  key={unlockTarget.roundId}
+                  name={`coa-round-passcode-${unlockTarget.roundId}`}
                   type="password"
                   value={unlockPasscode}
-                  autoComplete="off"
+                  autoComplete="new-password"
+                  autoCorrect="off"
+                  spellCheck={false}
                   onChange={(event) => setUnlockPasscode(event.target.value)}
                 />
               </label>
@@ -2320,7 +2326,7 @@ function CoaResultTableRow({
                 onUnlock(group.roundId, group.roundName);
               }}
             >
-              Unlock round
+              {getRoundUnlockButtonText(group.roundName)}
             </button>
           )}
           {renderCoaResultTableValue(result, column)}
@@ -2329,6 +2335,19 @@ function CoaResultTableRow({
       <td className={result.isResultLocked ? 'coa-locked-result-cell' : ''} data-label="COA" ref={lastLockedCellRef}>
         {renderCoaDocumentTableValue(result)}
       </td>
+      {result.isResultLocked && (
+        <td className="coa-mobile-unlock-cell">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onUnlock(group.roundId, group.roundName);
+            }}
+          >
+            {getRoundUnlockButtonText(group.roundName)}
+          </button>
+        </td>
+      )}
       {isAdmin && (
         <td data-label="Admin">
           <div className="coa-row-actions">
@@ -2415,7 +2434,7 @@ function CoaBatchDetail({
             </button>
             {isLocked && (
               <button type="button" onClick={() => onUnlock(result.roundId, result.roundName)}>
-                Unlock round
+                {getRoundUnlockButtonText(result.roundName)}
               </button>
             )}
             {!isLocked && !result.coaBlobKey && <span className="coa-pill coa-pill--pending">Pending</span>}
@@ -2957,7 +2976,10 @@ function filterCoaResults(results: CoaResult[], searchTerm: string, peptideFilte
 
 function renderCoaResultTableValue(result: CoaResult, column: CoaResultColumn) {
   if (result.isResultLocked) {
-    return <span className="coa-pill coa-pill--locked coa-obscured-value">Hidden</span>;
+    const lockedState = result.lockedResultStates[column.key];
+    const pillClassName = lockedState === 'populated' ? 'coa-pill--pass' : 'coa-pill--pending';
+
+    return <span className={`coa-pill ${pillClassName} coa-obscured-value`}>Hidden</span>;
   }
 
   const value = getCoaResultValueForTier(result, column.key);
@@ -3006,6 +3028,10 @@ function getCoaResultValueForTier(result: CoaResult, key: CoaTestResultKey) {
   }
 
   return result[key] || 'Pending';
+}
+
+function getRoundUnlockButtonText(roundName: string) {
+  return `Unlock ${roundName || 'round'} results`;
 }
 
 function isCoaTestResultIncluded(tier: TestingTierId, key: CoaTestResultKey) {
@@ -3113,7 +3139,19 @@ function normalizeCoaResult(value: unknown): CoaResult | null {
     updatedAt: sanitizeClientText(coa.updatedAt),
     isResultLocked: coa.isResultLocked === true,
     hasRoundPasscode: coa.hasRoundPasscode === true,
+    lockedResultStates: normalizeLockedResultStates(coa.lockedResultStates),
   };
+}
+
+function normalizeLockedResultStates(value: unknown): CoaResult['lockedResultStates'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [string, 'pending' | 'populated'] => entry[1] === 'pending' || entry[1] === 'populated'),
+  );
 }
 
 function normalizeParsedCoa(value: unknown): ParsedCoa | undefined {
@@ -3632,6 +3670,7 @@ function createCoaEntryFromRoundRow(
     fentanyl: 'Pending',
     isResultLocked: false,
     hasRoundPasscode: false,
+    lockedResultStates: {},
   };
 }
 

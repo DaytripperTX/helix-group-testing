@@ -47,6 +47,14 @@ const redactedCoaResultFields = [
   'vialImageExtractedAt',
   'parsedCoa',
 ];
+const coaResultValueFields = [
+  'averageNetContent',
+  'purity',
+  'endotoxins',
+  'heavyMetals',
+  'sterility',
+  'fentanyl',
+];
 const blockedTextFragments = [
   'fuck',
   'shit',
@@ -226,6 +234,9 @@ function toPublicCoaItem(coa, rounds, roundAccess) {
     ...publicCoa,
     isResultLocked: true,
     hasRoundPasscode: true,
+    lockedResultStates: Object.fromEntries(
+      coaResultValueFields.map((field) => [field, isPendingCoaResultValue(coa?.[field]) ? 'pending' : 'populated']),
+    ),
   };
 }
 
@@ -250,6 +261,12 @@ function findCoaRound(coa, rounds) {
   }
 
   return rounds.find((round) => round?.id === coa.roundId) ?? null;
+}
+
+function isPendingCoaResultValue(value) {
+  const cleanValue = sanitizeRoundText(value, 80).toLowerCase();
+
+  return !cleanValue || cleanValue === 'pending' || cleanValue === '-';
 }
 
 export async function upsertCollectionItem(collectionName, itemId, item) {
