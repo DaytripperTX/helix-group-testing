@@ -5119,6 +5119,56 @@ h2 {
   color: #9a341e;
 }
 
+.coa-pill--locked {
+  border-color: #c8d7e1;
+  background: #eef2f6;
+  color: #526170;
+}
+
+.coa-obscured-value {
+  min-width: 72px;
+  filter: blur(3px);
+  user-select: none;
+}
+
+.coa-results-table tbody tr.is-result-locked:hover,
+.coa-results-table tbody tr.is-result-locked:focus-visible {
+  background: #f7fafc;
+}
+
+.coa-results-table tbody tr.is-unlock-anchor {
+  position: relative;
+}
+
+.coa-locked-result-cell {
+  background:
+    linear-gradient(135deg, rgba(220, 228, 236, 0.42) 25%, transparent 25%) 0 0 / 10px 10px,
+    #fbfdff;
+}
+
+.coa-result-unlock-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  border: 1px solid #07101f;
+  border-radius: 8px;
+  padding: 9px 13px;
+  background: #07101f;
+  color: #ffffff;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(5, 8, 22, 0.16);
+}
+
+.coa-result-unlock-overlay:hover,
+.coa-result-unlock-overlay:focus-visible {
+  background: #142133;
+}
+
 .coa-tier--platinum {
   border-color: rgba(19, 244, 255, 0.54);
   background: #e4fbff;
@@ -5561,6 +5611,21 @@ h2 {
   min-height: 29px;
   padding: 5px 11px;
   font-size: 0.94rem;
+}
+
+.coa-detail__locked {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #d7e2ea;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fbfd;
+}
+
+.coa-detail__locked p {
+  margin: 0;
+  color: #526170;
+  font-weight: 760;
 }
 
 .coa-cap-color {
@@ -6572,6 +6637,14 @@ h2 {
 
   .coa-empty-row td::before {
     content: none;
+  }
+
+  .coa-result-unlock-overlay {
+    position: static;
+    grid-column: 1 / -1;
+    width: max-content;
+    margin: 2px 0 8px;
+    transform: none;
   }
 
   .coa-link {

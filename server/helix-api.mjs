@@ -18,6 +18,7 @@ import {
   publicUpsertLabelTemplate,
   publicVoteLabelTemplate,
   readCollection,
+  readPublicCollection,
   readCoaPdfAsset,
   readCoaVialImageAsset,
   readLabelTemplatePreviewAsset,
@@ -30,9 +31,13 @@ import {
 } from './helix-data.mjs';
 import {
   createAdminSessionCookie,
+  createCoaRoundAccessCookie,
   createLogoutCookie,
+  getCoaRoundAccess,
+  getCoaRoundPasscodeFingerprint,
   getAdminSession,
   getPublicSession,
+  validateCoaRoundPasscode,
   validateRolePassword,
 } from './helix-auth.mjs';
 import { parsePeptideBatch } from './peptide-batch-parser.mjs';
@@ -68,8 +73,8 @@ export async function handleHelixApiRequest(request) {
         return jsonResponse(401, { error: 'Admin login required' });
       }
 
-      if (collectionName === 'label-templates' && !session) {
-        return jsonResponse(200, await readPublicLabelTemplates());
+      if (!session) {
+        return jsonResponse(200, await readPublicCollection(collectionName, request.headers));
       }
 
       return jsonResponse(200, await readCollection(collectionName));
@@ -102,23 +107,52 @@ export async function handleHelixApiRequest(request) {
 
     if (method === 'GET' && pathname.startsWith('/api/coas/') && getPathPart(pathname, 4) === 'pdf') {
       const coaId = decodeURIComponent(getPathPart(pathname, 3));
-      const pdf = await readCoaPdfAsset(coaId);
+      const pdf = await readCoaPdfAsset(coaId, {
+        headers: request.headers,
+        isAdmin: Boolean(getAdminSession(request.headers)),
+      });
 
       return binaryResponse(200, pdf.buffer, {
         'Content-Type': pdf.mimeType,
-        'Cache-Control': 'public, max-age=3600',
+        'Cache-Control': 'private, no-cache',
         'Content-Disposition': `inline; filename="${pdf.fileName.replace(/["\\]/g, '')}"`,
       });
     }
 
     if (method === 'GET' && pathname.startsWith('/api/coas/') && getPathPart(pathname, 4) === 'vial-image') {
       const coaId = decodeURIComponent(getPathPart(pathname, 3));
-      const image = await readCoaVialImageAsset(coaId);
+      const image = await readCoaVialImageAsset(coaId, {
+        headers: request.headers,
+        isAdmin: Boolean(getAdminSession(request.headers)),
+      });
 
       return binaryResponse(200, image.buffer, {
         'Content-Type': image.mimeType,
         'Cache-Control': 'private, no-cache',
         'Content-Disposition': `inline; filename="${image.fileName.replace(/["\\]/g, '')}"`,
+      });
+    }
+
+    if (pathname === '/api/coas/round-passcode' && method === 'POST') {
+      enforceThrottle(request.headers, 'coa-round-passcode', 30);
+      const body = parseJsonBody(request.bodyText);
+      const roundId = typeof body?.roundId === 'string' ? body.roundId.trim() : '';
+      const rounds = await readCollection('rounds');
+      const round = rounds.find((currentRound) => currentRound?.id === roundId);
+
+      if (!round) {
+        return jsonResponse(404, { error: 'Round not found' });
+      }
+
+      if (!validateCoaRoundPasscode(round, body?.passcode)) {
+        return jsonResponse(401, { error: 'Invalid passcode' });
+      }
+
+      return jsonResponse(200, { ok: true, roundId: round.id }, {
+        'Set-Cookie': createCoaRoundAccessCookie({
+          ...getCoaRoundAccess(request.headers),
+          [round.id]: getCoaRoundPasscodeFingerprint(round),
+        }),
       });
     }
 

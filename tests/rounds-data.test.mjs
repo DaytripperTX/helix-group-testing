@@ -35,6 +35,29 @@ test('rounds are public readable and admin writable only', async () => {
   assert.ok(JSON.parse(adminWrite.body).some((round) => round.id === 'admin-write-test'));
 });
 
+test('round passcodes are redacted from public reads and visible to admins', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  const saveResponse = await apiRequest('/api/admin/data/rounds/passcode-round', 'PUT', createRound({
+    id: 'passcode-round',
+    name: 'Passcode Round',
+    resultPasscode: 'round-secret',
+  }), { cookie: adminCookie });
+
+  assert.equal(saveResponse.statusCode, 200);
+
+  const publicRead = await apiRequest('/api/data/rounds', 'GET');
+  const adminRead = await apiRequest('/api/data/rounds', 'GET', undefined, { cookie: adminCookie });
+  const publicRound = JSON.parse(publicRead.body).find((round) => round.id === 'passcode-round');
+  const adminRound = JSON.parse(adminRead.body).find((round) => round.id === 'passcode-round');
+
+  assert.equal(publicRound.resultPasscode, undefined);
+  assert.equal(publicRound.hasResultPasscode, true);
+  assert.equal(adminRound.resultPasscode, 'round-secret');
+  assert.equal(adminRound.hasResultPasscode, undefined);
+});
+
 test('round normalization keeps public fields bounded and allowlisted', async () => {
   await resetData();
   const adminCookie = await loginAdmin();

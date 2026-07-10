@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch } from './coa-pdf-normalizer.mjs';
+import { getCoaRoundAccess, hasCoaRoundAccess } from './helix-auth.mjs';
 
 const rootDir = process.env.HELIX_ROOT_DIR
   ? path.resolve(process.env.HELIX_ROOT_DIR)
@@ -24,6 +25,28 @@ const maxReportCountBeforeHide = 5;
 const trashRetentionMs = 5 * 24 * 60 * 60 * 1000;
 const allowedPreviewMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const allowedReportReasons = new Set(['offensive', 'spam', 'unsafe', 'other']);
+const redactedCoaResultFields = [
+  'coaNumber',
+  'accessionNumber',
+  'verificationUrl',
+  'averageNetContent',
+  'purity',
+  'endotoxins',
+  'heavyMetals',
+  'sterility',
+  'fentanyl',
+  'coaFileName',
+  'coaMimeType',
+  'coaBlobKey',
+  'coaUploadedAt',
+  'vialImageAssetKey',
+  'vialImageMimeType',
+  'vialImageFileName',
+  'vialImageSource',
+  'vialImageMode',
+  'vialImageExtractedAt',
+  'parsedCoa',
+];
 const blockedTextFragments = [
   'fuck',
   'shit',
@@ -70,6 +93,32 @@ export async function readCollection(collectionName) {
   return getDocumentPayload(collectionName, document);
 }
 
+export async function readPublicCollection(collectionName, headers = {}) {
+  if (collectionName === 'label-templates') {
+    return await readPublicLabelTemplates();
+  }
+
+  if (collectionName === 'rounds') {
+    return (await readCollection('rounds')).map(toPublicRoundItem);
+  }
+
+  if (collectionName === 'coas') {
+    return await readPublicCoaCollection(headers);
+  }
+
+  return await readCollection(collectionName);
+}
+
+export async function readPublicCoaCollection(headers = {}) {
+  const [coas, rounds] = await Promise.all([
+    readCollection('coas'),
+    readCollection('rounds'),
+  ]);
+  const roundAccess = getCoaRoundAccess(headers);
+
+  return coas.map((coa) => toPublicCoaItem(coa, rounds, roundAccess));
+}
+
 export async function readPublicLabelTemplates() {
   const templates = await readCollection('label-templates');
 
@@ -109,13 +158,15 @@ export async function readLabelTemplatePreviewAsset(itemId, { isAdmin = false } 
   };
 }
 
-export async function readCoaPdfAsset(itemId) {
+export async function readCoaPdfAsset(itemId, options = {}) {
   const coas = await readCollection('coas');
   const coa = coas.find((item) => item?.id === itemId);
 
   if (!coa || !coa.coaBlobKey) {
     throw createHttpError(404, 'COA PDF not found.');
   }
+
+  await assertCoaRoundAccess(coa, options);
 
   return {
     buffer: await readCoaPdfBuffer(coa.coaBlobKey),
@@ -124,7 +175,7 @@ export async function readCoaPdfAsset(itemId) {
   };
 }
 
-export async function readCoaVialImageAsset(itemId) {
+export async function readCoaVialImageAsset(itemId, options = {}) {
   const coas = await readCollection('coas');
   const coa = coas.find((item) => item?.id === itemId);
 
@@ -132,11 +183,73 @@ export async function readCoaVialImageAsset(itemId) {
     throw createHttpError(404, 'COA vial image not found.');
   }
 
+  await assertCoaRoundAccess(coa, options);
+
   return {
     buffer: await readCoaVialImageBuffer(coa.vialImageAssetKey),
     mimeType: coa.vialImageMimeType || 'image/png',
     fileName: sanitizePreviewFileName(coa.vialImageFileName || `${coa.id}-vial.png`, coa.vialImageMimeType || 'image/png'),
   };
+}
+
+function toPublicRoundItem(round) {
+  const resultPasscode = sanitizeRoundText(round?.resultPasscode, 120);
+  const { resultPasscode: _resultPasscode, ...publicRound } = round ?? {};
+
+  void _resultPasscode;
+
+  return {
+    ...publicRound,
+    hasResultPasscode: Boolean(resultPasscode),
+  };
+}
+
+function toPublicCoaItem(coa, rounds, roundAccess) {
+  const round = findCoaRound(coa, rounds);
+  const isResultLocked = round ? !hasCoaRoundAccess(round, roundAccess) : false;
+
+  if (!isResultLocked) {
+    return {
+      ...coa,
+      isResultLocked: false,
+      hasRoundPasscode: Boolean(round?.resultPasscode),
+    };
+  }
+
+  const publicCoa = { ...coa };
+
+  for (const field of redactedCoaResultFields) {
+    delete publicCoa[field];
+  }
+
+  return {
+    ...publicCoa,
+    isResultLocked: true,
+    hasRoundPasscode: true,
+  };
+}
+
+async function assertCoaRoundAccess(coa, { headers = {}, isAdmin = false } = {}) {
+  if (isAdmin) {
+    return;
+  }
+
+  const rounds = await readCollection('rounds');
+  const round = findCoaRound(coa, rounds);
+
+  if (!round || hasCoaRoundAccess(round, getCoaRoundAccess(headers))) {
+    return;
+  }
+
+  throw createHttpError(403, 'Round passcode required.');
+}
+
+function findCoaRound(coa, rounds) {
+  if (!coa || !Array.isArray(rounds)) {
+    return null;
+  }
+
+  return rounds.find((round) => round?.id === coa.roundId) ?? null;
 }
 
 export async function upsertCollectionItem(collectionName, itemId, item) {
@@ -1727,6 +1840,7 @@ function normalizeRoundItem(item, options = {}) {
     startDate: normalizeDateString(item.startDate),
     endDate: normalizeDateString(item.endDate),
     targetWindow: sanitizeRoundText(item.targetWindow, 120),
+    resultPasscode: sanitizeRoundText(item.resultPasscode, 120),
     participants: normalizeNonNegativeInteger(item.participants),
     roundDiscountPercent: normalizePercentage(item.roundDiscountPercent),
     priceListSnapshot,

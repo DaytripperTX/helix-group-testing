@@ -2,8 +2,10 @@ import './helix-env.mjs';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const adminCookieName = 'helix_admin_session';
+export const coaRoundAccessCookieName = 'helix_coa_round_access';
 
 const sessionMaxAgeSeconds = 60 * 60 * 12;
+const coaRoundAccessMaxAgeSeconds = 60 * 60 * 24 * 365 * 10;
 const ephemeralLocalSessionSecret = randomBytes(32).toString('base64url');
 
 export function getAdminSession(headers = {}) {
@@ -61,6 +63,82 @@ export function createLogoutCookie() {
   });
 }
 
+export function getCoaRoundAccess(headers = {}) {
+  const token = getCookie(headers, coaRoundAccessCookieName);
+
+  if (!token) {
+    return {};
+  }
+
+  const payload = verifySessionToken(token);
+
+  if (!payload || payload.exp < Math.floor(Date.now() / 1000) || !payload.rounds || typeof payload.rounds !== 'object') {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(payload.rounds)
+      .filter(([roundId, fingerprint]) => (
+        typeof roundId === 'string'
+        && typeof fingerprint === 'string'
+        && roundId.length > 0
+        && fingerprint.length > 0
+      )),
+  );
+}
+
+export function createCoaRoundAccessCookie(roundAccess = {}) {
+  const expiresAt = Math.floor(Date.now() / 1000) + coaRoundAccessMaxAgeSeconds;
+  const token = signSessionToken({
+    exp: expiresAt,
+    rounds: Object.fromEntries(
+      Object.entries(roundAccess)
+        .filter(([roundId, fingerprint]) => (
+          typeof roundId === 'string'
+          && typeof fingerprint === 'string'
+          && roundId.length > 0
+          && fingerprint.length > 0
+        )),
+    ),
+  });
+
+  return serializeCookie(coaRoundAccessCookieName, token, {
+    httpOnly: true,
+    maxAge: coaRoundAccessMaxAgeSeconds,
+    sameSite: 'Lax',
+    secure: shouldUseSecureCookies(),
+    path: '/',
+  });
+}
+
+export function getCoaRoundPasscodeFingerprint(round) {
+  const passcode = getRoundResultPasscode(round);
+
+  return passcode
+    ? signText(`coa-round:${round.id}:${passcode}`).slice(0, 32)
+    : '';
+}
+
+export function hasCoaRoundAccess(round, roundAccess = {}) {
+  const passcode = getRoundResultPasscode(round);
+
+  if (!passcode) {
+    return true;
+  }
+
+  return roundAccess?.[round.id] === getCoaRoundPasscodeFingerprint(round);
+}
+
+export function validateCoaRoundPasscode(round, passcode) {
+  const configuredPasscode = getRoundResultPasscode(round);
+
+  if (!configuredPasscode || typeof passcode !== 'string') {
+    return false;
+  }
+
+  return timingSafeStringEqual(passcode.trim(), configuredPasscode);
+}
+
 export function getPublicSession(session) {
   return session
     ? {
@@ -108,6 +186,10 @@ function getSessionSecret() {
   }
 
   throw new Error('HELIX_ADMIN_SESSION_SECRET is required for admin sessions.');
+}
+
+function getRoundResultPasscode(round) {
+  return typeof round?.resultPasscode === 'string' ? round.resultPasscode.trim() : '';
 }
 
 function getConfiguredPasswordForRole(role) {

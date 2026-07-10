@@ -173,6 +173,7 @@ type RoundForm = {
   startDate: string;
   endDate: string;
   targetWindow: string;
+  resultPasscode: string;
   participants: string;
   roundDiscountPercent: string;
   priceSourceMode: RoundPriceSourceMode;
@@ -238,6 +239,7 @@ const emptyRoundForm: RoundForm = {
   startDate: '',
   endDate: '',
   targetWindow: '',
+  resultPasscode: '',
   participants: '',
   roundDiscountPercent: '',
   priceSourceMode: 'none',
@@ -844,6 +846,7 @@ function AdminPage({
       startDate: round.startDate,
       endDate: round.endDate,
       targetWindow: round.targetWindow,
+      resultPasscode: round.resultPasscode || '',
       participants: String(round.participants || ''),
       roundDiscountPercent: String(round.roundDiscountPercent || ''),
       priceSourceMode: round.priceSourceMode,
@@ -1114,6 +1117,7 @@ function AdminPage({
         startDate: roundForm.startDate,
         endDate: roundForm.endDate,
         targetWindow: sanitizeText(roundForm.targetWindow),
+        resultPasscode: sanitizeText(roundForm.resultPasscode),
         participants: Math.max(0, Math.trunc(parseNullableNumber(roundForm.participants) ?? 0)),
         roundDiscountPercent: Math.min(100, Math.max(0, parseNullableNumber(roundForm.roundDiscountPercent) ?? 0)),
         priceListSnapshot,
@@ -1988,6 +1992,7 @@ function AdminPage({
                 </select>
               </label>
               <AdminTextField label="Target window" value={roundForm.targetWindow} placeholder="June testing queue" onChange={(value) => setRoundForm({ ...roundForm, targetWindow: value })} />
+              <AdminTextField label="COA passcode" value={roundForm.resultPasscode} placeholder="Leave blank for public results" onChange={(value) => setRoundForm({ ...roundForm, resultPasscode: value })} />
               <AdminTextField label="Start date" value={roundForm.startDate} onChange={(value) => setRoundForm({ ...roundForm, startDate: value })} />
               <AdminTextField label="End date" value={roundForm.endDate} onChange={(value) => setRoundForm({ ...roundForm, endDate: value })} />
               <AdminTextField label="Participants" value={roundForm.participants} onChange={(value) => setRoundForm({ ...roundForm, participants: value })} />
@@ -2869,7 +2874,9 @@ async function logoutAdmin() {
 }
 
 async function fetchCollection<T>(collectionName: string): Promise<T[]> {
-  const response = await fetch(`/api/data/${collectionName}`);
+  const response = await fetch(`/api/data/${collectionName}`, {
+    credentials: 'same-origin',
+  });
 
   if (!response.ok) {
     await throwResponseError(response, `${collectionName} could not be loaded.`);

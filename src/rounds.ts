@@ -52,6 +52,8 @@ export type Round = {
   startDate: string;
   endDate: string;
   targetWindow: string;
+  resultPasscode: string;
+  hasResultPasscode?: boolean;
   participants: number;
   roundDiscountPercent: number;
   priceListSnapshot: RoundPriceListSnapshot | null;
@@ -175,6 +177,8 @@ function normalizeRound(value: unknown): Round | null {
     startDate: sanitizeString(round.startDate),
     endDate: sanitizeString(round.endDate),
     targetWindow: sanitizeString(round.targetWindow),
+    resultPasscode: sanitizeString(round.resultPasscode),
+    hasResultPasscode: round.hasResultPasscode === true,
     participants: normalizeInteger(round.participants),
     roundDiscountPercent: normalizePercent(round.roundDiscountPercent),
     priceListSnapshot: normalizePriceListSnapshot(round.priceListSnapshot),

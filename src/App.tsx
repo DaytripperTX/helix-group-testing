@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CircleCheckBig } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
@@ -136,6 +136,8 @@ type CoaResult = {
   createdAt?: string;
   updatedAt?: string;
   vialImageUrl?: string;
+  isResultLocked: boolean;
+  hasRoundPasscode: boolean;
 };
 
 type ParsedCoa = {
@@ -300,6 +302,18 @@ type CoaDetailRow = {
   pillClassName?: string;
   status?: boolean;
 };
+
+type CoaResultGroup = {
+  roundId: string;
+  roundName: string;
+  isLocked: boolean;
+  results: CoaResult[];
+};
+
+type CoaUnlockTarget = {
+  roundId: string;
+  roundName: string;
+} | null;
 
 const testingTiers: TestingTier[] = [
   {
@@ -1372,7 +1386,11 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
   const [coaEditForm, setCoaEditForm] = useState<CoaEditForm>(createEmptyCoaEditForm());
   const [attachingCoa, setAttachingCoa] = useState<CoaResult | null>(null);
   const [attachCoaFile, setAttachCoaFile] = useState<File | null>(null);
-  const sortedCoaResults = useMemo(() => sortCoaResults(coaResults), [coaResults]);
+  const [unlockTarget, setUnlockTarget] = useState<CoaUnlockTarget>(null);
+  const [unlockPasscode, setUnlockPasscode] = useState('');
+  const [unlockStatus, setUnlockStatus] = useState('');
+  const [isUnlockingRound, setIsUnlockingRound] = useState(false);
+  const sortedCoaResults = useMemo(() => sortCoaResults(coaResults, rounds), [coaResults, rounds]);
   const peptideOptions = useMemo(
     () => [...new Set(sortedCoaResults.map((result) => result.peptideName).filter(Boolean))].sort((first, second) => first.localeCompare(second)),
     [sortedCoaResults],
@@ -1380,6 +1398,10 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
   const filteredResults = useMemo(
     () => filterCoaResults(sortedCoaResults, searchTerm, peptideFilter, roundFilter),
     [sortedCoaResults, searchTerm, peptideFilter, roundFilter],
+  );
+  const filteredResultGroups = useMemo(
+    () => groupCoaResultsByRound(filteredResults),
+    [filteredResults],
   );
   const selectedCoaResult = sortedCoaResults.find((result) => result.id === selectedCoaId) ?? null;
   const selectedFilterRound = roundFilter === 'all' ? null : rounds.find((round) => round.id === roundFilter) ?? null;
@@ -1427,6 +1449,47 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
     } catch (error) {
       console.error(error);
       setCoaStatus('COA data could not be loaded.');
+    }
+  };
+
+  const openRoundUnlockModal = (roundId: string, roundName: string) => {
+    setUnlockTarget({ roundId, roundName });
+    setUnlockPasscode('');
+    setUnlockStatus('');
+  };
+
+  const closeRoundUnlockModal = () => {
+    if (isUnlockingRound) {
+      return;
+    }
+
+    setUnlockTarget(null);
+    setUnlockPasscode('');
+    setUnlockStatus('');
+  };
+
+  const submitRoundUnlock = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!unlockTarget || !unlockPasscode.trim()) {
+      setUnlockStatus('Enter the round passcode.');
+      return;
+    }
+
+    setIsUnlockingRound(true);
+    setUnlockStatus('');
+
+    try {
+      await unlockCoaRound(unlockTarget.roundId, unlockPasscode);
+      await refreshCoaData();
+      setUnlockTarget(null);
+      setUnlockPasscode('');
+      setUnlockStatus('');
+    } catch (error) {
+      console.error(error);
+      setUnlockStatus('Passcode not recognized.');
+    } finally {
+      setIsUnlockingRound(false);
     }
   };
 
@@ -1891,82 +1954,26 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredResults.length > 0 ? (
-                    filteredResults.map((result) => (
-                      <tr
-                        className={result.id === selectedCoaId ? 'is-selected' : ''}
-                        key={result.id}
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`View testing results for ${result.batchNumber}`}
-                        onClick={() => selectCoaResult(result.id)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            selectCoaResult(result.id);
-                          }
-                        }}
-                      >
-                        <td data-label="Peptide Name">{result.peptideName}</td>
-                        <td data-label="Mass">{formatMassWithUnits(result.mass)}</td>
-                        <td data-label="Batch #">
-                          <code>{result.batchNumber}</code>
-                        </td>
-                        <td data-label="Round">{result.roundName}</td>
-                        <td data-label="Date Tested">{result.dateTested}</td>
-                        <td data-label="Testing Tier">
-                          <span className={`coa-tier coa-tier--${result.testingTier}`}>
-                            {formatTestingTierLabel(result.testingTier)}
-                          </span>
-                        </td>
-                        {coaResultColumns.map((column) => (
-                          <td data-label={column.label} key={column.key}>
-                            {renderCoaResultTableValue(result, column)}
-                          </td>
-                        ))}
-                        <td data-label="COA">
-                          {result.coaBlobKey ? (
-                            <a
-                              className="coa-link"
-                              href={getCoaPdfUrl(result)}
-                              target="_blank"
-                              rel="noreferrer"
-                              aria-label={`Open COA for ${result.batchNumber}`}
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              View
-                            </a>
-                          ) : (
-                            <span className="coa-pill coa-pill--pending">Pending</span>
-                          )}
-                        </td>
-                        {isAdmin && (
-                          <td data-label="Admin">
-                            <div className="coa-row-actions">
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setAttachingCoa(result);
-                                  setAttachCoaFile(null);
-                                }}
-                              >
-                                Add COA
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  openEditCoaModal(result);
-                                }}
-                              >
-                                Edit
-                              </button>
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                    ))
+                  {filteredResultGroups.length > 0 ? (
+                    filteredResultGroups.flatMap((group) =>
+                      group.results.map((result, index) => (
+                        <CoaResultTableRow
+                          group={group}
+                          isAdmin={isAdmin}
+                          isSelected={result.id === selectedCoaId}
+                          key={result.id}
+                          result={result}
+                          rowIndex={index}
+                          onAttach={(entry) => {
+                            setAttachingCoa(entry);
+                            setAttachCoaFile(null);
+                          }}
+                          onEdit={openEditCoaModal}
+                          onSelect={selectCoaResult}
+                          onUnlock={openRoundUnlockModal}
+                        />
+                      )),
+                    )
                   ) : (
                     <tr className="coa-empty-row">
                       <td colSpan={6 + coaResultColumns.length + 1 + (isAdmin ? 1 : 0)}>No COAs match the current filters.</td>
@@ -1989,6 +1996,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
             onClear={clearSelectedCoaResult}
             onEdit={openEditCoaModal}
             onToggleVialImage={(result, mode) => void saveCoaVialImageMode(result, mode)}
+            onUnlock={openRoundUnlockModal}
           />
         ) : selectedCoaId ? (
           <div className="coa-detail coa-detail--empty" role="status">
@@ -2002,6 +2010,31 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
             </button>
           </div>
         ) : null}
+
+        {unlockTarget && (
+          <CoaModal title={`Unlock ${unlockTarget.roundName}`} onClose={closeRoundUnlockModal}>
+            <form className="coa-modal-form" onSubmit={submitRoundUnlock}>
+              <label className="coa-modal-field">
+                <span>Round passcode</span>
+                <input
+                  type="password"
+                  value={unlockPasscode}
+                  autoComplete="off"
+                  onChange={(event) => setUnlockPasscode(event.target.value)}
+                />
+              </label>
+              {unlockStatus && <p className="coa-admin-status">{unlockStatus}</p>}
+              <div className="coa-modal-actions">
+                <button type="button" disabled={isUnlockingRound} onClick={closeRoundUnlockModal}>
+                  Cancel
+                </button>
+                <button className="coa-admin-primary" type="submit" disabled={isUnlockingRound}>
+                  Unlock
+                </button>
+              </div>
+            </form>
+          </CoaModal>
+        )}
 
         {isBatchModalOpen && (
           <CoaModal title="Add batch numbers" onClose={() => setIsBatchModalOpen(false)}>
@@ -2174,6 +2207,156 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
+function CoaResultTableRow({
+  group,
+  result,
+  rowIndex,
+  isAdmin,
+  isSelected,
+  onAttach,
+  onEdit,
+  onSelect,
+  onUnlock,
+}: {
+  group: CoaResultGroup;
+  result: CoaResult;
+  rowIndex: number;
+  isAdmin: boolean;
+  isSelected: boolean;
+  onAttach: (result: CoaResult) => void;
+  onEdit: (result: CoaResult) => void;
+  onSelect: (resultId: string) => void;
+  onUnlock: (roundId: string, roundName: string) => void;
+}) {
+  const unlockButtonRowIndex = group.results.length <= 5 ? Math.floor((group.results.length - 1) / 2) : 2;
+  const shouldRenderUnlockButton = group.isLocked && rowIndex === unlockButtonRowIndex;
+  const rowRef = useRef<HTMLTableRowElement | null>(null);
+  const firstLockedCellRef = useRef<HTMLTableCellElement | null>(null);
+  const lastLockedCellRef = useRef<HTMLTableCellElement | null>(null);
+  const [unlockOverlayLeft, setUnlockOverlayLeft] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (!shouldRenderUnlockButton) {
+      return undefined;
+    }
+
+    const updateOverlayPosition = () => {
+      const row = rowRef.current;
+      const firstCell = firstLockedCellRef.current;
+      const lastCell = lastLockedCellRef.current;
+
+      if (!row || !firstCell || !lastCell) {
+        return;
+      }
+
+      const shell = row.closest('.coa-table-shell');
+      const rowRect = row.getBoundingClientRect();
+      const firstRect = firstCell.getBoundingClientRect();
+      const lastRect = lastCell.getBoundingClientRect();
+      const shellRect = shell?.getBoundingClientRect();
+      const visibleLeft = shellRect ? Math.max(firstRect.left, shellRect.left) : firstRect.left;
+      const visibleRight = shellRect ? Math.min(lastRect.right, shellRect.right) : lastRect.right;
+
+      setUnlockOverlayLeft((visibleLeft + visibleRight) / 2 - rowRect.left);
+    };
+
+    const shell = rowRef.current?.closest('.coa-table-shell');
+
+    updateOverlayPosition();
+    window.addEventListener('resize', updateOverlayPosition);
+    shell?.addEventListener('scroll', updateOverlayPosition, { passive: true });
+
+    return () => {
+      window.removeEventListener('resize', updateOverlayPosition);
+      shell?.removeEventListener('scroll', updateOverlayPosition);
+    };
+  }, [group.results.length, shouldRenderUnlockButton]);
+
+  return (
+    <tr
+      ref={rowRef}
+      className={[
+        isSelected ? 'is-selected' : '',
+        result.isResultLocked ? 'is-result-locked' : '',
+        shouldRenderUnlockButton ? 'is-unlock-anchor' : '',
+      ].filter(Boolean).join(' ')}
+      role="button"
+      tabIndex={0}
+      aria-label={`View testing results for ${result.batchNumber}${result.isResultLocked ? ', locked' : ''}`}
+      onClick={() => onSelect(result.id)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect(result.id);
+        }
+      }}
+    >
+      <td data-label="Peptide Name">{result.peptideName}</td>
+      <td data-label="Mass">{formatMassWithUnits(result.mass)}</td>
+      <td data-label="Batch #">
+        <code>{result.batchNumber}</code>
+      </td>
+      <td data-label="Round">{result.roundName}</td>
+      <td data-label="Date Tested">{result.dateTested}</td>
+      <td data-label="Testing Tier">
+        <span className={`coa-tier coa-tier--${result.testingTier}`}>
+          {formatTestingTierLabel(result.testingTier)}
+        </span>
+      </td>
+      {coaResultColumns.map((column, columnIndex) => (
+        <td
+          className={result.isResultLocked ? 'coa-locked-result-cell' : ''}
+          data-label={column.label}
+          key={column.key}
+          ref={columnIndex === 0 ? firstLockedCellRef : undefined}
+        >
+          {shouldRenderUnlockButton && columnIndex === 0 && (
+            <button
+              className="coa-result-unlock-overlay"
+              style={unlockOverlayLeft === null ? undefined : { left: `${unlockOverlayLeft}px` }}
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onUnlock(group.roundId, group.roundName);
+              }}
+            >
+              Unlock round
+            </button>
+          )}
+          {renderCoaResultTableValue(result, column)}
+        </td>
+      ))}
+      <td className={result.isResultLocked ? 'coa-locked-result-cell' : ''} data-label="COA" ref={lastLockedCellRef}>
+        {renderCoaDocumentTableValue(result)}
+      </td>
+      {isAdmin && (
+        <td data-label="Admin">
+          <div className="coa-row-actions">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onAttach(result);
+              }}
+            >
+              Add COA
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onEdit(result);
+              }}
+            >
+              Edit
+            </button>
+          </div>
+        </td>
+      )}
+    </tr>
+  );
+}
+
 function CoaBatchDetail({
   result,
   isAdmin,
@@ -2181,6 +2364,7 @@ function CoaBatchDetail({
   onClear,
   onEdit,
   onToggleVialImage,
+  onUnlock,
 }: {
   result: CoaResult;
   isAdmin: boolean;
@@ -2188,8 +2372,10 @@ function CoaBatchDetail({
   onClear: () => void;
   onEdit: (result: CoaResult) => void;
   onToggleVialImage: (result: CoaResult, mode: 'extracted' | 'placeholder') => void;
+  onUnlock: (roundId: string, roundName: string) => void;
 }) {
-  const vialImageUrl = getCoaVialImageUrl(result);
+  const isLocked = result.isResultLocked;
+  const vialImageUrl = isLocked ? '' : getCoaVialImageUrl(result);
   const detailSummaryItems = [
     { label: 'Round', value: result.roundName },
     { label: 'Lab', value: result.lab },
@@ -2198,12 +2384,14 @@ function CoaBatchDetail({
   ].filter((item) => item.value);
   const detailRows: CoaDetailRow[] = [
     { label: 'Cap Color', value: result.capColor, capColor: true },
-    ...coaResultColumns.map((column) => ({
-      label: column.detailLabel ?? column.label,
-      value: getCoaResultValueForTier(result, column.key),
-      status: column.status,
-      pillClassName: column.pillClassName,
-    })),
+    ...(isLocked
+      ? []
+      : coaResultColumns.map((column) => ({
+          label: column.detailLabel ?? column.label,
+          value: getCoaResultValueForTier(result, column.key),
+          status: column.status,
+          pillClassName: column.pillClassName,
+        }))),
   ].filter((item) => item.value && item.value !== '-');
 
   return (
@@ -2225,7 +2413,12 @@ function CoaBatchDetail({
             <button type="button" onClick={onClear}>
               Back to all results
             </button>
-            {!result.coaBlobKey && <span className="coa-pill coa-pill--pending">Pending</span>}
+            {isLocked && (
+              <button type="button" onClick={() => onUnlock(result.roundId, result.roundName)}>
+                Unlock round
+              </button>
+            )}
+            {!isLocked && !result.coaBlobKey && <span className="coa-pill coa-pill--pending">Pending</span>}
             {isAdmin && (
               <>
                 {result.vialImageAssetKey && (
@@ -2291,11 +2484,17 @@ function CoaBatchDetail({
                 </div>
               ))}
             </dl>
+            {isLocked && (
+              <div className="coa-detail__locked">
+                <span className="coa-pill coa-pill--locked">Locked</span>
+                <p>Round results and COA documents are hidden until the round passcode is entered.</p>
+              </div>
+            )}
           </div>
         </div>
       </article>
 
-      {(result.coaBlobKey || result.verificationUrl) && (
+      {!isLocked && (result.coaBlobKey || result.verificationUrl) && (
         <div className="coa-detail__preview-actions" aria-label="COA document actions">
           {result.coaBlobKey && (
             <a className="coa-detail__open-link" href={getCoaPdfUrl(result)} target="_blank" rel="noreferrer">
@@ -2310,7 +2509,7 @@ function CoaBatchDetail({
         </div>
       )}
 
-      {result.coaBlobKey && <CoaPdfPreview result={result} pdfUrl={getCoaPdfUrl(result)} />}
+      {!isLocked && result.coaBlobKey && <CoaPdfPreview result={result} pdfUrl={getCoaPdfUrl(result)} />}
     </div>
   );
 }
@@ -2757,6 +2956,10 @@ function filterCoaResults(results: CoaResult[], searchTerm: string, peptideFilte
 }
 
 function renderCoaResultTableValue(result: CoaResult, column: CoaResultColumn) {
+  if (result.isResultLocked) {
+    return <span className="coa-pill coa-pill--locked coa-obscured-value">Hidden</span>;
+  }
+
   const value = getCoaResultValueForTier(result, column.key);
 
   if (value === '-') {
@@ -2768,6 +2971,29 @@ function renderCoaResultTableValue(result: CoaResult, column: CoaResultColumn) {
   }
 
   return <span className={`coa-pill ${column.pillClassName ?? 'coa-pill--neutral'}`}>{value}</span>;
+}
+
+function renderCoaDocumentTableValue(result: CoaResult) {
+  if (result.isResultLocked) {
+    return <span className="coa-pill coa-pill--locked coa-obscured-value">Locked</span>;
+  }
+
+  if (!result.coaBlobKey) {
+    return <span className="coa-pill coa-pill--pending">Pending</span>;
+  }
+
+  return (
+    <a
+      className="coa-link"
+      href={getCoaPdfUrl(result)}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Open COA for ${result.batchNumber}`}
+      onClick={(event) => event.stopPropagation()}
+    >
+      View
+    </a>
+  );
 }
 
 function hasCoaIdentityConfirmation(result: CoaResult) {
@@ -2802,10 +3028,38 @@ function createCoaId(batchNumber: string) {
     .replace(/^-+|-+$/g, '');
 }
 
-function sortCoaResults(results: CoaResult[]) {
+function sortCoaResults(results: CoaResult[], rounds: Round[] = []) {
+  const roundOrder = new Map(rounds.map((round, index) => [round.id, index]));
+
   return [...results].sort((first, second) =>
-    first.batchNumber.localeCompare(second.batchNumber, undefined, { numeric: true, sensitivity: 'base' }),
+    (roundOrder.get(first.roundId) ?? Number.MAX_SAFE_INTEGER) - (roundOrder.get(second.roundId) ?? Number.MAX_SAFE_INTEGER)
+    || first.roundName.localeCompare(second.roundName, undefined, { numeric: true, sensitivity: 'base' })
+    || first.batchNumber.localeCompare(second.batchNumber, undefined, { numeric: true, sensitivity: 'base' }),
   );
+}
+
+function groupCoaResultsByRound(results: CoaResult[]): CoaResultGroup[] {
+  const groups = new Map<string, CoaResultGroup>();
+
+  for (const result of results) {
+    const groupKey = result.roundId || result.roundName || 'unknown-round';
+    const existingGroup = groups.get(groupKey);
+
+    if (existingGroup) {
+      existingGroup.results.push(result);
+      existingGroup.isLocked ||= result.isResultLocked;
+      continue;
+    }
+
+    groups.set(groupKey, {
+      roundId: result.roundId,
+      roundName: result.roundName || 'Round',
+      isLocked: result.isResultLocked,
+      results: [result],
+    });
+  }
+
+  return [...groups.values()];
 }
 
 function normalizeCoaResult(value: unknown): CoaResult | null {
@@ -2857,6 +3111,8 @@ function normalizeCoaResult(value: unknown): CoaResult | null {
     parsedCoa: normalizeParsedCoa(coa.parsedCoa),
     createdAt: sanitizeClientText(coa.createdAt),
     updatedAt: sanitizeClientText(coa.updatedAt),
+    isResultLocked: coa.isResultLocked === true,
+    hasRoundPasscode: coa.hasRoundPasscode === true,
   };
 }
 
@@ -2988,6 +3244,21 @@ async function fetchCoaResults() {
   return Array.isArray(records)
     ? records.map(normalizeCoaResult).filter((result): result is CoaResult => Boolean(result))
     : [];
+}
+
+async function unlockCoaRound(roundId: string, passcode: string) {
+  const response = await fetch('/api/coas/round-passcode', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ roundId, passcode }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Round could not be unlocked.');
+  }
 }
 
 async function saveCoaEntry(entry: CoaResult) {
@@ -3359,6 +3630,8 @@ function createCoaEntryFromRoundRow(
     heavyMetals: 'Pending',
     sterility: 'Pending',
     fentanyl: 'Pending',
+    isResultLocked: false,
+    hasRoundPasscode: false,
   };
 }
 

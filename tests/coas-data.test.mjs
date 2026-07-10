@@ -63,6 +63,95 @@ test('coa entries link to round peptides and keep one row per batch', async () =
   assert.equal(secondCoa.code, 'BPC10');
 });
 
+test('public COA reads keep no-passcode round results visible', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  await seedRound(adminCookie);
+
+  const saveResponse = await apiRequest('/api/admin/data/coas/public-visible', 'PUT', createCoa({
+    id: 'public-visible',
+    averageNetContent: '10.2 mg',
+    purity: '99.1%',
+    fentanyl: 'Pass',
+  }), { cookie: adminCookie });
+  const publicRead = await apiRequest('/api/data/coas', 'GET');
+  const publicCoa = JSON.parse(publicRead.body).find((coa) => coa.id === 'public-visible');
+
+  assert.equal(saveResponse.statusCode, 200);
+  assert.equal(publicCoa.isResultLocked, false);
+  assert.equal(publicCoa.averageNetContent, '10.2 mg');
+  assert.equal(publicCoa.purity, '99.1%');
+  assert.equal(publicCoa.fentanyl, 'Pass');
+});
+
+test('round passcode gates public COA results and document assets', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  await seedRound(adminCookie, { resultPasscode: 'round-secret' });
+
+  const asset = JSON.parse((await apiRequest('/api/admin/assets/coa-pdf', 'POST', createPdfUpload(), {
+    cookie: adminCookie,
+  })).body);
+  const saveResponse = await apiRequest('/api/admin/data/coas/locked-coa', 'PUT', {
+    ...createCoa({
+      id: 'locked-coa',
+      averageNetContent: '10.2 mg',
+      purity: '99.1%',
+      fentanyl: 'Pass',
+      coaNumber: 'COA-LOCKED',
+      accessionNumber: 'ACC-LOCKED',
+      verificationUrl: 'https://example.test/verify',
+    }),
+    ...asset,
+  }, { cookie: adminCookie });
+
+  assert.equal(saveResponse.statusCode, 200);
+
+  const publicRead = await apiRequest('/api/data/coas', 'GET');
+  const adminRead = await apiRequest('/api/data/coas', 'GET', undefined, { cookie: adminCookie });
+  const lockedPublicCoa = JSON.parse(publicRead.body).find((coa) => coa.id === 'locked-coa');
+  const adminCoa = JSON.parse(adminRead.body).find((coa) => coa.id === 'locked-coa');
+
+  assert.equal(lockedPublicCoa.isResultLocked, true);
+  assert.equal(lockedPublicCoa.hasRoundPasscode, true);
+  assert.equal(lockedPublicCoa.averageNetContent, undefined);
+  assert.equal(lockedPublicCoa.purity, undefined);
+  assert.equal(lockedPublicCoa.fentanyl, undefined);
+  assert.equal(lockedPublicCoa.coaNumber, undefined);
+  assert.equal(lockedPublicCoa.accessionNumber, undefined);
+  assert.equal(lockedPublicCoa.verificationUrl, undefined);
+  assert.equal(lockedPublicCoa.coaBlobKey, undefined);
+  assert.equal(lockedPublicCoa.parsedCoa, undefined);
+  assert.equal(adminCoa.averageNetContent, '10.2 mg');
+  assert.equal(adminCoa.coaBlobKey, asset.coaBlobKey);
+
+  const lockedPdfResponse = await apiRequest('/api/coas/locked-coa/pdf', 'GET');
+  const wrongPasscodeResponse = await apiRequest('/api/coas/round-passcode', 'POST', {
+    roundId: 'round-test',
+    passcode: 'wrong',
+  });
+  const unlockResponse = await apiRequest('/api/coas/round-passcode', 'POST', {
+    roundId: 'round-test',
+    passcode: 'round-secret',
+  });
+  const unlockCookie = unlockResponse.headers['Set-Cookie'];
+  const unlockedRead = await apiRequest('/api/data/coas', 'GET', undefined, { cookie: unlockCookie });
+  const unlockedPdfResponse = await apiRequest('/api/coas/locked-coa/pdf', 'GET', undefined, { cookie: unlockCookie });
+  const unlockedCoa = JSON.parse(unlockedRead.body).find((coa) => coa.id === 'locked-coa');
+
+  assert.equal(lockedPdfResponse.statusCode, 403);
+  assert.equal(wrongPasscodeResponse.statusCode, 401);
+  assert.equal(unlockResponse.statusCode, 200);
+  assert.match(unlockCookie, /helix_coa_round_access=/);
+  assert.equal(unlockedCoa.isResultLocked, false);
+  assert.equal(unlockedCoa.averageNetContent, '10.2 mg');
+  assert.equal(unlockedCoa.coaBlobKey, asset.coaBlobKey);
+  assert.equal(unlockedPdfResponse.statusCode, 200);
+  assert.equal(unlockedPdfResponse.headers['Cache-Control'], 'private, no-cache');
+});
+
 test('coa batch import saves multiple entries in one request', async () => {
   await resetData();
   const adminCookie = await loginAdmin();
@@ -397,7 +486,7 @@ async function loginAdmin() {
   return response.headers['Set-Cookie'];
 }
 
-async function seedRound(adminCookie) {
+async function seedRound(adminCookie, roundOverrides = {}) {
   await apiRequest('/api/admin/data/peptides/bpc-157', 'PUT', {
     id: 'bpc-157',
     name: 'BPC-157',
@@ -418,6 +507,7 @@ async function seedRound(adminCookie) {
     roundDiscountPercent: 0,
     priceSourceMode: 'none',
     priceListSnapshot: null,
+    ...roundOverrides,
     peptides: [
       {
         id: 'round-row-bpc',
