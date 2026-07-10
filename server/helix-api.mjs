@@ -3,32 +3,46 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  deleteCoaBatchItems,
   deleteCollectionItem,
   adminUpsertLabelTemplate,
   exportPeptideCollectionTransfer,
   getCollectionNames,
+  importCoaBatchItems,
+  importPeptideBatchItems,
+  importPeptideCategoryBatchItems,
   importPeptideCollectionTransfer,
+  importRoundBatchItems,
   isPublicCollectionRead,
   publicReportLabelTemplate,
   publicUpsertLabelTemplate,
   publicVoteLabelTemplate,
   readCollection,
+  readPublicCollection,
+  readCoaPdfAsset,
+  readCoaVialImageAsset,
   readLabelTemplatePreviewAsset,
   readPublicLabelTemplates,
   recoverLabelTemplate,
   permanentlyDeleteLabelTemplate,
   upsertCollectionItem,
   writeAsset,
+  writeCoaPdfAsset,
 } from './helix-data.mjs';
 import {
   createAdminSessionCookie,
+  createCoaRoundAccessCookie,
   createLogoutCookie,
+  getCoaRoundAccess,
+  getCoaRoundPasscodeFingerprint,
   getAdminSession,
   getPublicSession,
+  validateCoaRoundPasscode,
   validateRolePassword,
 } from './helix-auth.mjs';
 import { parsePeptideBatch } from './peptide-batch-parser.mjs';
 import { parseRoundPeptideBatch } from './round-peptide-batch-parser.mjs';
+import { parseCoaBatchRows } from './coa-batch-parser.mjs';
 import { parseVendorPriceList } from './vendor-price-list-parser.mjs';
 
 const maxBodyBytes = 24 * 1024 * 1024;
@@ -59,8 +73,8 @@ export async function handleHelixApiRequest(request) {
         return jsonResponse(401, { error: 'Admin login required' });
       }
 
-      if (collectionName === 'label-templates' && !session) {
-        return jsonResponse(200, await readPublicLabelTemplates());
+      if (!session) {
+        return jsonResponse(200, await readPublicCollection(collectionName, request.headers));
       }
 
       return jsonResponse(200, await readCollection(collectionName));
@@ -88,6 +102,57 @@ export async function handleHelixApiRequest(request) {
         'Content-Type': preview.mimeType,
         'Cache-Control': 'public, max-age=3600',
         'Content-Disposition': `inline; filename="${preview.fileName.replace(/["\\]/g, '')}"`,
+      });
+    }
+
+    if (method === 'GET' && pathname.startsWith('/api/coas/') && getPathPart(pathname, 4) === 'pdf') {
+      const coaId = decodeURIComponent(getPathPart(pathname, 3));
+      const pdf = await readCoaPdfAsset(coaId, {
+        headers: request.headers,
+        isAdmin: Boolean(getAdminSession(request.headers)),
+      });
+
+      return binaryResponse(200, pdf.buffer, {
+        'Content-Type': pdf.mimeType,
+        'Cache-Control': 'private, no-cache',
+        'Content-Disposition': `inline; filename="${pdf.fileName.replace(/["\\]/g, '')}"`,
+      });
+    }
+
+    if (method === 'GET' && pathname.startsWith('/api/coas/') && getPathPart(pathname, 4) === 'vial-image') {
+      const coaId = decodeURIComponent(getPathPart(pathname, 3));
+      const image = await readCoaVialImageAsset(coaId, {
+        headers: request.headers,
+        isAdmin: Boolean(getAdminSession(request.headers)),
+      });
+
+      return binaryResponse(200, image.buffer, {
+        'Content-Type': image.mimeType,
+        'Cache-Control': 'private, no-cache',
+        'Content-Disposition': `inline; filename="${image.fileName.replace(/["\\]/g, '')}"`,
+      });
+    }
+
+    if (pathname === '/api/coas/round-passcode' && method === 'POST') {
+      enforceThrottle(request.headers, 'coa-round-passcode', 30);
+      const body = parseJsonBody(request.bodyText);
+      const roundId = typeof body?.roundId === 'string' ? body.roundId.trim() : '';
+      const rounds = await readCollection('rounds');
+      const round = rounds.find((currentRound) => currentRound?.id === roundId);
+
+      if (!round) {
+        return jsonResponse(404, { error: 'Round not found' });
+      }
+
+      if (!validateCoaRoundPasscode(round, body?.passcode)) {
+        return jsonResponse(401, { error: 'Invalid passcode' });
+      }
+
+      return jsonResponse(200, { ok: true, roundId: round.id }, {
+        'Set-Cookie': createCoaRoundAccessCookie({
+          ...getCoaRoundAccess(request.headers),
+          [round.id]: getCoaRoundPasscodeFingerprint(round),
+        }),
       });
     }
 
@@ -147,6 +212,16 @@ export async function handleHelixApiRequest(request) {
       return jsonResponse(200, await writeAsset(parseJsonBody(request.bodyText)));
     }
 
+    if (pathname === '/api/admin/assets/coa-pdf' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      return jsonResponse(200, await writeCoaPdfAsset(parseJsonBody(request.bodyText)));
+    }
+
     if ((pathname === '/api/admin/wiki/search' || pathname === '/api/admin/peptidepedia/search') && method === 'GET') {
       const session = getAdminSession(request.headers);
 
@@ -193,6 +268,28 @@ export async function handleHelixApiRequest(request) {
       });
     }
 
+    if (pathname === '/api/admin/peptides/import-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await importPeptideBatchItems(body?.rows));
+    }
+
+    if (pathname === '/api/admin/peptide-categories/import-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await importPeptideCategoryBatchItems(body?.rows));
+    }
+
     if (pathname === '/api/admin/rounds/parse-peptides' && method === 'POST') {
       const session = getAdminSession(request.headers);
 
@@ -209,6 +306,54 @@ export async function handleHelixApiRequest(request) {
           existingRows: body?.existingRows,
         }),
       });
+    }
+
+    if (pathname === '/api/admin/rounds/import-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await importRoundBatchItems(body?.rows));
+    }
+
+    if (pathname === '/api/admin/coas/parse-batch-numbers' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, {
+        rows: await parseCoaBatchRows({
+          source: body?.source,
+        }),
+      });
+    }
+
+    if (pathname === '/api/admin/coas/import-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await importCoaBatchItems(body?.rows));
+    }
+
+    if (pathname === '/api/admin/coas/delete-batch' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await deleteCoaBatchItems(body?.ids));
     }
 
     if (pathname.startsWith('/api/admin/data/')) {
@@ -280,12 +425,19 @@ export async function handleHelixApiRequest(request) {
   } catch (error) {
     const statusCode = Number(error?.statusCode) || 500;
     const message = statusCode === 500 ? 'Server error' : error.message;
+    const details = error?.details;
 
-    if (statusCode === 500) {
-      console.error(error);
-    }
+    logApiError(error, {
+      method,
+      pathname,
+      statusCode,
+      bodyBytes: typeof request.bodyText === 'string' ? Buffer.byteLength(request.bodyText, 'utf8') : 0,
+    });
 
-    return jsonResponse(statusCode, { error: message });
+    return jsonResponse(statusCode, {
+      error: message,
+      ...(details !== undefined ? { details } : {}),
+    });
   }
 }
 
@@ -316,11 +468,24 @@ function parseJsonBody(bodyText) {
 
   try {
     return JSON.parse(bodyText);
-  } catch {
+  } catch (cause) {
     const error = new Error('Invalid JSON body.');
     error.statusCode = 400;
+    error.cause = cause;
     throw error;
   }
+}
+
+function logApiError(error, context) {
+  const payload = {
+    ...context,
+    message: error?.message || 'Unknown error',
+    details: error?.details,
+    cause: error?.cause?.message,
+    stack: error?.stack,
+  };
+
+  console.error('[helix-api] request failed', payload);
 }
 
 function normalizeApiPath(pathname) {
@@ -329,6 +494,10 @@ function normalizeApiPath(pathname) {
 
     if (nextPathname === '/api/data/labels' || nextPathname.startsWith('/api/data/labels/')) {
       return nextPathname.replace('/api/data/labels', '/api/labels');
+    }
+
+    if (nextPathname.startsWith('/api/data/coas/')) {
+      return nextPathname.replace('/api/data/coas', '/api/coas');
     }
 
     return nextPathname;
@@ -487,11 +656,9 @@ async function searchWiki(name) {
 }
 
 async function searchPeptidepedia(name) {
-  const normalizedName = normalizeSearchText(name);
-
   const fallbackMatch = peptidepediaIndex.find((entry) =>
-    normalizeSearchText(entry.name) === normalizedName ||
-    entry.aliases.some((alias) => normalizeSearchText(alias) === normalizedName),
+    matchesBlendSearchName(name, entry.name) ||
+    entry.aliases.some((alias) => matchesBlendSearchName(name, alias)),
   );
 
   try {
@@ -501,8 +668,8 @@ async function searchPeptidepedia(name) {
       const html = await response.text();
       const entries = extractPeptidepediaEntries(html);
       const match = entries.find((entry) =>
-        normalizeSearchText(entry.name) === normalizedName ||
-        entry.aliases.some((alias) => normalizeSearchText(alias) === normalizedName),
+        matchesBlendSearchName(name, entry.name) ||
+        entry.aliases.some((alias) => matchesBlendSearchName(name, alias)),
       );
 
       if (match) {
@@ -517,12 +684,12 @@ async function searchPeptidepedia(name) {
 }
 
 async function searchPepPedia(name) {
-  const normalizedName = normalizeSearchText(name);
+  const normalizedNames = createBlendSearchVariants(name);
   const entries = await getPepPediaIndex();
   const exactMatch = entries.find((entry) =>
-    normalizeSearchText(entry.slug) === normalizedName ||
-    normalizeSearchText(entry.slug.replace(/-/g, ' ')) === normalizedName ||
-    normalizeSearchText(entry.slug.replace(/-plus\b/g, '+')) === normalizedName,
+    createBlendSearchVariants(entry.slug).some((entryName) => normalizedNames.includes(entryName)) ||
+    createBlendSearchVariants(entry.slug.replace(/-/g, ' ')).some((entryName) => normalizedNames.includes(entryName)) ||
+    createBlendSearchVariants(entry.slug.replace(/-plus\b/g, '+')).some((entryName) => normalizedNames.includes(entryName)),
   );
 
   if (exactMatch) {
@@ -568,6 +735,28 @@ function stripHtml(value) {
 
 function normalizeSearchText(value) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function matchesBlendSearchName(query, candidate) {
+  const queryNames = createBlendSearchVariants(query);
+  const candidateNames = createBlendSearchVariants(candidate);
+
+  return candidateNames.some((candidateName) => queryNames.includes(candidateName));
+}
+
+function createBlendSearchVariants(value) {
+  const cleanValue = String(value ?? '').trim();
+  const variants = [
+    cleanValue,
+    cleanValue.replace(/\b(blend|stack)\b/gi, ' '),
+    `${cleanValue} blend`,
+    `${cleanValue} stack`,
+  ];
+
+  return variants
+    .map((variant) => normalizeSearchText(variant))
+    .filter(Boolean)
+    .filter((variant, index, variantList) => variantList.indexOf(variant) === index);
 }
 
 function createWikiLink({ source, url, status }) {

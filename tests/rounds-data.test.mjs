@@ -35,6 +35,29 @@ test('rounds are public readable and admin writable only', async () => {
   assert.ok(JSON.parse(adminWrite.body).some((round) => round.id === 'admin-write-test'));
 });
 
+test('round passcodes are redacted from public reads and visible to admins', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  const saveResponse = await apiRequest('/api/admin/data/rounds/passcode-round', 'PUT', createRound({
+    id: 'passcode-round',
+    name: 'Passcode Round',
+    resultPasscode: 'round-secret',
+  }), { cookie: adminCookie });
+
+  assert.equal(saveResponse.statusCode, 200);
+
+  const publicRead = await apiRequest('/api/data/rounds', 'GET');
+  const adminRead = await apiRequest('/api/data/rounds', 'GET', undefined, { cookie: adminCookie });
+  const publicRound = JSON.parse(publicRead.body).find((round) => round.id === 'passcode-round');
+  const adminRound = JSON.parse(adminRead.body).find((round) => round.id === 'passcode-round');
+
+  assert.equal(publicRound.resultPasscode, undefined);
+  assert.equal(publicRound.hasResultPasscode, true);
+  assert.equal(adminRound.resultPasscode, 'round-secret');
+  assert.equal(adminRound.hasResultPasscode, undefined);
+});
+
 test('round normalization keeps public fields bounded and allowlisted', async () => {
   await resetData();
   const adminCookie = await loginAdmin();
@@ -108,7 +131,7 @@ test('round normalization keeps public fields bounded and allowlisted', async ()
   assert.equal(stored.vendorId, 'Vendor-One-');
   assert.equal(stored.isCurrent, false);
   assert.equal(stored.priceSourceMode, 'vendor-default');
-  assert.equal(stored.startDate, '2026-06-25');
+  assert.equal(stored.startDate, '06/25/26');
   assert.equal(stored.endDate, '');
   assert.equal(stored.roundDiscountPercent, 100);
   assert.equal(stored.participants, 4);
@@ -123,6 +146,35 @@ test('round normalization keeps public fields bounded and allowlisted', async ()
   assert.equal(stored.peptides[0].vendorPrice, 0);
   assert.equal(stored.peptides[0].participantCount, 3);
   assert.equal(stored.peptides[0].totalOrdered, 8);
+});
+
+test('round date normalization accepts common admin date formats', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  const examples = [
+    ['slash-short', '6/25/26', '06/25/26'],
+    ['slash-long', '06/25/2026', '06/25/26'],
+    ['dash-short', '6-25-26', '06/25/26'],
+    ['dot-short', '6.25.26', '06/25/26'],
+    ['iso', '2026-06-25', '06/25/26'],
+    ['month-name', 'June 25, 2026', '06/25/26'],
+  ];
+
+  for (const [id, startDate, expectedDate] of examples) {
+    const response = await apiRequest('/api/admin/data/rounds/' + id, 'PUT', createRound({
+      id,
+      startDate,
+      endDate: startDate,
+    }), { cookie: adminCookie });
+
+    assert.equal(response.statusCode, 200);
+
+    const stored = (await readCollection('rounds')).find((round) => round.id === id);
+
+    assert.equal(stored.startDate, expectedDate);
+    assert.equal(stored.endDate, expectedDate);
+  }
 });
 
 test('multiple current rounds can be stored simultaneously', async () => {
@@ -225,9 +277,88 @@ test('round default price source mode persists after save', async () => {
   assert.equal(storedRound.priceSourceMode, 'vendor-default');
 });
 
+test('round batch import saves multiple rounds in one request', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  const response = await apiRequest('/api/admin/rounds/import-batch', 'POST', {
+    rows: [
+      createRound({
+        id: 'batch-round-a',
+        name: 'Batch Round A',
+      }),
+      createRound({
+        id: 'batch-round-b',
+        name: 'Batch Round B',
+      }),
+    ],
+  }, { cookie: adminCookie });
+  const result = JSON.parse(response.body);
+  const storedRounds = await readCollection('rounds');
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(result.savedCount, 2);
+  assert.equal(result.failedCount, 0);
+  assert.ok(storedRounds.some((round) => round.id === 'batch-round-a'));
+  assert.ok(storedRounds.some((round) => round.id === 'batch-round-b'));
+});
+
+test('round save links dictionary names and clears stale peptide ids', async () => {
+  await resetData();
+  const adminCookie = await loginAdmin();
+
+  await apiRequest('/api/admin/data/peptides/ss-31', 'PUT', {
+    id: 'ss-31',
+    name: 'SS-31 (elamipretide)',
+    kind: 'peptide',
+    categories: ['Longevity'],
+  }, { cookie: adminCookie });
+
+  const response = await apiRequest('/api/admin/data/rounds/dictionary-link-round', 'PUT', createRound({
+    id: 'dictionary-link-round',
+    peptides: [
+      createRoundRow({
+        id: 'matched-by-name',
+        peptideName: 'SS-31',
+      }),
+      createRoundRow({
+        id: 'unknown-name',
+        peptideName: 'Not In Dictionary',
+      }),
+      createRoundRow({
+        id: 'stale-id',
+        peptideId: 'missing-peptide',
+        peptideName: 'SS-31',
+      }),
+    ],
+  }), { cookie: adminCookie });
+
+  assert.equal(response.statusCode, 200);
+
+  const storedRound = (await readCollection('rounds')).find((round) => round.id === 'dictionary-link-round');
+  const matchedRow = storedRound.peptides.find((row) => row.id === 'matched-by-name');
+  const unknownRow = storedRound.peptides.find((row) => row.id === 'unknown-name');
+  const staleRow = storedRound.peptides.find((row) => row.id === 'stale-id');
+
+  assert.equal(matchedRow.peptideId, 'ss-31');
+  assert.equal(matchedRow.peptideName, 'SS-31 (elamipretide)');
+  assert.equal(unknownRow.peptideId, '');
+  assert.equal(unknownRow.peptideName, 'Not In Dictionary');
+  assert.equal(staleRow.peptideId, '');
+  assert.equal(staleRow.peptideName, 'SS-31');
+});
+
 test('round peptide batch parse imports linked rows with batch conformity', async () => {
   await resetData();
   const adminCookie = await loginAdmin();
+
+  await apiRequest('/api/admin/data/peptides/ss-31', 'PUT', {
+    id: 'ss-31',
+    name: 'SS-31 (elamipretide)',
+    kind: 'peptide',
+    categories: ['Longevity'],
+  }, { cookie: adminCookie });
+
   const response = await apiRequest('/api/admin/rounds/parse-peptides', 'POST', {
     source: {
       type: 'file',
@@ -235,6 +366,8 @@ test('round peptide batch parse imports linked rows with batch conformity', asyn
       text: [
         'Peptide Name,Supplier Code,Price,MG,Tier,Additional testing,Batch conformity,Cap color,Headcount,Total Order Qty,Notes',
         'BPC-157,BPC10,66,10 mg,Platinum,Fentanyl,yes,Blue,26,82,Priority',
+        'SS-31,SS31,88,5 mg,Gold,,,,0,0,Parenthetical match',
+        'Not In Dictionary,UNK,12,2 mg,None,,,,0,0,Keep unlinked',
         'Bac Water,BAC30,4,30 ml,None,,,,0,0,Keep units',
       ].join('\n'),
     },
@@ -253,7 +386,7 @@ test('round peptide batch parse imports linked rows with batch conformity', asyn
 
   assert.equal(response.statusCode, 200);
 
-  const [row, bacWaterRow] = JSON.parse(response.body).rows;
+  const [row, ss31Row, unknownRow, bacWaterRow] = JSON.parse(response.body).rows;
 
   assert.equal(row.peptideId, 'bpc-157');
   assert.equal(row.priceListItemId, 'price-bpc10');
@@ -265,6 +398,12 @@ test('round peptide batch parse imports linked rows with batch conformity', asyn
   assert.equal(row.participantCount, 26);
   assert.equal(row.totalOrdered, 82);
   assert.deepEqual(row.errors, []);
+  assert.equal(ss31Row.peptideId, 'ss-31');
+  assert.equal(ss31Row.peptideName, 'SS-31 (elamipretide)');
+  assert.deepEqual(ss31Row.errors, []);
+  assert.equal(unknownRow.peptideId, '');
+  assert.equal(unknownRow.peptideName, 'Not In Dictionary');
+  assert.deepEqual(unknownRow.errors, []);
   assert.equal(bacWaterRow.peptideName, 'Bac Water');
   assert.equal(bacWaterRow.mass, '30 ml');
   assert.equal(bacWaterRow.testingTier, 'none');
@@ -314,6 +453,27 @@ function createRound(overrides = {}) {
     priceSourceMode: 'none',
     priceListSnapshot: null,
     peptides: [],
+    ...overrides,
+  };
+}
+
+function createRoundRow(overrides = {}) {
+  return {
+    id: 'row-test',
+    peptideId: '',
+    peptideName: 'BPC-157',
+    priceListItemId: '',
+    vendorCode: '',
+    vendorPrice: null,
+    vendorPriceOverridden: false,
+    mass: '',
+    testingTier: 'none',
+    additionalTesting: '',
+    batchConformity: false,
+    capColor: '',
+    notes: '',
+    participantCount: 0,
+    totalOrdered: 0,
     ...overrides,
   };
 }

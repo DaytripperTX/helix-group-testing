@@ -1,7 +1,9 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch } from './coa-pdf-normalizer.mjs';
+import { getCoaRoundAccess, hasCoaRoundAccess } from './helix-auth.mjs';
 
 const rootDir = process.env.HELIX_ROOT_DIR
   ? path.resolve(process.env.HELIX_ROOT_DIR)
@@ -13,12 +15,46 @@ const localDataDir = process.env.HELIX_LOCAL_DATA_DIR
 const legacyLabelsPath = path.join(rootDir, 'dist', 'stored-data', 'labels', 'templates.json');
 const storeName = 'helix-data';
 const labelTemplateOverridePrefix = 'label-template-overrides/';
+const coaPdfAssetPrefix = 'coa-pdfs/';
+const coaVialImageAssetPrefix = 'coa-vial-images/';
 const maxLabelPreviewBytes = 3 * 1024 * 1024;
 const maxLabelCodeLength = 20 * 1024;
+const maxCoaPdfBytes = 8 * 1024 * 1024;
+const maxCoaVialImageBytes = 1024 * 1024;
 const maxReportCountBeforeHide = 5;
 const trashRetentionMs = 5 * 24 * 60 * 60 * 1000;
 const allowedPreviewMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const allowedReportReasons = new Set(['offensive', 'spam', 'unsafe', 'other']);
+const redactedCoaResultFields = [
+  'coaNumber',
+  'accessionNumber',
+  'verificationUrl',
+  'averageNetContent',
+  'purity',
+  'endotoxins',
+  'heavyMetals',
+  'sterility',
+  'fentanyl',
+  'coaFileName',
+  'coaMimeType',
+  'coaBlobKey',
+  'coaUploadedAt',
+  'vialImageAssetKey',
+  'vialImageMimeType',
+  'vialImageFileName',
+  'vialImageSource',
+  'vialImageMode',
+  'vialImageExtractedAt',
+  'parsedCoa',
+];
+const coaResultValueFields = [
+  'averageNetContent',
+  'purity',
+  'endotoxins',
+  'heavyMetals',
+  'sterility',
+  'fentanyl',
+];
 const blockedTextFragments = [
   'fuck',
   'shit',
@@ -39,6 +75,7 @@ const collections = new Map([
   ['vendors', { fileName: 'vendors.json', kind: 'items', readAccess: 'public' }],
   ['vendor-price-lists', { fileName: 'vendor-price-lists.json', kind: 'items', readAccess: 'public' }],
   ['rounds', { fileName: 'rounds.json', kind: 'items', readAccess: 'public' }],
+  ['coas', { fileName: 'coas.json', kind: 'items', readAccess: 'public' }],
   ['admin-notes', { fileName: 'admin-notes.json', kind: 'items', readAccess: 'admin' }],
   ['current-round', { fileName: 'current-round.json', kind: 'data', readAccess: 'public' }],
   ['reports', { fileName: 'reports.json', kind: 'items', readAccess: 'admin' }],
@@ -62,6 +99,32 @@ export async function readCollection(collectionName) {
   const document = await readCollectionDocument(collectionName);
 
   return getDocumentPayload(collectionName, document);
+}
+
+export async function readPublicCollection(collectionName, headers = {}) {
+  if (collectionName === 'label-templates') {
+    return await readPublicLabelTemplates();
+  }
+
+  if (collectionName === 'rounds') {
+    return (await readCollection('rounds')).map(toPublicRoundItem);
+  }
+
+  if (collectionName === 'coas') {
+    return await readPublicCoaCollection(headers);
+  }
+
+  return await readCollection(collectionName);
+}
+
+export async function readPublicCoaCollection(headers = {}) {
+  const [coas, rounds] = await Promise.all([
+    readCollection('coas'),
+    readCollection('rounds'),
+  ]);
+  const roundAccess = getCoaRoundAccess(headers);
+
+  return coas.map((coa) => toPublicCoaItem(coa, rounds, roundAccess));
 }
 
 export async function readPublicLabelTemplates() {
@@ -103,6 +166,109 @@ export async function readLabelTemplatePreviewAsset(itemId, { isAdmin = false } 
   };
 }
 
+export async function readCoaPdfAsset(itemId, options = {}) {
+  const coas = await readCollection('coas');
+  const coa = coas.find((item) => item?.id === itemId);
+
+  if (!coa || !coa.coaBlobKey) {
+    throw createHttpError(404, 'COA PDF not found.');
+  }
+
+  await assertCoaRoundAccess(coa, options);
+
+  return {
+    buffer: await readCoaPdfBuffer(coa.coaBlobKey),
+    mimeType: coa.coaMimeType || 'application/pdf',
+    fileName: sanitizePreviewFileName(coa.coaFileName || `${coa.id}.pdf`, 'application/pdf'),
+  };
+}
+
+export async function readCoaVialImageAsset(itemId, options = {}) {
+  const coas = await readCollection('coas');
+  const coa = coas.find((item) => item?.id === itemId);
+
+  if (!coa || coa.vialImageMode === 'placeholder' || !coa.vialImageAssetKey) {
+    throw createHttpError(404, 'COA vial image not found.');
+  }
+
+  await assertCoaRoundAccess(coa, options);
+
+  return {
+    buffer: await readCoaVialImageBuffer(coa.vialImageAssetKey),
+    mimeType: coa.vialImageMimeType || 'image/png',
+    fileName: sanitizePreviewFileName(coa.vialImageFileName || `${coa.id}-vial.png`, coa.vialImageMimeType || 'image/png'),
+  };
+}
+
+function toPublicRoundItem(round) {
+  const resultPasscode = sanitizeRoundText(round?.resultPasscode, 120);
+  const { resultPasscode: _resultPasscode, ...publicRound } = round ?? {};
+
+  void _resultPasscode;
+
+  return {
+    ...publicRound,
+    hasResultPasscode: Boolean(resultPasscode),
+  };
+}
+
+function toPublicCoaItem(coa, rounds, roundAccess) {
+  const round = findCoaRound(coa, rounds);
+  const isResultLocked = round ? !hasCoaRoundAccess(round, roundAccess) : false;
+
+  if (!isResultLocked) {
+    return {
+      ...coa,
+      isResultLocked: false,
+      hasRoundPasscode: Boolean(round?.resultPasscode),
+    };
+  }
+
+  const publicCoa = { ...coa };
+
+  for (const field of redactedCoaResultFields) {
+    delete publicCoa[field];
+  }
+
+  return {
+    ...publicCoa,
+    isResultLocked: true,
+    hasRoundPasscode: true,
+    lockedResultStates: Object.fromEntries(
+      coaResultValueFields.map((field) => [field, isPendingCoaResultValue(coa?.[field]) ? 'pending' : 'populated']),
+    ),
+  };
+}
+
+async function assertCoaRoundAccess(coa, { headers = {}, isAdmin = false } = {}) {
+  if (isAdmin) {
+    return;
+  }
+
+  const rounds = await readCollection('rounds');
+  const round = findCoaRound(coa, rounds);
+
+  if (!round || hasCoaRoundAccess(round, getCoaRoundAccess(headers))) {
+    return;
+  }
+
+  throw createHttpError(403, 'Round passcode required.');
+}
+
+function findCoaRound(coa, rounds) {
+  if (!coa || !Array.isArray(rounds)) {
+    return null;
+  }
+
+  return rounds.find((round) => round?.id === coa.roundId) ?? null;
+}
+
+function isPendingCoaResultValue(value) {
+  const cleanValue = sanitizeRoundText(value, 80).toLowerCase();
+
+  return !cleanValue || cleanValue === 'pending' || cleanValue === '-';
+}
+
 export async function upsertCollectionItem(collectionName, itemId, item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     throw createHttpError(400, 'Expected an object item.');
@@ -119,22 +285,39 @@ export async function upsertCollectionItem(collectionName, itemId, item) {
     throw createHttpError(400, 'Collection does not support item updates.');
   }
 
+  const normalizeOptions = collectionName === 'rounds'
+    ? { peptides: await readCollection('peptides') }
+    : collectionName === 'coas'
+      ? {
+          rounds: await readCollection('rounds'),
+          requireLinked: true,
+          updateTimestamp: true,
+        }
+      : {};
   const currentItems = Array.isArray(document.items) ? document.items : [];
-  const nextItem = normalizeCollectionItem(collectionName, item);
+  const nextItem = normalizeCollectionItem(collectionName, item, normalizeOptions);
   const nextItems = [nextItem, ...currentItems.filter((currentItem) => currentItem?.id !== itemId)];
   const nextDocument = createCollectionDocument(collectionName, nextItems);
 
   await writeCollectionDocument(collectionName, nextDocument);
+  if (collectionName === 'coas') {
+    await cleanupDetachedCoaAssets(currentItems, nextItems, {
+      action: 'upsert',
+      itemId,
+    });
+  }
 
   return nextItems;
 }
 
 export async function exportPeptideCollectionTransfer() {
+  const items = await readCollection('peptides');
+
   return {
     version: 1,
     collection: 'peptides',
     exportedAt: new Date().toISOString(),
-    items: await readCollection('peptides'),
+    items: items.map(normalizePeptideTransferItem),
   };
 }
 
@@ -148,14 +331,40 @@ export async function importPeptideCollectionTransfer(transfer) {
   }
 
   const seenIds = new Set();
-  const items = transfer.items.map((item) => normalizePeptideImportItem(item));
+  const items = [];
+  const rowErrors = [];
 
-  for (const item of items) {
-    if (seenIds.has(item.id)) {
-      throw createHttpError(400, 'Peptide import contains duplicate ids.');
+  for (const [index, item] of transfer.items.entries()) {
+    try {
+      const normalizedItem = normalizePeptideImportItem(item);
+
+      if (seenIds.has(normalizedItem.id)) {
+        rowErrors.push({
+          rowNumber: index + 1,
+          id: normalizedItem.id,
+          name: normalizedItem.name,
+          error: 'Duplicate peptide id.',
+        });
+        continue;
+      }
+
+      seenIds.add(normalizedItem.id);
+      items.push(normalizedItem);
+    } catch (error) {
+      rowErrors.push({
+        rowNumber: index + 1,
+        id: typeof item?.id === 'string' ? item.id : '',
+        name: typeof item?.name === 'string' ? item.name : '',
+        error: error?.message || 'Record could not be imported.',
+      });
     }
+  }
 
-    seenIds.add(item.id);
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'Peptide import contains invalid records.', {
+      failedCount: rowErrors.length,
+      rowErrors,
+    });
   }
 
   const nextDocument = createCollectionDocument('peptides', items);
@@ -163,6 +372,315 @@ export async function importPeptideCollectionTransfer(transfer) {
   await writeCollectionDocument('peptides', nextDocument);
 
   return nextDocument.items;
+}
+
+export async function importPeptideBatchItems(rows) {
+  if (!Array.isArray(rows)) {
+    throw createHttpError(400, 'Peptide batch rows are required.');
+  }
+
+  const document = await readCollectionDocument('peptides');
+  let nextItems = Array.isArray(document.items) ? document.items : [];
+  const seenNames = new Set();
+  const rowErrors = [];
+  let savedCount = 0;
+
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = getImportRowNumber(row, index);
+    const rowName = typeof row?.name === 'string' ? row.name.trim() : '';
+    const normalizedRowName = normalizeRoundName(rowName);
+
+    try {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw new Error('Row is not an object.');
+      }
+
+      if (Array.isArray(row.errors) && row.errors.length > 0) {
+        throw new Error(`Row has unresolved errors: ${row.errors.join('; ')}`);
+      }
+
+      if (normalizedRowName && seenNames.has(normalizedRowName)) {
+        throw new Error('Duplicate name in import.');
+      }
+
+      if (normalizedRowName) {
+        seenNames.add(normalizedRowName);
+      }
+
+      const existingPeptide = findPeptideByNormalizedName(nextItems, rowName);
+      const importItem = normalizePeptideImportItem({
+        ...row,
+        id: existingPeptide?.id || sanitizeRoundToken(row.id, 120) || createUniquePeptideId(rowName, nextItems),
+        name: rowName,
+      });
+
+      nextItems = [
+        importItem,
+        ...nextItems.filter((currentItem) => currentItem?.id !== importItem.id),
+      ];
+      savedCount += 1;
+    } catch (error) {
+      rowErrors.push({
+        rowNumber,
+        id: typeof row?.id === 'string' ? row.id : '',
+        name: rowName,
+        error: error?.message || 'Row could not be saved.',
+      });
+    }
+  }
+
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'Peptide batch import contains rows that could not be saved.', {
+      failedCount: rowErrors.length,
+      savedCount: 0,
+      rowErrors,
+    });
+  }
+
+  const nextDocument = createCollectionDocument('peptides', nextItems);
+
+  await writeCollectionDocument('peptides', nextDocument);
+
+  return {
+    items: nextDocument.items,
+    savedCount,
+    failedCount: 0,
+    rowErrors: [],
+  };
+}
+
+export async function importCoaBatchItems(rows) {
+  if (!Array.isArray(rows)) {
+    throw createHttpError(400, 'COA batch rows are required.');
+  }
+
+  const document = await readCollectionDocument('coas');
+  const rounds = await readCollection('rounds');
+  let nextItems = Array.isArray(document.items) ? document.items : [];
+  const rowErrors = [];
+  let savedCount = 0;
+
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = getImportRowNumber(row, index);
+
+    try {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw new Error('Row is not an object.');
+      }
+
+      const normalizedItem = normalizeCollectionItem('coas', row, {
+        rounds,
+        requireLinked: true,
+        updateTimestamp: true,
+      });
+
+      if (!normalizedItem) {
+        throw new Error('Invalid COA entry.');
+      }
+
+      nextItems = [
+        normalizedItem,
+        ...nextItems.filter((currentItem) => currentItem?.id !== normalizedItem.id),
+      ];
+      savedCount += 1;
+    } catch (error) {
+      rowErrors.push({
+        rowNumber,
+        id: typeof row?.id === 'string' ? row.id : '',
+        batchNumber: typeof row?.batchNumber === 'string' ? row.batchNumber : '',
+        error: error?.message || 'COA row could not be saved.',
+      });
+    }
+  }
+
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'COA batch import contains rows that could not be saved.', {
+      failedCount: rowErrors.length,
+      savedCount: 0,
+      rowErrors,
+    });
+  }
+
+  const nextDocument = createCollectionDocument('coas', nextItems);
+
+  await writeCollectionDocument('coas', nextDocument);
+  await cleanupDetachedCoaAssets(Array.isArray(document.items) ? document.items : [], nextDocument.items, {
+    action: 'batch-import',
+    savedCount,
+  });
+
+  return {
+    items: nextDocument.items,
+    savedCount,
+    failedCount: 0,
+    rowErrors: [],
+  };
+}
+
+export async function deleteCoaBatchItems(ids) {
+  if (!Array.isArray(ids)) {
+    throw createHttpError(400, 'COA batch delete ids are required.');
+  }
+
+  const normalizedIds = [];
+  const rowErrors = [];
+
+  for (const [index, id] of ids.entries()) {
+    const rowNumber = index + 1;
+    const normalizedId = sanitizeRoundToken(id, 180);
+
+    if (!normalizedId) {
+      rowErrors.push({
+        rowNumber,
+        id: typeof id === 'string' ? id : '',
+        error: 'COA id is required.',
+      });
+      continue;
+    }
+
+    if (!normalizedIds.includes(normalizedId)) {
+      normalizedIds.push(normalizedId);
+    }
+  }
+
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'COA batch delete contains rows that could not be deleted.', {
+      failedCount: rowErrors.length,
+      deletedCount: 0,
+      rowErrors,
+    });
+  }
+
+  const document = await readCollectionDocument('coas');
+  const currentItems = Array.isArray(document.items) ? document.items : [];
+  const deleteIds = new Set(normalizedIds);
+  const nextItems = currentItems.filter((currentItem) => !deleteIds.has(currentItem?.id));
+  const deletedCount = currentItems.length - nextItems.length;
+  const nextDocument = createCollectionDocument('coas', nextItems);
+
+  await writeCollectionDocument('coas', nextDocument);
+  await cleanupDetachedCoaAssets(currentItems, nextDocument.items, {
+    action: 'batch-delete',
+    deletedCount,
+  });
+
+  return {
+    items: nextDocument.items,
+    deletedCount,
+    failedCount: 0,
+    rowErrors: [],
+  };
+}
+
+export async function importRoundBatchItems(rows) {
+  if (!Array.isArray(rows)) {
+    throw createHttpError(400, 'Round batch rows are required.');
+  }
+
+  const document = await readCollectionDocument('rounds');
+  const peptides = await readCollection('peptides');
+  let nextItems = Array.isArray(document.items) ? document.items : [];
+  const rowErrors = [];
+  let savedCount = 0;
+
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = getImportRowNumber(row, index);
+
+    try {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw new Error('Row is not an object.');
+      }
+
+      const normalizedItem = normalizeCollectionItem('rounds', row, { peptides });
+
+      nextItems = [
+        normalizedItem,
+        ...nextItems.filter((currentItem) => currentItem?.id !== normalizedItem.id),
+      ];
+      savedCount += 1;
+    } catch (error) {
+      rowErrors.push({
+        rowNumber,
+        id: typeof row?.id === 'string' ? row.id : '',
+        name: typeof row?.name === 'string' ? row.name : '',
+        error: error?.message || 'Round row could not be saved.',
+      });
+    }
+  }
+
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'Round batch import contains rows that could not be saved.', {
+      failedCount: rowErrors.length,
+      savedCount: 0,
+      rowErrors,
+    });
+  }
+
+  const nextDocument = createCollectionDocument('rounds', nextItems);
+
+  await writeCollectionDocument('rounds', nextDocument);
+
+  return {
+    items: nextDocument.items,
+    savedCount,
+    failedCount: 0,
+    rowErrors: [],
+  };
+}
+
+export async function importPeptideCategoryBatchItems(rows) {
+  if (!Array.isArray(rows)) {
+    throw createHttpError(400, 'Peptide category batch rows are required.');
+  }
+
+  const document = await readCollectionDocument('peptide-categories');
+  let nextItems = Array.isArray(document.items) ? document.items : [];
+  const rowErrors = [];
+  let savedCount = 0;
+
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = getImportRowNumber(row, index);
+
+    try {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw new Error('Row is not an object.');
+      }
+
+      const normalizedItem = normalizeCollectionItem('peptide-categories', row);
+
+      nextItems = [
+        normalizedItem,
+        ...nextItems.filter((currentItem) => currentItem?.id !== normalizedItem.id),
+      ];
+      savedCount += 1;
+    } catch (error) {
+      rowErrors.push({
+        rowNumber,
+        id: typeof row?.id === 'string' ? row.id : '',
+        name: typeof row?.name === 'string' ? row.name : '',
+        error: error?.message || 'Peptide category row could not be saved.',
+      });
+    }
+  }
+
+  if (rowErrors.length > 0) {
+    throw createHttpError(400, 'Peptide category batch import contains rows that could not be saved.', {
+      failedCount: rowErrors.length,
+      savedCount: 0,
+      rowErrors,
+    });
+  }
+
+  const nextDocument = createCollectionDocument('peptide-categories', nextItems);
+
+  await writeCollectionDocument('peptide-categories', nextDocument);
+
+  return {
+    items: nextDocument.items,
+    savedCount,
+    failedCount: 0,
+    rowErrors: [],
+  };
 }
 
 export async function deleteCollectionItem(collectionName, itemId) {
@@ -182,6 +700,12 @@ export async function deleteCollectionItem(collectionName, itemId) {
   const nextDocument = createCollectionDocument(collectionName, nextItems);
 
   await writeCollectionDocument(collectionName, nextDocument);
+  if (collectionName === 'coas') {
+    await cleanupDetachedCoaAssets(currentItems, nextItems, {
+      action: 'delete',
+      itemId,
+    });
+  }
 
   return nextItems;
 }
@@ -235,6 +759,376 @@ export async function publicUpsertLabelTemplate(template) {
   await writeCollectionDocument('label-templates', nextDocument);
 
   return [nextTemplate, ...currentItems];
+}
+
+export async function writeCoaPdfAsset(asset) {
+  const uploadId = randomUUID();
+  const diagnostics = {
+    uploadId,
+    storageAdapter: shouldUseNetlifyBlobs() ? 'netlify-blobs' : 'local-files',
+    steps: [],
+  };
+
+  logCoaPdfUpload(uploadId, diagnostics, 'received', {
+    fileName: typeof asset?.fileName === 'string' ? asset.fileName : '',
+    mimeType: typeof asset?.mimeType === 'string' ? asset.mimeType : '',
+    base64Length: typeof asset?.base64 === 'string' ? asset.base64.length : 0,
+  });
+
+  if (
+    !asset ||
+    typeof asset !== 'object' ||
+    typeof asset.fileName !== 'string' ||
+    typeof asset.mimeType !== 'string' ||
+    typeof asset.base64 !== 'string'
+  ) {
+    logCoaPdfUpload(uploadId, diagnostics, 'invalid-upload-object', {
+      hasAsset: Boolean(asset),
+      fileNameType: typeof asset?.fileName,
+      mimeTypeType: typeof asset?.mimeType,
+      base64Type: typeof asset?.base64,
+    }, 'error');
+    throw createHttpError(400, 'Invalid COA PDF upload.');
+  }
+
+  if (asset.mimeType !== 'application/pdf') {
+    logCoaPdfUpload(uploadId, diagnostics, 'invalid-mime-type', {
+      mimeType: asset.mimeType,
+    }, 'error');
+    throw createHttpError(400, 'COA file must be a PDF.');
+  }
+
+  const safeFileName = asset.fileName.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const buffer = Buffer.from(asset.base64, 'base64');
+  const uploadBufferSummary = summarizeBufferForDiagnostics(buffer);
+
+  diagnostics.input = {
+    fileName: asset.fileName,
+    mimeType: asset.mimeType,
+    safeFileName,
+    base64Length: asset.base64.length,
+    ...uploadBufferSummary,
+  };
+
+  logCoaPdfUpload(uploadId, diagnostics, 'decoded-upload', diagnostics.input);
+
+  if (buffer.length === 0 || buffer.length > maxCoaPdfBytes) {
+    logCoaPdfUpload(uploadId, diagnostics, 'invalid-size', {
+      byteLength: buffer.length,
+      maxCoaPdfBytes,
+    }, 'error');
+    throw createHttpError(400, 'COA PDF is too large.');
+  }
+
+  if (buffer.subarray(0, 5).toString('utf8') !== '%PDF-') {
+    logCoaPdfUpload(uploadId, diagnostics, 'invalid-pdf-header', uploadBufferSummary, 'error');
+    throw createHttpError(400, 'COA file must be a valid PDF.');
+  }
+
+  const blobKey = `${coaPdfAssetPrefix}${Date.now()}-${safeFileName || 'coa.pdf'}`;
+
+  logCoaPdfUpload(uploadId, diagnostics, 'store-start', {
+    blobKey,
+    storageAdapter: diagnostics.storageAdapter,
+  });
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    await store.set(blobKey, buffer, {
+      metadata: {
+        fileName: asset.fileName,
+        mimeType: 'application/pdf',
+      },
+    });
+  } else {
+    const localAssetPath = path.join(localDataDir, blobKey);
+
+    await mkdir(path.dirname(localAssetPath), { recursive: true });
+    await writeFile(localAssetPath, buffer);
+  }
+
+  logCoaPdfUpload(uploadId, diagnostics, 'store-complete', {
+    blobKey,
+  });
+
+  const storedBuffer = await verifyStoredCoaPdfAsset(blobKey, buffer, uploadId, diagnostics);
+  const { parsedCoa, vialImage } = await parseStoredCoaPdf(storedBuffer, asset.fileName, uploadId, diagnostics);
+  const vialImageFields = vialImage
+    ? await storeCoaVialImageAsset({
+        fileName: asset.fileName,
+        safeFileName,
+        image: vialImage,
+      })
+    : {};
+
+  if (vialImage) {
+    logCoaPdfUpload(uploadId, diagnostics, 'vial-image-stored', {
+      width: vialImage.width,
+      height: vialImage.height,
+      sourceName: vialImage.sourceName,
+      assetKey: vialImageFields.vialImageAssetKey,
+    });
+  } else {
+    logCoaPdfUpload(uploadId, diagnostics, 'vial-image-not-stored', {
+      reason: 'Parser did not return an extracted vial image.',
+    });
+  }
+
+  diagnostics.parser = summarizeParsedCoaForDiagnostics(parsedCoa);
+  logCoaPdfUpload(uploadId, diagnostics, 'complete', {
+    blobKey,
+    parser: diagnostics.parser,
+  }, parsedCoa?.error ? 'error' : 'log');
+
+  return {
+    coaFileName: asset.fileName,
+    coaMimeType: 'application/pdf',
+    coaBlobKey: blobKey,
+    coaUploadedAt: new Date().toISOString(),
+    parsedCoa,
+    diagnostics,
+    ...vialImageFields,
+  };
+}
+
+async function verifyStoredCoaPdfAsset(blobKey, expectedBuffer, uploadId, diagnostics) {
+  logCoaPdfUpload(uploadId, diagnostics, 'verify-start', {
+    blobKey,
+    expectedByteLength: expectedBuffer.length,
+    expectedSha256: sha256Hex(expectedBuffer),
+  });
+
+  const storedBuffer = await readCoaPdfBuffer(blobKey);
+  const storedSummary = summarizeBufferForDiagnostics(storedBuffer);
+  const expectedSha256 = sha256Hex(expectedBuffer);
+  const hashMatches = storedSummary.sha256 === expectedSha256;
+  const byteLengthMatches = storedBuffer.length === expectedBuffer.length;
+
+  diagnostics.stored = {
+    blobKey,
+    ...storedSummary,
+    expectedByteLength: expectedBuffer.length,
+    expectedSha256,
+    byteLengthMatches,
+    hashMatches,
+  };
+
+  logCoaPdfUpload(uploadId, diagnostics, 'verify-complete', diagnostics.stored, hashMatches && byteLengthMatches ? 'log' : 'error');
+
+  if (
+    !byteLengthMatches ||
+    !hashMatches ||
+    storedBuffer.subarray(0, 5).toString('utf8') !== '%PDF-'
+  ) {
+    throw createHttpError(500, 'COA PDF was uploaded but could not be verified after storage.', {
+      blobKey,
+      expectedByteLength: expectedBuffer.length,
+      storedByteLength: storedBuffer.length,
+      expectedSha256,
+      storedSha256: storedSummary.sha256,
+    });
+  }
+
+  return storedBuffer;
+}
+
+async function parseStoredCoaPdf(buffer, fileName, uploadId, diagnostics) {
+  try {
+    logCoaPdfUpload(uploadId, diagnostics, 'parser-import-start', {
+      fileName,
+    });
+    const { parseCoaPdfUploadBuffer } = await import('./coa-pdf-parser.mjs');
+
+    logCoaPdfUpload(uploadId, diagnostics, 'parser-import-complete', {
+      fileName,
+    });
+
+    const result = await parseCoaPdfUploadBuffer(buffer, {
+      fileName,
+      uploadId,
+      log: (step, detail = {}, level = 'log') => {
+        logCoaPdfUpload(uploadId, diagnostics, step, detail, level);
+      },
+    });
+
+    logCoaPdfUpload(uploadId, diagnostics, 'parser-complete', {
+      parsedCoa: summarizeParsedCoaForDiagnostics(result.parsedCoa),
+      vialImage: result.vialImage
+        ? {
+            width: result.vialImage.width,
+            height: result.vialImage.height,
+            sourceName: result.vialImage.sourceName,
+            pageNumber: result.vialImage.pageNumber,
+            operatorIndex: result.vialImage.operatorIndex,
+          }
+        : null,
+    }, result.parsedCoa?.error ? 'error' : 'log');
+
+    return result;
+  } catch (error) {
+    const errorDetails = serializeErrorForDiagnostics(error);
+
+    logCoaPdfUpload(uploadId, diagnostics, 'parser-failed', {
+      fileName,
+      error: errorDetails,
+    }, 'error');
+
+    return {
+      parsedCoa: createFailedParsedCoa(error),
+      vialImage: null,
+    };
+  }
+}
+
+function logCoaPdfUpload(uploadId, diagnostics, step, details = {}, level = 'log') {
+  const entry = {
+    at: new Date().toISOString(),
+    step,
+    level,
+    ...sanitizeDiagnostics(details),
+  };
+
+  if (diagnostics && Array.isArray(diagnostics.steps)) {
+    diagnostics.steps.push(entry);
+  }
+
+  const logPayload = {
+    uploadId,
+    step,
+    ...sanitizeDiagnostics(details),
+  };
+
+  if (level === 'error') {
+    console.error('[coa-pdf-upload]', logPayload);
+    return;
+  }
+
+  if (level === 'warn') {
+    console.warn('[coa-pdf-upload]', logPayload);
+    return;
+  }
+
+  console.log('[coa-pdf-upload]', logPayload);
+}
+
+function summarizeBufferForDiagnostics(buffer) {
+  return {
+    byteLength: buffer.length,
+    sha256: sha256Hex(buffer),
+    headerText: buffer.subarray(0, 12).toString('latin1'),
+    headerHex: buffer.subarray(0, 12).toString('hex'),
+    trailerText: buffer.subarray(Math.max(0, buffer.length - 24)).toString('latin1'),
+  };
+}
+
+function sha256Hex(buffer) {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+function summarizeParsedCoaForDiagnostics(parsedCoa) {
+  const fields = parsedCoa?.fields && typeof parsedCoa.fields === 'object' ? parsedCoa.fields : {};
+
+  return {
+    status: parsedCoa?.error ? 'failed' : 'parsed',
+    parserVersion: parsedCoa?.parserVersion,
+    extractionMethod: parsedCoa?.extractionMethod,
+    templateId: parsedCoa?.templateId,
+    templateConfidence: parsedCoa?.templateConfidence,
+    pageCount: parsedCoa?.pageCount,
+    confidence: parsedCoa?.confidence,
+    warnings: Array.isArray(parsedCoa?.warnings) ? parsedCoa.warnings : [],
+    error: parsedCoa?.error || '',
+    fieldPresence: Object.fromEntries(
+      Object.entries(fields).map(([key, value]) => [key, Boolean(String(value ?? '').trim())]),
+    ),
+    snippetKeys: parsedCoa?.raw?.snippets && typeof parsedCoa.raw.snippets === 'object'
+      ? Object.keys(parsedCoa.raw.snippets)
+      : [],
+    verificationUrlCount: Array.isArray(parsedCoa?.raw?.verificationUrls) ? parsedCoa.raw.verificationUrls.length : 0,
+    vialImage: parsedCoa?.raw?.vialImage ?? null,
+  };
+}
+
+function serializeErrorForDiagnostics(error) {
+  if (!error || typeof error !== 'object') {
+    return {
+      message: String(error || 'Unknown error'),
+    };
+  }
+
+  return {
+    name: error.name,
+    message: error.message || 'Unknown error',
+    code: error.code,
+    cause: error.cause?.message || (error.cause ? String(error.cause) : ''),
+    stack: error.stack,
+  };
+}
+
+function sanitizeDiagnostics(value) {
+  if (Buffer.isBuffer(value)) {
+    return {
+      byteLength: value.length,
+      sha256: sha256Hex(value),
+    };
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 30).map(sanitizeDiagnostics);
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !/base64|password|secret|token/i.test(key))
+      .map(([key, entryValue]) => [key, sanitizeDiagnostics(entryValue)]),
+  );
+}
+
+async function storeCoaVialImageAsset({ fileName, safeFileName, image }) {
+  if (
+    !image ||
+    image.mimeType !== 'image/png' ||
+    !Buffer.isBuffer(image.buffer) ||
+    image.buffer.length === 0 ||
+    image.buffer.length > maxCoaVialImageBytes
+  ) {
+    return {};
+  }
+
+  const cleanBaseName = (safeFileName || fileName || 'coa-vial.png')
+    .replace(/\.pdf$/i, '')
+    .replace(/[^a-zA-Z0-9._-]/g, '-');
+  const assetKey = `${coaVialImageAssetPrefix}${Date.now()}-${cleanBaseName || 'coa-vial'}.png`;
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    await store.set(assetKey, image.buffer, {
+      metadata: {
+        fileName: `${cleanBaseName || 'coa-vial'}.png`,
+        mimeType: 'image/png',
+        width: String(image.width),
+        height: String(image.height),
+      },
+    });
+  } else {
+    const localAssetPath = path.join(localDataDir, assetKey);
+
+    await mkdir(path.dirname(localAssetPath), { recursive: true });
+    await writeFile(localAssetPath, image.buffer);
+  }
+
+  return {
+    vialImageAssetKey: assetKey,
+    vialImageMimeType: 'image/png',
+    vialImageFileName: `${cleanBaseName || 'coa-vial'}.png`,
+    vialImageSource: 'coa-pdf',
+    vialImageMode: 'extracted',
+    vialImageExtractedAt: new Date().toISOString(),
+  };
 }
 
 export async function publicReportLabelTemplate(report, headers = {}) {
@@ -361,9 +1255,12 @@ export async function permanentlyDeleteLabelTemplate(itemId) {
   return hardDeleteLabelTemplate(itemId);
 }
 
-export function createHttpError(statusCode, message) {
+export function createHttpError(statusCode, message, details) {
   const error = new Error(message);
   error.statusCode = statusCode;
+  if (details !== undefined) {
+    error.details = details;
+  }
   return error;
 }
 
@@ -567,6 +1464,123 @@ async function readLabelPreviewAsset(assetKey) {
   }
 }
 
+async function readCoaPdfBuffer(assetKey) {
+  const cleanAssetKey = normalizeCoaAssetKey(assetKey);
+
+  if (!cleanAssetKey) {
+    throw createHttpError(404, 'COA PDF not found.');
+  }
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    const asset = await store.get(cleanAssetKey, { type: 'arrayBuffer' });
+
+    if (!asset) {
+      throw createHttpError(404, 'COA PDF not found.');
+    }
+
+    return Buffer.from(asset);
+  }
+
+  try {
+    return await readFile(path.join(localDataDir, cleanAssetKey));
+  } catch {
+    throw createHttpError(404, 'COA PDF not found.');
+  }
+}
+
+async function readCoaVialImageBuffer(assetKey) {
+  const cleanAssetKey = normalizeCoaVialImageAssetKey(assetKey);
+
+  if (!cleanAssetKey) {
+    throw createHttpError(404, 'COA vial image not found.');
+  }
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    const asset = await store.get(cleanAssetKey, { type: 'arrayBuffer' });
+
+    if (!asset) {
+      throw createHttpError(404, 'COA vial image not found.');
+    }
+
+    return Buffer.from(asset);
+  }
+
+  try {
+    return await readFile(path.join(localDataDir, cleanAssetKey));
+  } catch {
+    throw createHttpError(404, 'COA vial image not found.');
+  }
+}
+
+async function cleanupDetachedCoaAssets(previousItems, nextItems, context = {}) {
+  const previousKeys = collectCoaAssetKeys(previousItems);
+  const nextKeys = collectCoaAssetKeys(nextItems);
+  const detachedKeys = [...previousKeys].filter((assetKey) => !nextKeys.has(assetKey));
+
+  for (const assetKey of detachedKeys) {
+    try {
+      await deleteCoaAsset(assetKey);
+    } catch (error) {
+      console.error('[coa-assets] detached asset delete failed', {
+        ...context,
+        assetKey,
+        error,
+      });
+    }
+  }
+}
+
+function collectCoaAssetKeys(items) {
+  const keys = new Set();
+
+  if (!Array.isArray(items)) {
+    return keys;
+  }
+
+  for (const item of items) {
+    const pdfAssetKey = normalizeCoaAssetKey(item?.coaBlobKey);
+    const vialImageAssetKey = normalizeCoaVialImageAssetKey(item?.vialImageAssetKey);
+
+    if (pdfAssetKey) {
+      keys.add(pdfAssetKey);
+    }
+
+    if (vialImageAssetKey) {
+      keys.add(vialImageAssetKey);
+    }
+  }
+
+  return keys;
+}
+
+async function deleteCoaAsset(assetKey) {
+  const cleanAssetKey = normalizeCoaAssetKey(assetKey) || normalizeCoaVialImageAssetKey(assetKey);
+
+  if (!cleanAssetKey) {
+    return;
+  }
+
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    await store.delete(cleanAssetKey);
+    return;
+  }
+
+  await rm(path.join(localDataDir, cleanAssetKey), { force: true });
+}
+
+function normalizeCoaVialImageAssetKey(value) {
+  const cleanValue = typeof value === 'string' ? value.trim().replace(/\\/g, '/') : '';
+
+  if (!cleanValue || !cleanValue.startsWith(coaVialImageAssetPrefix) || cleanValue.includes('..')) {
+    return '';
+  }
+
+  return cleanValue;
+}
+
 async function getBlobStore() {
   const { getStore } = await import('@netlify/blobs');
 
@@ -752,20 +1766,28 @@ function normalizeCollectionItems(collectionName, items) {
     return items.map((item) => normalizePeptideItem(item));
   }
 
+  if (collectionName === 'peptide-categories') {
+    return items.map((item) => normalizePeptideCategoryItem(item)).filter(Boolean);
+  }
+
   if (collectionName === 'rounds') {
     return items.map((item) => normalizeRoundItem(item)).filter(Boolean);
+  }
+
+  if (collectionName === 'coas') {
+    return items.map((item) => normalizeCoaItem(item)).filter(Boolean);
   }
 
   return items;
 }
 
-function normalizeCollectionItem(collectionName, item) {
+function normalizeCollectionItem(collectionName, item, options = {}) {
   if (collectionName === 'peptides') {
-    return normalizePeptideItem(item);
+    return normalizePeptideItem(item, {}, { requireBlendComponents: true });
   }
 
   if (collectionName === 'rounds') {
-    const normalizedRound = normalizeRoundItem(item);
+    const normalizedRound = normalizeRoundItem(item, options);
 
     if (!normalizedRound) {
       throw createHttpError(400, 'Invalid round.');
@@ -774,10 +1796,45 @@ function normalizeCollectionItem(collectionName, item) {
     return normalizedRound;
   }
 
+  if (collectionName === 'peptide-categories') {
+    const normalizedCategory = normalizePeptideCategoryItem(item);
+
+    if (!normalizedCategory) {
+      throw createHttpError(400, 'Invalid peptide category.');
+    }
+
+    return normalizedCategory;
+  }
+
+  if (collectionName === 'coas') {
+    const normalizedCoa = normalizeCoaItem(item, options);
+
+    if (!normalizedCoa) {
+      throw createHttpError(400, 'Invalid COA entry.');
+    }
+
+    return normalizedCoa;
+  }
+
   return item;
 }
 
-function normalizeRoundItem(item) {
+function normalizePeptideCategoryItem(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  const name = sanitizeRoundText(item.name, 120);
+  const id = sanitizeRoundToken(item.id, 120);
+
+  if (!id || !name) {
+    return null;
+  }
+
+  return { id, name };
+}
+
+function normalizeRoundItem(item, options = {}) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     return null;
   }
@@ -800,28 +1857,36 @@ function normalizeRoundItem(item) {
     startDate: normalizeDateString(item.startDate),
     endDate: normalizeDateString(item.endDate),
     targetWindow: sanitizeRoundText(item.targetWindow, 120),
+    resultPasscode: sanitizeRoundText(item.resultPasscode, 120),
     participants: normalizeNonNegativeInteger(item.participants),
     roundDiscountPercent: normalizePercentage(item.roundDiscountPercent),
     priceListSnapshot,
     peptides: Array.isArray(item.peptides)
-      ? item.peptides.map((row, index) => normalizeRoundPeptideRow(row, index)).filter(Boolean)
+      ? item.peptides.map((row, index) => normalizeRoundPeptideRow(row, index, options.peptides, priceListSnapshot)).filter(Boolean)
       : [],
     createdAt: normalizeDateTimeString(item.createdAt),
     updatedAt: normalizeDateTimeString(item.updatedAt),
   };
 }
 
-function normalizeRoundPeptideRow(row, index) {
+function normalizeRoundPeptideRow(row, index, peptides, priceListSnapshot = null) {
   if (!row || typeof row !== 'object' || Array.isArray(row)) {
     return null;
   }
 
   const id = sanitizeRoundToken(row.id, 160) || `row-${index + 1}`;
+  const shouldResolvePeptide = Array.isArray(peptides);
+  const sourceName = sanitizeRoundText(getRoundPeptideSourceName(row, priceListSnapshot), 120);
+  const linkedPeptide = shouldResolvePeptide
+    ? resolveRoundPeptide(row, peptides, priceListSnapshot)
+    : null;
 
   return {
     id,
-    peptideId: sanitizeRoundToken(row.peptideId, 120),
-    peptideName: sanitizeRoundText(row.peptideName, 120),
+    peptideId: shouldResolvePeptide ? linkedPeptide?.id ?? '' : sanitizeRoundToken(row.peptideId, 120),
+    peptideName: shouldResolvePeptide
+      ? linkedPeptide?.name ? sanitizeRoundText(linkedPeptide.name, 120) : sourceName
+      : sanitizeRoundText(row.peptideName, 120),
     priceListItemId: sanitizeRoundToken(row.priceListItemId, 160),
     vendorCode: sanitizeRoundText(row.vendorCode, 80),
     vendorPrice: normalizeNullableMoney(row.vendorPrice),
@@ -835,6 +1900,204 @@ function normalizeRoundPeptideRow(row, index) {
     participantCount: normalizeNonNegativeInteger(row.participantCount),
     totalOrdered: normalizeNonNegativeInteger(row.totalOrdered),
   };
+}
+
+function resolveRoundPeptide(row, peptides = [], priceListSnapshot = null) {
+  const knownPeptides = Array.isArray(peptides) ? peptides : [];
+  const rowPeptideId = sanitizeRoundToken(row?.peptideId, 120);
+
+  if (rowPeptideId) {
+    return knownPeptides.find((peptide) => peptide?.id === rowPeptideId) ?? null;
+  }
+
+  const priceListItem = getRoundPriceListItem(row, priceListSnapshot);
+  const priceListPeptideId = Array.isArray(priceListItem?.peptideIds)
+    ? sanitizeRoundToken(priceListItem.peptideIds[0], 120)
+    : '';
+
+  if (priceListPeptideId) {
+    const priceListPeptide = knownPeptides.find((peptide) => peptide?.id === priceListPeptideId);
+
+    if (priceListPeptide) {
+      return priceListPeptide;
+    }
+  }
+
+  return findPeptideByName(getRoundPeptideSourceName(row, priceListSnapshot), knownPeptides);
+}
+
+function getRoundPeptideSourceName(row, priceListSnapshot = null) {
+  const priceListItem = getRoundPriceListItem(row, priceListSnapshot);
+
+  return priceListItem?.productName || row?.peptideName || '';
+}
+
+function getRoundPriceListItem(row, priceListSnapshot = null) {
+  const priceListItemId = sanitizeRoundToken(row?.priceListItemId, 160);
+
+  return priceListItemId && Array.isArray(priceListSnapshot?.items)
+    ? priceListSnapshot.items.find((item) => item?.id === priceListItemId) ?? null
+    : null;
+}
+
+function findPeptideByName(name, peptides = []) {
+  const sourceNames = getNameMatchVariants(name);
+
+  if (sourceNames.length === 0) {
+    return null;
+  }
+
+  return peptides.find((peptide) =>
+    getNameMatchVariants(peptide?.name).some((peptideName) => sourceNames.includes(peptideName)),
+  ) ?? null;
+}
+
+function getNameMatchVariants(value) {
+  return [
+    value,
+    String(value ?? '').replace(/\([^)]*\)/g, ' '),
+  ]
+    .map((variant) => normalizeRoundName(variant))
+    .filter(Boolean)
+    .filter((variant, index, variants) => variants.indexOf(variant) === index);
+}
+
+function normalizeRoundName(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function normalizeCoaItem(item, options = {}) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  const id = sanitizeRoundToken(item.id, 180);
+  const batchNumber = sanitizeRoundText(item.batchNumber, 160);
+
+  if (!id || !batchNumber) {
+    return null;
+  }
+
+  const roundLink = resolveCoaRoundLink(item, options.rounds);
+
+  if (options.requireLinked && !roundLink) {
+    throw createHttpError(400, 'COA entry must link to a round peptide.');
+  }
+
+  const sourceRound = roundLink?.round;
+  const sourceRow = roundLink?.row;
+  const code = sanitizeRoundText(item.code || sourceRow?.vendorCode, 80);
+
+  if (options.requireLinked && !code) {
+    throw createHttpError(400, 'COA code is required.');
+  }
+
+  const now = new Date().toISOString();
+  const coaBlobKey = normalizeCoaAssetKey(item.coaBlobKey);
+  const vialImageAssetKey = normalizeCoaVialImageAssetKey(item.vialImageAssetKey);
+  const parsedCoa = item.parsedCoa && typeof item.parsedCoa === 'object' && !Array.isArray(item.parsedCoa)
+    ? compactParsedCoa(item.parsedCoa)
+    : null;
+  const vialImageMode = item.vialImageMode === 'placeholder' || isRejectedLegacyCoaVialImage(parsedCoa)
+    ? 'placeholder'
+    : 'extracted';
+
+  if (parsedCoa && !doesParsedLotMatchBatch(parsedCoa, batchNumber)) {
+    throw createHttpError(400, 'Parsed COA lot does not match the COA batch number.');
+  }
+
+  return {
+    id,
+    roundId: sanitizeRoundToken(sourceRound?.id ?? item.roundId, 120),
+    roundName: sanitizeRoundText(sourceRound?.name ?? item.roundName, 120),
+    roundPeptideId: sanitizeRoundToken(sourceRow?.id ?? item.roundPeptideId, 160),
+    peptideId: sanitizeRoundToken(sourceRow?.peptideId ?? item.peptideId, 120),
+    peptideName: sanitizeRoundText(sourceRow?.peptideName ?? item.peptideName, 120),
+    code,
+    batchNumber,
+    capColor: sanitizeRoundText(item.capColor, 60) || 'TBD',
+    mass: sanitizeRoundText(sourceRow?.mass ?? item.mass, 60),
+    testingTier: normalizeTestingTier(sourceRow?.testingTier ?? item.testingTier),
+    dateTested: sanitizeRoundText(item.dateTested, 80),
+    lab: sanitizeRoundText(item.lab, 120),
+    coaNumber: sanitizeRoundText(item.coaNumber, 80),
+    accessionNumber: sanitizeRoundText(item.accessionNumber, 80),
+    verificationUrl: sanitizeRoundText(item.verificationUrl, 240),
+    averageNetContent: sanitizeRoundText(item.averageNetContent, 80) || 'Pending',
+    purity: sanitizeRoundText(item.purity, 80) || 'Pending',
+    endotoxins: sanitizeRoundText(item.endotoxins, 80) || 'Pending',
+    heavyMetals: sanitizeRoundText(item.heavyMetals, 80) || 'Pending',
+    sterility: sanitizeRoundText(item.sterility, 80) || 'Pending',
+    fentanyl: sanitizeRoundText(item.fentanyl, 80) || 'Pending',
+    ...(coaBlobKey
+      ? {
+          coaFileName: sanitizeRoundText(item.coaFileName, 180) || `${id}.pdf`,
+          coaMimeType: item.coaMimeType === 'application/pdf' ? 'application/pdf' : 'application/pdf',
+          coaBlobKey,
+          coaUploadedAt: normalizeDateTimeString(item.coaUploadedAt) || now,
+        }
+      : {}),
+    ...(vialImageAssetKey
+      ? {
+          vialImageAssetKey,
+          vialImageMimeType: item.vialImageMimeType === 'image/png' ? 'image/png' : 'image/png',
+          vialImageFileName: sanitizeRoundText(item.vialImageFileName, 180) || `${id}-vial.png`,
+          vialImageSource: item.vialImageSource === 'coa-pdf' ? 'coa-pdf' : 'coa-pdf',
+          vialImageMode,
+          vialImageExtractedAt: normalizeDateTimeString(item.vialImageExtractedAt) || now,
+        }
+      : {}),
+    ...(parsedCoa ? { parsedCoa } : {}),
+    createdAt: normalizeDateTimeString(item.createdAt) || now,
+    updatedAt: options.updateTimestamp
+      ? now
+      : normalizeDateTimeString(item.updatedAt) || normalizeDateTimeString(item.createdAt) || now,
+  };
+}
+
+function isRejectedLegacyCoaVialImage(parsedCoa) {
+  const image = parsedCoa?.raw?.vialImage;
+
+  return parsedCoa?.templateId === 'ils_laboratories_coa'
+    && image
+    && (
+      Number(image.operatorIndex) < 300 ||
+      Number(image.drawnX) < 430 ||
+      (Number(image.width) <= 260 && Number(image.height) <= 280)
+    );
+}
+
+function resolveCoaRoundLink(item, rounds) {
+  if (!Array.isArray(rounds)) {
+    return null;
+  }
+
+  const roundId = sanitizeRoundToken(item?.roundId, 120);
+  const roundPeptideId = sanitizeRoundToken(item?.roundPeptideId, 160);
+  const round = rounds.find((currentRound) => currentRound?.id === roundId);
+
+  if (!round || !Array.isArray(round.peptides)) {
+    return null;
+  }
+
+  const row = round.peptides.find((currentRow) => currentRow?.id === roundPeptideId);
+
+  return row ? { round, row } : null;
+}
+
+function normalizeCoaAssetKey(value) {
+  const cleanValue = typeof value === 'string' ? value.trim().replace(/\\/g, '/') : '';
+
+  if (
+    !cleanValue ||
+    !cleanValue.startsWith(coaPdfAssetPrefix) ||
+    cleanValue.includes('..') ||
+    !/^[a-zA-Z0-9._/-]+$/.test(cleanValue)
+  ) {
+    return '';
+  }
+
+  return cleanValue;
 }
 
 function normalizeRoundPriceListSnapshot(snapshot) {
@@ -926,14 +2189,61 @@ function sanitizeRoundTokenArray(value, maxItems, maxLength) {
 }
 
 function normalizeDateString(value) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+  if (typeof value !== 'string' || !value.trim()) {
     return '';
   }
 
   const cleanValue = value.trim();
-  const timestamp = Date.parse(`${cleanValue}T00:00:00.000Z`);
+  const numericMatch = cleanValue.match(/^(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})$/);
 
-  return Number.isFinite(timestamp) ? cleanValue : '';
+  if (numericMatch) {
+    const [, firstPart, secondPart, thirdPart] = numericMatch;
+    const firstNumber = Number(firstPart);
+    const secondNumber = Number(secondPart);
+    const thirdNumber = Number(thirdPart);
+
+    if (firstPart.length === 4) {
+      return formatRoundDateParts(secondNumber, thirdNumber, firstNumber);
+    }
+
+    return formatRoundDateParts(firstNumber, secondNumber, normalizeRoundDateYear(thirdNumber));
+  }
+
+  const timestamp = Date.parse(cleanValue);
+
+  if (!Number.isFinite(timestamp)) {
+    return '';
+  }
+
+  const parsedDate = new Date(timestamp);
+
+  return formatRoundDateParts(parsedDate.getUTCMonth() + 1, parsedDate.getUTCDate(), parsedDate.getUTCFullYear());
+}
+
+function normalizeRoundDateYear(year) {
+  if (year < 100) {
+    return year >= 70 ? 1900 + year : 2000 + year;
+  }
+
+  return year;
+}
+
+function formatRoundDateParts(month, day, year) {
+  const parsedDate = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    parsedDate.getUTCFullYear() !== year ||
+    parsedDate.getUTCMonth() !== month - 1 ||
+    parsedDate.getUTCDate() !== day
+  ) {
+    return '';
+  }
+
+  const displayMonth = String(month).padStart(2, '0');
+  const displayDay = String(day).padStart(2, '0');
+  const displayYear = String(year % 100).padStart(2, '0');
+
+  return `${displayMonth}/${displayDay}/${displayYear}`;
 }
 
 function normalizeDateTimeString(value) {
@@ -998,8 +2308,18 @@ function normalizePeptideImportItem(item) {
       .filter((category, index, categoryList) => categoryList.indexOf(category) === index)
     : [];
 
-  if (!id || !name || categories.length === 0) {
-    throw createHttpError(400, 'Peptide import contains invalid records.');
+  const invalidFields = [];
+
+  if (!id) {
+    invalidFields.push('missing id');
+  }
+
+  if (!name) {
+    invalidFields.push('missing name');
+  }
+
+  if (invalidFields.length > 0) {
+    throw createHttpError(400, `Invalid peptide record: ${invalidFields.join(', ')}.`);
   }
 
   return normalizePeptideItem({
@@ -1008,7 +2328,50 @@ function normalizePeptideImportItem(item) {
     name,
     categories,
     description: typeof item.description === 'string' ? item.description.trim() : '',
-  });
+  }, {}, { requireBlendComponents: true });
+}
+
+function normalizePeptideTransferItem(item) {
+  return {
+    ...item,
+    categories: Array.isArray(item?.categories) ? item.categories : [],
+  };
+}
+
+function getImportRowNumber(row, index) {
+  const parsedRowNumber = Number(row?.rowNumber);
+
+  return Number.isFinite(parsedRowNumber) && parsedRowNumber > 0
+    ? Math.trunc(parsedRowNumber)
+    : index + 1;
+}
+
+function createUniquePeptideId(name, items) {
+  const baseId = slugifyPeptideId(name) || `peptide-${Date.now()}`;
+  const usedIds = new Set(items.map((item) => item?.id).filter(Boolean));
+  let nextId = baseId;
+  let suffix = 2;
+
+  while (usedIds.has(nextId)) {
+    nextId = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+
+  return nextId;
+}
+
+function findPeptideByNormalizedName(items, name) {
+  const normalizedName = normalizeRoundName(name);
+
+  return items.find((item) => normalizeRoundName(item?.name) === normalizedName) ?? null;
+}
+
+function slugifyPeptideId(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 async function enrichDocumentFromSeed(collectionName, config, document) {
@@ -1032,17 +2395,72 @@ async function enrichDocumentFromSeed(collectionName, config, document) {
   }
 }
 
-function normalizePeptideItem(item, seedItem = {}) {
+function normalizePeptideItem(item, seedItem = {}, options = {}) {
+  const kind = normalizePeptideKind(item?.kind ?? seedItem?.kind);
+  const components = normalizeBlendComponents(item?.components ?? seedItem?.components);
+
+  if (options.requireBlendComponents && kind === 'blend' && components.length === 0) {
+    throw createHttpError(400, 'Blend components are required.');
+  }
+
   const mergedItem = {
     ...seedItem,
     ...item,
+    kind,
     description: item?.description || seedItem?.description || '',
+    components: kind === 'blend' ? components : [],
     wikiLinks: normalizePeptideWikiLinks(item, seedItem),
   };
 
   delete mergedItem.peptidepediaUrl;
 
   return mergedItem;
+}
+
+function normalizePeptideKind(value) {
+  return value === 'blend' ? 'blend' : 'peptide';
+}
+
+function normalizeBlendComponents(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const components = [];
+  const seenKeys = new Set();
+
+  for (const component of value) {
+    if (!component || typeof component !== 'object' || Array.isArray(component)) {
+      continue;
+    }
+
+    const peptideId = sanitizeRoundToken(component.peptideId, 120);
+    const name = sanitizeTextField(component.name, {
+      maxLength: 120,
+      fieldName: 'Blend component name',
+      required: false,
+    });
+    const ratio = sanitizeTextField(component.ratio, {
+      maxLength: 80,
+      fieldName: 'Blend component ratio',
+      required: false,
+    });
+
+    if (!name) {
+      continue;
+    }
+
+    const key = peptideId || name.toLowerCase();
+
+    if (seenKeys.has(key)) {
+      continue;
+    }
+
+    seenKeys.add(key);
+    components.push({ peptideId, name, ratio });
+  }
+
+  return components;
 }
 
 function normalizePeptideWikiLinks(item = {}, seedItem = {}) {

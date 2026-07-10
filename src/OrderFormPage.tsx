@@ -3,9 +3,9 @@ import DisclaimerSection from './Helpers/DisclaimerSection';
 import { fetchRounds, getCurrentRounds, parseRoundMassMg, type Round, type RoundPeptide } from './rounds';
 
 const orderTestingTiers = [
-  { id: 'platinum', name: 'Platinum', label: '7x Testing' },
-  { id: 'gold', name: 'Gold', label: '5x Testing' },
-  { id: 'gold-plus', name: 'Gold+', label: 'Advanced Testing' },
+  { id: 'platinum', name: 'Platinum', label: '8x Testing' },
+  { id: 'gold', name: 'Gold', label: '4x Testing' },
+  { id: 'gold-plus', name: 'Gold+', label: '5x Testing' },
   { id: 'bronze', name: 'Bronze', label: '2x Testing' },
 ] as const;
 

@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import type { ToggleablePageId } from './page-disables';
 
 declare global {

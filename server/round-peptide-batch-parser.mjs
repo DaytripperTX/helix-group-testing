@@ -117,9 +117,25 @@ function findPeptide(name, peptides, priceItem) {
     }
   }
 
-  const normalizedName = normalizeName(name);
+  const sourceNames = getNameMatchVariants(name);
 
-  return normalizedName ? peptides.find((peptide) => normalizeName(peptide?.name ?? '') === normalizedName) ?? null : null;
+  if (sourceNames.length === 0) {
+    return null;
+  }
+
+  return peptides.find((peptide) =>
+    getNameMatchVariants(peptide?.name).some((peptideName) => sourceNames.includes(peptideName)),
+  ) ?? null;
+}
+
+function getNameMatchVariants(value) {
+  return [
+    value,
+    String(value ?? '').replace(/\([^)]*\)/g, ' '),
+  ]
+    .map((variant) => normalizeName(variant))
+    .filter(Boolean)
+    .filter((variant, index, variants) => variants.indexOf(variant) === index);
 }
 
 function normalizeTestingTier(value) {

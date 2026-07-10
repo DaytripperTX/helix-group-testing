@@ -1,8 +1,10 @@
 import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  hydrateVendorDefaultRounds,
   sortRoundsForDisplay,
   type Round,
   type RoundPeptide,
+  type RoundPriceListItem,
   type RoundPriceListSnapshot,
   type TestingTierId,
 } from './rounds';
@@ -60,11 +62,21 @@ type WikiLink = {
   status: WikiStatus;
 };
 
+type PeptideKind = 'peptide' | 'blend';
+
+type BlendComponent = {
+  peptideId: string;
+  name: string;
+  ratio: string;
+};
+
 type Peptide = {
   id: string;
   name: string;
+  kind?: PeptideKind;
   categories: string[];
   description?: string;
+  components?: BlendComponent[];
   wikiLinks?: WikiLink[];
   peptidepediaUrl?: string;
 };
@@ -87,8 +99,10 @@ type VendorForm = {
 
 type PeptideForm = {
   name: string;
+  kind: PeptideKind;
   categories: string;
   description: string;
+  components: BlendComponent[];
   wikiLinks: WikiLink[];
 };
 
@@ -107,6 +121,30 @@ type PeptideTransfer = {
   collection: 'peptides';
   exportedAt: string;
   items: Peptide[];
+};
+
+type PeptideBatchImportResult = {
+  items: Peptide[];
+  savedCount: number;
+  failedCount: number;
+  rowErrors: {
+    rowNumber: number;
+    id: string;
+    name: string;
+    error: string;
+  }[];
+};
+
+type BatchSaveResult<T> = {
+  items: T[];
+  savedCount: number;
+  failedCount: number;
+  rowErrors: {
+    rowNumber: number;
+    id: string;
+    name?: string;
+    error: string;
+  }[];
 };
 
 type AdminNote = {
@@ -135,6 +173,7 @@ type RoundForm = {
   startDate: string;
   endDate: string;
   targetWindow: string;
+  resultPasscode: string;
   participants: string;
   roundDiscountPercent: string;
   priceSourceMode: RoundPriceSourceMode;
@@ -160,6 +199,11 @@ type RoundPeptideSort = {
   direction: 'asc' | 'desc';
 };
 
+type PeptideModalOrigin =
+  | { type: 'price-list'; itemId: string }
+  | { type: 'round-row'; rowId: string }
+  | null;
+
 const emptyVendorForm: VendorForm = {
   name: '',
   nickname: '',
@@ -173,8 +217,10 @@ const emptyVendorForm: VendorForm = {
 
 const emptyPeptideForm: PeptideForm = {
   name: '',
+  kind: 'peptide',
   categories: '',
   description: '',
+  components: [],
   wikiLinks: createDefaultWikiLinks(),
 };
 
@@ -193,6 +239,7 @@ const emptyRoundForm: RoundForm = {
   startDate: '',
   endDate: '',
   targetWindow: '',
+  resultPasscode: '',
   participants: '',
   roundDiscountPercent: '',
   priceSourceMode: 'none',
@@ -244,9 +291,11 @@ function AdminPage({
   const [editingPeptide, setEditingPeptide] = useState<Peptide | null>(null);
   const [peptideForm, setPeptideForm] = useState<PeptideForm>(emptyPeptideForm);
   const [isPeptideModalOpen, setIsPeptideModalOpen] = useState(false);
+  const [peptideModalOrigin, setPeptideModalOrigin] = useState<PeptideModalOrigin>(null);
   const [editingRound, setEditingRound] = useState<Round | null>(null);
   const [roundForm, setRoundForm] = useState<RoundForm>(emptyRoundForm);
-  const [roundPeptideSort, setRoundPeptideSort] = useState<RoundPeptideSort | null>(null);
+  const [roundModalSearch, setRoundModalSearch] = useState('');
+  const [roundPeptideSort, setRoundPeptideSort] = useState<RoundPeptideSort | null>({ key: 'vendorCode', direction: 'asc' });
   const [isRoundModalOpen, setIsRoundModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
@@ -259,6 +308,8 @@ function AdminPage({
   const [priceListFile, setPriceListFile] = useState<File | null>(null);
   const [priceListUrl, setPriceListUrl] = useState('');
   const [priceListStatus, setPriceListStatus] = useState('');
+  const [priceListSearch, setPriceListSearch] = useState('');
+  const [peptideSearch, setPeptideSearch] = useState('');
   const [roundPriceListFile, setRoundPriceListFile] = useState<File | null>(null);
   const [roundPriceListUrl, setRoundPriceListUrl] = useState('');
   const [roundPriceListStatus, setRoundPriceListStatus] = useState('');
@@ -287,6 +338,26 @@ function AdminPage({
     return () => window.clearTimeout(timeoutId);
   }, [savedPriceListVendorId]);
 
+  useEffect(() => {
+    if (!isRoundModalOpen) {
+      return;
+    }
+
+    setRoundForm((currentForm) => {
+      if (currentForm.priceSourceMode !== 'vendor-default' || !currentForm.vendorId) {
+        return currentForm;
+      }
+
+      const latestSnapshot = getSavedVendorPriceListSnapshot(priceLists, currentForm.vendorId);
+
+      return {
+        ...currentForm,
+        priceListSnapshot: latestSnapshot,
+        peptides: reconcileRoundRowsWithPriceListSnapshot(currentForm.peptides, latestSnapshot, peptides),
+      };
+    });
+  }, [isRoundModalOpen, priceLists, peptides]);
+
   const sortedVendors = useMemo(
     () => [...vendors].sort((first, second) => first.name.localeCompare(second.name)),
     [vendors],
@@ -295,6 +366,17 @@ function AdminPage({
     () => [...peptides].sort((first, second) => first.name.localeCompare(second.name)),
     [peptides],
   );
+  const filteredPeptides = useMemo(
+    () => sortedPeptides.filter((peptide) => matchesAdminSearch(peptideSearch, [
+      peptide.name,
+      normalizePeptideKind(peptide.kind),
+      peptide.categories.join(' '),
+      peptide.description,
+      formatBlendComponents(peptide.components),
+      getPeptideWikiSearchText(peptide),
+    ])),
+    [sortedPeptides, peptideSearch],
+  );
   const sortedRounds = useMemo(
     () => sortRoundsForDisplay(rounds),
     [rounds],
@@ -302,6 +384,37 @@ function AdminPage({
   const sortedRoundPeptideRows = useMemo(
     () => sortRoundPeptideRows(roundForm.peptides, roundPeptideSort),
     [roundForm.peptides, roundPeptideSort],
+  );
+  const effectiveRoundPriceListSnapshot = useMemo(
+    () => roundForm.priceListSnapshot ?? getSavedVendorPriceListSnapshot(priceLists, roundForm.vendorId),
+    [priceLists, roundForm.priceListSnapshot, roundForm.vendorId],
+  );
+  const filteredRoundPeptideRows = useMemo(
+    () => sortedRoundPeptideRows.filter((row) => matchesAdminSearch(roundModalSearch, [
+      row.peptideName,
+      row.vendorCode,
+      String(row.vendorPrice ?? ''),
+      row.mass,
+      row.testingTier,
+      row.additionalTesting,
+      row.capColor,
+      row.notes,
+      String(row.participantCount),
+      String(row.totalOrdered),
+    ])),
+    [sortedRoundPeptideRows, roundModalSearch],
+  );
+  const filteredPriceListItems = useMemo(
+    () => (priceListDraft?.items ?? []).filter((item) => matchesAdminSearch(priceListSearch, [
+      item.vendorCode,
+      item.productName,
+      item.mass,
+      String(item.price ?? ''),
+      String(item.vialsPerPack),
+      formatPeptideLinks(item.peptideIds, peptides),
+      item.needsReview ? 'needs review' : '',
+    ])),
+    [priceListDraft, priceListSearch, peptides],
   );
   const sortedAdminNotes = useMemo(
     () => [...adminNotes].sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime()),
@@ -319,7 +432,7 @@ function AdminPage({
     ]);
 
     setVendors(nextVendors);
-    setRounds(nextRounds);
+    setRounds(hydrateVendorDefaultRounds(nextRounds, nextPriceLists, nextPeptides));
     setPeptides(nextPeptides);
     setPriceLists(nextPriceLists);
     setPeptideCategories(nextPeptideCategories);
@@ -447,6 +560,7 @@ function AdminPage({
     setPriceListDraft(existingPriceList);
     setPriceListFile(null);
     setPriceListUrl(vendor.priceSheet?.type === 'google-sheet' ? vendor.priceSheet.url : '');
+    setPriceListSearch('');
     setPriceListStatus(
       existingPriceList
         ? `${existingPriceList.items.length} saved rows.`
@@ -486,6 +600,48 @@ function AdminPage({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const createManualPriceListDraft = (vendor: Vendor, existingItems: VendorPriceListItem[] = []): VendorPriceList => ({
+    id: createUniqueId(`${vendor.id}-price-list`, priceLists),
+    vendorId: vendor.id,
+    vendorName: vendor.name,
+    source: {
+      type: 'file',
+      fileName: 'manual-price-list.csv',
+      mimeType: 'text/csv',
+    },
+    items: existingItems,
+    parsedAt: new Date().toISOString(),
+  });
+
+  const addManualPriceListRow = () => {
+    if (!priceListVendor) {
+      return;
+    }
+
+    setPriceListDraft((currentDraft) => {
+      const draft = currentDraft ?? createManualPriceListDraft(priceListVendor);
+      const rowNumber = draft.items.length + 1;
+      const nextItem: VendorPriceListItem = {
+        id: createUniqueId(`manual-price-row-${rowNumber}`, draft.items),
+        vendorCode: '',
+        productName: '',
+        mass: '',
+        price: null,
+        vialsPerPack: 1,
+        peptideIds: [],
+        needsReview: true,
+      };
+
+      return {
+        ...draft,
+        parsedAt: new Date().toISOString(),
+        items: [...draft.items, nextItem],
+      };
+    });
+    setPriceListSearch('');
+    setPriceListStatus('Manual row added. Fill it in, then save the price list.');
   };
 
   const updatePriceListItem = (
@@ -548,6 +704,18 @@ function AdminPage({
     );
   };
 
+  const beginAddPeptideFromPriceListItem = (item: VendorPriceListItem) => {
+    setEditingPeptide(null);
+    setPeptideForm({
+      ...createEmptyPeptideForm(),
+      name: sanitizeText(item.productName),
+    });
+    setPeptideModalOrigin({ type: 'price-list', itemId: item.id });
+    setWikiStatus('');
+    setIsPeptideModalOpen(true);
+    setStatus('');
+  };
+
   const saveVendorPriceList = async () => {
     if (!priceListDraft) {
       setPriceListStatus('Parse or load a price list before saving.');
@@ -568,6 +736,7 @@ function AdminPage({
       const nextPriceLists = await saveCollectionItem<VendorPriceList>('vendor-price-lists', nextDraft);
       const currentVendor = vendors.find((vendor) => vendor.id === priceListDraft.vendorId) ?? priceListVendor;
       let nextVendors = vendors;
+      let nextRounds = hydrateVendorDefaultRounds(rounds, nextPriceLists, peptides);
 
       if (currentVendor && isVendorPriceSheetSource(savedSource)) {
         const nextVendor = {
@@ -579,7 +748,15 @@ function AdminPage({
         setPriceListVendor(nextVendor);
       }
 
+      const roundsToSave = nextRounds.filter((round) => round.vendorId === priceListDraft.vendorId && round.priceSourceMode === 'vendor-default');
+
+      if (roundsToSave.length > 0) {
+        const roundBatchResult = await saveRoundBatchItems(roundsToSave);
+        nextRounds = roundBatchResult.items;
+      }
+
       setPriceLists(nextPriceLists);
+      setRounds(hydrateVendorDefaultRounds(nextRounds, nextPriceLists, peptides));
       setPriceListDraft(nextDraft);
       setPriceListStatus('');
       setPriceListFile(null);
@@ -587,8 +764,11 @@ function AdminPage({
       setSavedPriceListVendorId(priceListDraft.vendorId);
       setStatus('');
     } catch (error) {
-      console.error(error);
-      setPriceListStatus('Price list could not be saved.');
+      console.error('[vendor-price-list] save failed', {
+        error,
+        priceListDraft,
+      });
+      setPriceListStatus(getErrorMessage(error, 'Price list could not be saved.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -624,6 +804,7 @@ function AdminPage({
       const nextPriceLists = await deleteCollectionItem<VendorPriceList>('vendor-price-lists', priceListDraft.id);
 
       setPriceLists(nextPriceLists);
+      setRounds((currentRounds) => hydrateVendorDefaultRounds(currentRounds, nextPriceLists, peptides));
       setPriceListDraft(null);
       setPriceListFile(null);
       setPriceListUrl('');
@@ -645,11 +826,17 @@ function AdminPage({
     setRoundPriceListFile(null);
     setRoundPriceListUrl('');
     setRoundPriceListStatus('');
+    setRoundModalSearch('');
     setIsRoundModalOpen(true);
     setStatus('');
   };
 
   const openEditRoundModal = (round: Round) => {
+    const priceListSnapshot = round.priceSourceMode === 'vendor-default'
+      ? getSavedVendorPriceListSnapshot(priceLists, round.vendorId) ?? round.priceListSnapshot
+      : round.priceListSnapshot;
+    const roundPeptides = reconcileRoundRowsWithPriceListSnapshot(round.peptides, priceListSnapshot, peptides);
+
     setEditingRound(round);
     setRoundForm({
       name: round.name,
@@ -659,17 +846,19 @@ function AdminPage({
       startDate: round.startDate,
       endDate: round.endDate,
       targetWindow: round.targetWindow,
+      resultPasscode: round.resultPasscode || '',
       participants: String(round.participants || ''),
       roundDiscountPercent: String(round.roundDiscountPercent || ''),
       priceSourceMode: round.priceSourceMode,
-      priceListSnapshot: round.priceListSnapshot,
-      peptides: round.peptides,
+      priceListSnapshot,
+      peptides: roundPeptides,
     });
     setRoundPriceListFile(null);
-    setRoundPriceListUrl(round.priceListSnapshot?.source?.type === 'google-sheet' ? round.priceListSnapshot.source.url : '');
+    setRoundPriceListUrl(priceListSnapshot?.source?.type === 'google-sheet' ? priceListSnapshot.source.url : '');
+    setRoundModalSearch('');
     setRoundPriceListStatus(
-      round.priceListSnapshot
-        ? `${round.priceListSnapshot.items.length} price rows in this round snapshot.`
+      priceListSnapshot
+        ? `${priceListSnapshot.items.length} price rows in this round snapshot.`
         : 'Use the default vendor list, parse a round-specific sheet, or enter rows manually.',
     );
     setIsRoundModalOpen(true);
@@ -681,10 +870,16 @@ function AdminPage({
       ...currentForm,
       vendorId,
       priceSourceMode: currentForm.priceSourceMode === 'vendor-default' ? 'vendor-default' : currentForm.priceSourceMode,
-      priceListSnapshot:
-        currentForm.priceSourceMode === 'vendor-default'
-          ? getSavedVendorPriceListSnapshot(priceLists, vendorId)
-          : currentForm.priceListSnapshot,
+      ...(currentForm.priceSourceMode === 'vendor-default'
+        ? (() => {
+            const priceListSnapshot = getSavedVendorPriceListSnapshot(priceLists, vendorId);
+
+            return {
+              priceListSnapshot,
+              peptides: reconcileRoundRowsWithPriceListSnapshot(currentForm.peptides, priceListSnapshot, peptides),
+            };
+          })()
+        : { priceListSnapshot: currentForm.priceListSnapshot }),
     }));
   };
 
@@ -692,12 +887,18 @@ function AdminPage({
     setRoundForm((currentForm) => ({
       ...currentForm,
       priceSourceMode,
-      priceListSnapshot:
-        priceSourceMode === 'vendor-default'
-          ? getSavedVendorPriceListSnapshot(priceLists, currentForm.vendorId)
-          : priceSourceMode === 'none'
-            ? null
-            : currentForm.priceListSnapshot,
+      ...(priceSourceMode === 'vendor-default'
+        ? (() => {
+            const priceListSnapshot = getSavedVendorPriceListSnapshot(priceLists, currentForm.vendorId);
+
+            return {
+              priceListSnapshot,
+              peptides: reconcileRoundRowsWithPriceListSnapshot(currentForm.peptides, priceListSnapshot, peptides),
+            };
+          })()
+        : {
+            priceListSnapshot: priceSourceMode === 'none' ? null : currentForm.priceListSnapshot,
+          }),
     }));
     setRoundPriceListStatus(
       priceSourceMode === 'vendor-default'
@@ -770,7 +971,7 @@ function AdminPage({
     setRoundPriceListStatus('Importing peptide rows...');
 
     try {
-      const rows = await parseRoundPeptideBatchFile(file, roundForm.priceListSnapshot?.items ?? [], roundForm.peptides);
+      const rows = await parseRoundPeptideBatchFile(file, effectiveRoundPriceListSnapshot?.items ?? [], roundForm.peptides);
       const validRows = rows.filter((row) => row.errors.length === 0).map(stripRoundPeptideBatchFields);
 
       if (validRows.length === 0) {
@@ -780,7 +981,10 @@ function AdminPage({
 
       setRoundForm((currentForm) => ({
         ...currentForm,
-        peptides: [...currentForm.peptides, ...validRows],
+        peptides: [
+          ...currentForm.peptides,
+          ...validRows.map((row) => normalizeRoundPeptideDraftRow(row, peptides, currentForm.priceListSnapshot)),
+        ],
       }));
       setRoundPriceListStatus(`${validRows.length} peptide rows imported.`);
     } catch (error) {
@@ -815,6 +1019,15 @@ function AdminPage({
     }));
   };
 
+  const updateRoundPeptideLink = (rowId: string, peptideId: string) => {
+    const peptide = peptides.find((currentPeptide) => currentPeptide.id === peptideId);
+
+    updateRoundPeptideRow(rowId, {
+      peptideId: peptide?.id ?? '',
+      peptideName: peptide?.name ?? getRoundRowSourceName(roundForm, rowId),
+    });
+  };
+
   const updateRoundPeptideSort = (key: RoundPeptideSortKey) => {
     setRoundPeptideSort((currentSort) => ({
       key,
@@ -825,7 +1038,8 @@ function AdminPage({
   };
 
   const applyPriceListItemToRoundRow = (rowId: string, priceListItemId: string) => {
-    const item = roundForm.priceListSnapshot?.items.find((currentItem) => currentItem.id === priceListItemId);
+    const priceListSnapshot = effectiveRoundPriceListSnapshot;
+    const item = priceListSnapshot?.items.find((currentItem) => currentItem.id === priceListItemId);
 
     if (!item) {
       updateRoundPeptideRow(rowId, {
@@ -837,17 +1051,43 @@ function AdminPage({
 
     const linkedPeptide = item.peptideIds.length > 0
       ? peptides.find((peptide) => peptide.id === item.peptideIds[0])
-      : null;
+      : findPeptideByName(item.productName, peptides);
 
-    updateRoundPeptideRow(rowId, {
-      priceListItemId: item.id,
-      vendorCode: item.vendorCode,
-      peptideId: linkedPeptide?.id ?? '',
-      peptideName: linkedPeptide?.name ?? item.productName,
-      mass: item.mass,
-      vendorPrice: item.price,
-      vendorPriceOverridden: false,
+    setRoundForm((currentForm) => {
+      const nextPriceSourceMode = currentForm.priceListSnapshot ? currentForm.priceSourceMode : 'vendor-default';
+
+      return {
+        ...currentForm,
+        priceSourceMode: nextPriceSourceMode,
+        priceListSnapshot: currentForm.priceListSnapshot ?? priceListSnapshot,
+        peptides: currentForm.peptides.map((row) =>
+          row.id === rowId
+            ? {
+                ...row,
+                priceListItemId: item.id,
+                vendorCode: item.vendorCode,
+                peptideId: linkedPeptide?.id ?? '',
+                peptideName: linkedPeptide?.name ?? item.productName,
+                mass: item.mass,
+                vendorPrice: item.price,
+                vendorPriceOverridden: false,
+              }
+            : row,
+        ),
+      };
     });
+  };
+
+  const beginAddPeptideFromRoundRow = (row: RoundPeptide) => {
+    setEditingPeptide(null);
+    setPeptideForm({
+      ...createEmptyPeptideForm(),
+      name: getRoundRowSourceName(roundForm, row.id),
+    });
+    setPeptideModalOrigin({ type: 'round-row', rowId: row.id });
+    setWikiStatus('');
+    setIsPeptideModalOpen(true);
+    setStatus('');
   };
 
   const saveRound = async (event: FormEvent<HTMLFormElement>) => {
@@ -877,10 +1117,11 @@ function AdminPage({
         startDate: roundForm.startDate,
         endDate: roundForm.endDate,
         targetWindow: sanitizeText(roundForm.targetWindow),
+        resultPasscode: sanitizeText(roundForm.resultPasscode),
         participants: Math.max(0, Math.trunc(parseNullableNumber(roundForm.participants) ?? 0)),
         roundDiscountPercent: Math.min(100, Math.max(0, parseNullableNumber(roundForm.roundDiscountPercent) ?? 0)),
         priceListSnapshot,
-        peptides: roundForm.peptides.map(normalizeRoundPeptideFormRow),
+        peptides: roundForm.peptides.map((row) => normalizeRoundPeptideFormRow(row, peptides, roundForm.priceListSnapshot)),
         createdAt: editingRound?.createdAt || now,
         updatedAt: now,
       };
@@ -915,6 +1156,7 @@ function AdminPage({
   const openNewPeptideModal = () => {
     setEditingPeptide(null);
     setPeptideForm(createEmptyPeptideForm());
+    setPeptideModalOrigin(null);
     setWikiStatus('');
     setIsPeptideModalOpen(true);
     setStatus('');
@@ -924,13 +1166,21 @@ function AdminPage({
     setEditingPeptide(peptide);
     setPeptideForm({
       name: peptide.name,
+      kind: normalizePeptideKind(peptide.kind),
       categories: peptide.categories.join(', '),
       description: peptide.description ?? '',
+      components: normalizeBlendComponents(peptide.components),
       wikiLinks: createWikiLinkFormRows(peptide),
     });
+    setPeptideModalOrigin(null);
     setWikiStatus('');
     setIsPeptideModalOpen(true);
     setStatus('');
+  };
+
+  const closePeptideModal = () => {
+    setPeptideModalOrigin(null);
+    setIsPeptideModalOpen(false);
   };
 
   const savePeptide = async (event: FormEvent<HTMLFormElement>) => {
@@ -940,6 +1190,11 @@ function AdminPage({
 
     if (!name) {
       setStatus('Peptide name is required.');
+      return;
+    }
+
+    if (peptideForm.kind === 'blend' && normalizeBlendComponents(peptideForm.components).length === 0) {
+      setStatus('Blend components are required.');
       return;
     }
 
@@ -959,8 +1214,10 @@ function AdminPage({
       const peptide: Peptide = {
         id,
         name,
+        kind: peptideForm.kind,
         categories: normalizedCategories,
         description: sanitizeText(peptideForm.description),
+        components: peptideForm.kind === 'blend' ? normalizeBlendComponents(peptideForm.components) : [],
         wikiLinks: normalizeWikiLinks({ wikiLinks: peptideForm.wikiLinks }),
       };
 
@@ -968,7 +1225,33 @@ function AdminPage({
 
       setPeptides(nextPeptides);
       setPeptideCategories(nextPeptideCategories);
-      setIsPeptideModalOpen(false);
+      if (peptideModalOrigin?.type === 'price-list') {
+        setPriceListDraft((currentDraft) =>
+          currentDraft
+            ? {
+                ...currentDraft,
+                items: currentDraft.items.map((item) =>
+                  item.id === peptideModalOrigin.itemId
+                    ? { ...item, peptideIds: [peptide.id] }
+                    : item,
+                ),
+              }
+            : currentDraft,
+        );
+      }
+
+      if (peptideModalOrigin?.type === 'round-row') {
+        setRoundForm((currentForm) => ({
+          ...currentForm,
+          peptides: currentForm.peptides.map((row) =>
+            row.id === peptideModalOrigin.rowId
+              ? { ...row, peptideId: peptide.id, peptideName: peptide.name }
+              : row,
+          ),
+        }));
+      }
+
+      closePeptideModal();
       setStatus('Peptide saved.');
     } catch (error) {
       console.error(error);
@@ -1008,8 +1291,7 @@ function AdminPage({
     setStatus(`Searching wiki links for ${candidates.length} peptides...`);
 
     try {
-      let nextPeptides = peptides;
-      let updatedCount = 0;
+      const updatedPeptides: Peptide[] = [];
 
       for (const peptide of candidates) {
         const match = await searchWikiLinks(peptide.name);
@@ -1025,18 +1307,31 @@ function AdminPage({
           continue;
         }
 
-        nextPeptides = await saveCollectionItem<Peptide>('peptides', {
+        updatedPeptides.push({
           ...peptide,
           wikiLinks,
         });
-        updatedCount += 1;
       }
 
-      setPeptides(nextPeptides);
-      setStatus(updatedCount > 0 ? `Wiki links updated for ${updatedCount} peptides.` : 'No new wiki links found.');
+      if (updatedPeptides.length === 0) {
+        setStatus('No new wiki links found.');
+        return;
+      }
+
+      const result = await importPeptideBatchRows(updatedPeptides.map((peptide, index) => ({
+        ...peptide,
+        rowNumber: index + 1,
+        errors: [],
+      })));
+
+      setPeptides(result.items);
+      setStatus(result.savedCount > 0 ? `Wiki links updated for ${result.savedCount} peptides.` : 'No new wiki links found.');
     } catch (error) {
-      console.error(error);
-      setStatus('Batch wiki link search failed.');
+      console.error('[peptide-wiki-batch] save failed', {
+        error,
+        candidateIds: candidates.map((peptide) => peptide.id),
+      });
+      setStatus(getErrorMessage(error, 'Batch wiki link search failed.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -1087,6 +1382,41 @@ function AdminPage({
         wikiLinks: wikiLinks.length > 0 ? wikiLinks : [createWikiLink({ source: 'other', status: 'manual', url: '' })],
       };
     });
+  };
+
+  const updateBlendComponent = (index: number, fields: Partial<BlendComponent>) => {
+    setPeptideForm((currentForm) => ({
+      ...currentForm,
+      components: currentForm.components.map((component, currentIndex) =>
+        currentIndex === index ? { ...component, ...fields } : component,
+      ),
+    }));
+  };
+
+  const updateBlendComponentPeptide = (index: number, peptideId: string) => {
+    const linkedPeptide = peptides.find((peptide) => peptide.id === peptideId);
+
+    updateBlendComponent(index, {
+      peptideId,
+      ...(linkedPeptide ? { name: linkedPeptide.name } : {}),
+    });
+  };
+
+  const addBlendComponent = () => {
+    setPeptideForm((currentForm) => ({
+      ...currentForm,
+      components: [
+        ...currentForm.components,
+        { peptideId: '', name: '', ratio: '' },
+      ],
+    }));
+  };
+
+  const removeBlendComponent = (index: number) => {
+    setPeptideForm((currentForm) => ({
+      ...currentForm,
+      components: currentForm.components.filter((_, currentIndex) => currentIndex !== index),
+    }));
   };
 
   const autofillWikiLinks = async () => {
@@ -1198,56 +1528,50 @@ function AdminPage({
   };
 
   const savePeptideBatch = async () => {
-    const seenNames = new Set<string>();
-    const validRows = batchRows.filter((row) => {
-      if (row.errors.length > 0) {
-        return false;
-      }
+    const invalidRows = batchRows.filter((row) => row.errors.length > 0);
 
-      const normalizedRowName = normalizeName(row.name);
-
-      if (seenNames.has(normalizedRowName)) {
-        return false;
-      }
-
-      seenNames.add(normalizedRowName);
-      return true;
-    });
-
-    if (validRows.length === 0) {
+    if (batchRows.length === 0) {
       setBatchStatus('No valid rows to save.');
+      return;
+    }
+
+    if (invalidRows.length > 0) {
+      const firstInvalidRow = invalidRows[0];
+      setBatchStatus(
+        `${invalidRows.length} rows need review before saving. Row ${firstInvalidRow.rowNumber}: ${firstInvalidRow.errors.join('; ')}`,
+      );
+      console.error('[peptide-batch] save blocked by row errors', invalidRows);
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      let nextPeptides = peptides;
-      let nextPeptideCategories = peptideCategories;
+      const nextPeptideCategories = await ensurePeptideCategories(
+        batchRows.flatMap((row) => row.categories),
+        peptideCategories,
+      );
 
-      for (const row of validRows) {
-        const existingPeptide = findByNormalizedName(nextPeptides, row.name);
-        nextPeptideCategories = await ensurePeptideCategories(row.categories, nextPeptideCategories);
-        const peptide = {
-          id: existingPeptide?.id ?? row.id,
-          name: normalizePeptideName(row.name),
-          categories: row.categories,
-          description: row.description ?? '',
-          wikiLinks: normalizeWikiLinks(row),
-        };
+      const result = await importPeptideBatchRows(batchRows.map((row) => ({
+        ...row,
+        name: normalizePeptideName(row.name),
+        kind: normalizePeptideKind(row.kind),
+        components: normalizePeptideKind(row.kind) === 'blend' ? normalizeBlendComponents(row.components) : [],
+        wikiLinks: normalizeWikiLinks(row),
+      })));
 
-        nextPeptides = await saveCollectionItem<Peptide>('peptides', peptide);
-      }
-
-      setPeptides(nextPeptides);
+      setPeptides(result.items);
       setPeptideCategories(nextPeptideCategories);
       setIsBatchModalOpen(false);
       setBatchRows([]);
       setBatchStatus('');
-      setStatus(`${validRows.length} peptide rows saved.`);
+      setStatus(`${result.savedCount} peptide rows saved. ${result.items.length} total peptides.`);
     } catch (error) {
-      console.error(error);
-      setBatchStatus('Batch save failed.');
+      console.error('[peptide-batch] save failed', {
+        error,
+        rows: batchRows,
+      });
+      setBatchStatus(getErrorMessage(error, 'Batch save failed.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -1263,8 +1587,8 @@ function AdminPage({
       setStatus(`${transfer.items.length} peptides exported.`);
       return transfer;
     } catch (error) {
-      console.error(error);
-      setStatus('Peptide export failed.');
+      console.error('[peptide-export] export failed', { error });
+      setStatus(getErrorMessage(error, 'Peptide export failed.'));
       return null;
     } finally {
       setIsSubmitting(false);
@@ -1286,7 +1610,7 @@ function AdminPage({
     setIsSubmitting(true);
 
     try {
-      const transfer = normalizePeptideTransfer(JSON.parse(await file.text()));
+      const transfer = normalizePeptideTransfer(await readPeptideTransferFile(file));
       const shouldImport = window.confirm(
         `Import ${transfer.items.length} peptides and replace the current peptide collection? A backup will download first.`,
       );
@@ -1304,8 +1628,13 @@ function AdminPage({
       setPeptides(nextPeptides);
       setStatus(`${nextPeptides.length} peptides imported.`);
     } catch (error) {
-      console.error(error);
-      setStatus('Peptide import failed.');
+      console.error('[peptide-import] import failed', {
+        error,
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+      });
+      setStatus(getErrorMessage(error, 'Peptide import failed.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -1506,12 +1835,27 @@ function AdminPage({
                 />
               </div>
             )}
+            <label className="admin-table-search">
+              <span>Search peptide dictionary</span>
+              <input
+                type="search"
+                value={peptideSearch}
+                placeholder="Search name, category, type, wiki link..."
+                onChange={(event) => setPeptideSearch(event.target.value)}
+              />
+            </label>
             <div className="admin-table">
-              {sortedPeptides.map((peptide) => (
+              {filteredPeptides.map((peptide) => (
                 <article className="admin-row" key={peptide.id}>
                   <div>
-                    <strong>{peptide.name}</strong>
+                    <strong>
+                      {peptide.name}
+                      {normalizePeptideKind(peptide.kind) === 'blend' && <span className="admin-peptide-kind">Blend</span>}
+                    </strong>
                     <span>{peptide.categories.length > 0 ? peptide.categories.join(', ') : 'No categories'}</span>
+                    {normalizePeptideKind(peptide.kind) === 'blend' && (
+                      <span>{formatBlendComponents(peptide.components)}</span>
+                    )}
                     {peptide.description && <p>{peptide.description}</p>}
                   </div>
                   <div className="admin-wiki-links">
@@ -1528,6 +1872,7 @@ function AdminPage({
                 </article>
               ))}
               {peptides.length === 0 && <p className="admin-empty">No peptides yet.</p>}
+              {peptides.length > 0 && filteredPeptides.length === 0 && <p className="admin-empty">No peptides match that search.</p>}
             </div>
           </section>
         )}
@@ -1578,7 +1923,7 @@ function AdminPage({
       </div>
 
       {isVendorModalOpen && (
-        <AdminModal title={editingVendor ? 'Edit vendor' : 'Add vendor'} onClose={() => setIsVendorModalOpen(false)}>
+        <AdminModal title={editingVendor ? 'Edit vendor' : 'Add vendor'} titleId="admin-vendor-modal-title" onClose={() => setIsVendorModalOpen(false)}>
           <form className="admin-form" onSubmit={saveVendor}>
             <AdminTextField label="Name" value={vendorForm.name} required onChange={(value) => setVendorForm({ ...vendorForm, name: value })} />
             <AdminTextField label="Nickname" value={vendorForm.nickname} onChange={(value) => setVendorForm({ ...vendorForm, nickname: value })} />
@@ -1630,7 +1975,7 @@ function AdminPage({
       )}
 
       {isRoundModalOpen && (
-        <AdminModal title={editingRound ? 'Edit round' : 'Add round'} wide onClose={() => setIsRoundModalOpen(false)}>
+        <AdminModal title={editingRound ? 'Edit round' : 'Add round'} titleId="admin-round-modal-title" wide onClose={() => setIsRoundModalOpen(false)}>
           <form className="admin-form admin-form--wide" onSubmit={saveRound}>
             <div className="admin-round-grid">
               <AdminTextField label="Round name" value={roundForm.name} required onChange={(value) => setRoundForm({ ...roundForm, name: value })} />
@@ -1647,6 +1992,7 @@ function AdminPage({
                 </select>
               </label>
               <AdminTextField label="Target window" value={roundForm.targetWindow} placeholder="June testing queue" onChange={(value) => setRoundForm({ ...roundForm, targetWindow: value })} />
+              <AdminTextField label="COA passcode" value={roundForm.resultPasscode} placeholder="Leave blank for public results" onChange={(value) => setRoundForm({ ...roundForm, resultPasscode: value })} />
               <AdminTextField label="Start date" value={roundForm.startDate} onChange={(value) => setRoundForm({ ...roundForm, startDate: value })} />
               <AdminTextField label="End date" value={roundForm.endDate} onChange={(value) => setRoundForm({ ...roundForm, endDate: value })} />
               <AdminTextField label="Participants" value={roundForm.participants} onChange={(value) => setRoundForm({ ...roundForm, participants: value })} />
@@ -1665,7 +2011,7 @@ function AdminPage({
               <div className="admin-round-source__header">
                 <div>
                   <span>Price source</span>
-                  <small>{roundForm.priceListSnapshot ? `${roundForm.priceListSnapshot.items.length} linked rows` : 'No price snapshot'}</small>
+                  <small>{effectiveRoundPriceListSnapshot ? `${effectiveRoundPriceListSnapshot.items.length} available rows` : 'No price snapshot'}</small>
                 </div>
                 <label>
                   <span>Mode</span>
@@ -1724,9 +2070,18 @@ function AdminPage({
 
             <div className="admin-round-toolbar">
               <div>
-                <strong>{roundForm.peptides.length} peptide rows</strong>
+                <strong>{filteredRoundPeptideRows.length} of {roundForm.peptides.length} peptide rows</strong>
                 <span>{getRoundFormTierSummary(roundForm.peptides)}</span>
               </div>
+              <label className="admin-table-search admin-table-search--inline">
+                <span>Search rows</span>
+                <input
+                  type="search"
+                  value={roundModalSearch}
+                  placeholder="Search peptide, code, mass, tier..."
+                  onChange={(event) => setRoundModalSearch(event.target.value)}
+                />
+              </label>
               <div className="admin-round-toolbar__actions">
                 <button type="button" onClick={addRoundPeptideRow}>
                   Add Peptide Row
@@ -1761,82 +2116,98 @@ function AdminPage({
                 <RoundPeptideSortButton sortKey="notes" label="Notes" activeSort={roundPeptideSort} onSort={updateRoundPeptideSort} />
                 <span />
               </div>
-              {sortedRoundPeptideRows.map((row) => (
-                <div className="admin-round-row" key={row.id}>
-                  <input
-                    value={row.peptideName}
-                    list="round-peptide-options"
-                    onChange={(event) => updateRoundPeptideRow(row.id, { peptideName: event.target.value })}
-                  />
-                  <select
-                    value={row.priceListItemId}
-                    aria-label={`Price list item for ${row.peptideName || 'round peptide'}`}
-                    onChange={(event) => applyPriceListItemToRoundRow(row.id, event.target.value)}
-                  >
-                    <option value="">{row.vendorCode || 'Manual'}</option>
-                    {roundForm.priceListSnapshot?.items.map((item) => (
-                      <option value={item.id} key={item.id}>
-                        {item.vendorCode || item.productName}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    value={row.vendorPrice ?? ''}
-                    onChange={(event) => updateRoundPeptideRow(row.id, {
-                      vendorPrice: parseNullableNumber(event.target.value),
-                      vendorPriceOverridden: true,
-                    })}
-                  />
-                  <input value={row.mass} onChange={(event) => updateRoundPeptideRow(row.id, { mass: event.target.value })} />
-                  <select
-                    value={row.testingTier}
-                    onChange={(event) => updateRoundPeptideRow(row.id, { testingTier: event.target.value as TestingTierId })}
-                  >
-                    {testingTierOptions.map((tier) => (
-                      <option value={tier.id} key={tier.id}>
-                        {tier.label}
-                      </option>
-                    ))}
-                  </select>
-                  <input value={row.additionalTesting} onChange={(event) => updateRoundPeptideRow(row.id, { additionalTesting: event.target.value })} />
-                  <label className="admin-round-checkbox" aria-label={`${row.peptideName || 'Peptide'} batch conformity`}>
+              {filteredRoundPeptideRows.map((row) => {
+                const rowLinkedPeptide = peptides.find((peptide) => peptide.id === row.peptideId) ?? null;
+                const rowPeptideSelectValue = rowLinkedPeptide?.id ?? '';
+
+                return (
+                  <div className="admin-round-row" key={row.id}>
+                    <div className="admin-peptide-link-cell">
+                      <select
+                        className="admin-peptide-link-select"
+                        value={rowPeptideSelectValue}
+                        aria-label={`Peptide link for ${getRoundRowSourceName(roundForm, row.id) || 'round peptide'}`}
+                        onChange={(event) => updateRoundPeptideLink(row.id, event.target.value)}
+                      >
+                        <option value="">Unlinked</option>
+                        {peptides.map((peptide) => (
+                          <option key={peptide.id} value={peptide.id}>
+                            {peptide.name}
+                          </option>
+                        ))}
+                      </select>
+                      {!rowPeptideSelectValue && (
+                        <button className="admin-inline-add-button" type="button" onClick={() => beginAddPeptideFromRoundRow(row)}>
+                          Add Peptide
+                        </button>
+                      )}
+                    </div>
+                    <select
+                      value={row.priceListItemId}
+                      aria-label={`Price list item for ${row.peptideName || 'round peptide'}`}
+                      onChange={(event) => applyPriceListItemToRoundRow(row.id, event.target.value)}
+                    >
+                      <option value="">{row.vendorCode || 'Manual'}</option>
+                      {sortRoundPriceListItemsByVendorCode(effectiveRoundPriceListSnapshot?.items ?? []).map((item) => (
+                        <option value={item.id} key={item.id}>
+                          {item.vendorCode || item.productName}
+                        </option>
+                      ))}
+                    </select>
                     <input
-                      type="checkbox"
-                      checked={row.batchConformity}
-                      onChange={(event) => updateRoundPeptideRow(row.id, { batchConformity: event.target.checked })}
+                      value={row.vendorPrice ?? ''}
+                      onChange={(event) => updateRoundPeptideRow(row.id, {
+                        vendorPrice: parseNullableNumber(event.target.value),
+                        vendorPriceOverridden: true,
+                      })}
                     />
-                  </label>
-                  <input value={row.capColor} onChange={(event) => updateRoundPeptideRow(row.id, { capColor: event.target.value })} />
-                  <div className="admin-round-counts">
-                    <input
-                      aria-label={`${row.peptideName || 'Peptide'} participant count`}
-                      value={row.participantCount || ''}
-                      onChange={(event) => updateRoundPeptideRow(row.id, { participantCount: Math.max(0, Math.trunc(parseNullableNumber(event.target.value) ?? 0)) })}
-                    />
-                    <input
-                      aria-label={`${row.peptideName || 'Peptide'} total ordered`}
-                      value={row.totalOrdered || ''}
-                      onChange={(event) => updateRoundPeptideRow(row.id, { totalOrdered: Math.max(0, Math.trunc(parseNullableNumber(event.target.value) ?? 0)) })}
-                    />
+                    <input value={row.mass} onChange={(event) => updateRoundPeptideRow(row.id, { mass: event.target.value })} />
+                    <select
+                      value={row.testingTier}
+                      onChange={(event) => updateRoundPeptideRow(row.id, { testingTier: event.target.value as TestingTierId })}
+                    >
+                      {testingTierOptions.map((tier) => (
+                        <option value={tier.id} key={tier.id}>
+                          {tier.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input value={row.additionalTesting} onChange={(event) => updateRoundPeptideRow(row.id, { additionalTesting: event.target.value })} />
+                    <label className="admin-round-checkbox" aria-label={`${row.peptideName || 'Peptide'} batch conformity`}>
+                      <input
+                        type="checkbox"
+                        checked={row.batchConformity}
+                        onChange={(event) => updateRoundPeptideRow(row.id, { batchConformity: event.target.checked })}
+                      />
+                    </label>
+                    <input value={row.capColor} onChange={(event) => updateRoundPeptideRow(row.id, { capColor: event.target.value })} />
+                    <div className="admin-round-counts">
+                      <input
+                        aria-label={`${row.peptideName || 'Peptide'} participant count`}
+                        value={row.participantCount || ''}
+                        onChange={(event) => updateRoundPeptideRow(row.id, { participantCount: Math.max(0, Math.trunc(parseNullableNumber(event.target.value) ?? 0)) })}
+                      />
+                      <input
+                        aria-label={`${row.peptideName || 'Peptide'} total ordered`}
+                        value={row.totalOrdered || ''}
+                        onChange={(event) => updateRoundPeptideRow(row.id, { totalOrdered: Math.max(0, Math.trunc(parseNullableNumber(event.target.value) ?? 0)) })}
+                      />
+                    </div>
+                    <input value={row.notes} onChange={(event) => updateRoundPeptideRow(row.id, { notes: event.target.value })} />
+                    <div className="admin-round-actions">
+                      <button type="button" onClick={() => duplicateRoundPeptideRow(row)}>
+                        Copy
+                      </button>
+                      <button type="button" onClick={() => removeRoundPeptideRow(row.id)}>
+                        Delete
+                      </button>
+                    </div>
                   </div>
-                  <input value={row.notes} onChange={(event) => updateRoundPeptideRow(row.id, { notes: event.target.value })} />
-                  <div className="admin-round-actions">
-                    <button type="button" onClick={() => duplicateRoundPeptideRow(row)}>
-                      Copy
-                    </button>
-                    <button type="button" onClick={() => removeRoundPeptideRow(row.id)}>
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {roundForm.peptides.length === 0 && <p className="admin-empty">No peptide rows yet.</p>}
+              {roundForm.peptides.length > 0 && filteredRoundPeptideRows.length === 0 && <p className="admin-empty">No round rows match that search.</p>}
             </div>
-            <datalist id="round-peptide-options">
-              {peptides.map((peptide) => (
-                <option value={peptide.name} key={peptide.id} />
-              ))}
-            </datalist>
 
             <div className="admin-modal__actions">
               <button type="button" onClick={() => setIsRoundModalOpen(false)}>
@@ -1851,7 +2222,12 @@ function AdminPage({
       )}
 
       {isPeptideModalOpen && (
-        <AdminModal title={editingPeptide ? 'Edit peptide' : 'Add peptide'} onClose={() => setIsPeptideModalOpen(false)}>
+        <AdminModal
+          title={editingPeptide ? 'Edit peptide' : 'Add peptide'}
+          titleId="admin-peptide-modal-title"
+          stacked={Boolean(peptideModalOrigin)}
+          onClose={closePeptideModal}
+        >
           <form className="admin-form" onSubmit={savePeptide}>
             <AdminTextField
               label="Name"
@@ -1864,6 +2240,16 @@ function AdminPage({
               }}
               onChange={(value) => setPeptideForm({ ...peptideForm, name: value })}
             />
+            <label className="admin-field">
+              <span>Type</span>
+              <select
+                value={peptideForm.kind}
+                onChange={(event) => setPeptideForm({ ...peptideForm, kind: event.target.value as PeptideKind })}
+              >
+                <option value="peptide">Peptide</option>
+                <option value="blend">Blend</option>
+              </select>
+            </label>
             <label className="admin-field">
               <span>Categories</span>
               <input
@@ -1880,6 +2266,57 @@ function AdminPage({
               </datalist>
             </label>
             <AdminTextArea label="Description" value={peptideForm.description} onChange={(value) => setPeptideForm({ ...peptideForm, description: value })} />
+            {peptideForm.kind === 'blend' && (
+              <div className="admin-blend-editor">
+                <div className="admin-blend-editor__header">
+                  <span>Blend Components</span>
+                  <button type="button" onClick={addBlendComponent}>
+                    Add Component
+                  </button>
+                </div>
+                {peptideForm.components.map((component, index) => (
+                  <div className="admin-blend-row" key={`${component.peptideId}-${index}`}>
+                    <label>
+                      <span>Dictionary Link</span>
+                      <select
+                        value={component.peptideId}
+                        onChange={(event) => updateBlendComponentPeptide(index, event.target.value)}
+                      >
+                        <option value="">Unlinked</option>
+                        {peptides
+                          .filter((peptide) => peptide.id !== editingPeptide?.id)
+                          .map((peptide) => (
+                            <option key={peptide.id} value={peptide.id}>
+                              {peptide.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Name</span>
+                      <input
+                        type="text"
+                        value={component.name}
+                        onChange={(event) => updateBlendComponent(index, { name: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>Ratio</span>
+                      <input
+                        type="text"
+                        value={component.ratio}
+                        placeholder="1:1"
+                        onChange={(event) => updateBlendComponent(index, { ratio: event.target.value })}
+                      />
+                    </label>
+                    <button type="button" onClick={() => removeBlendComponent(index)}>
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                {peptideForm.components.length === 0 && <p className="admin-help">Add at least one component when the recipe is known.</p>}
+              </div>
+            )}
             <div className="admin-wiki-editor">
               <div className="admin-wiki-editor__header">
                 <span>Wiki Links</span>
@@ -1930,7 +2367,7 @@ function AdminPage({
             </div>
             {wikiStatus && <p className="admin-status">{wikiStatus}</p>}
             <div className="admin-modal__actions">
-              <button type="button" onClick={() => setIsPeptideModalOpen(false)}>
+              <button type="button" onClick={closePeptideModal}>
                 Cancel
               </button>
               <button className="admin-primary-button" type="submit" disabled={isSubmitting}>
@@ -1942,7 +2379,7 @@ function AdminPage({
       )}
 
       {isBatchModalOpen && (
-        <AdminModal title="Batch import peptides" onClose={() => setIsBatchModalOpen(false)}>
+        <AdminModal title="Batch import peptides" titleId="admin-batch-modal-title" onClose={() => setIsBatchModalOpen(false)}>
           <div className="admin-form">
             <label className="admin-field">
               <span>CSV or XLSX file</span>
@@ -1952,14 +2389,14 @@ function AdminPage({
                 onChange={loadPeptideBatch}
               />
             </label>
-            <p className="admin-help">Accepted columns: name, categories, description, wikiLinks, peptidepediaUrl, pepPediaUrl.</p>
+            <p className="admin-help">Accepted columns: name, kind, categories, description, components, wikiLinks, peptidepediaUrl, pepPediaUrl.</p>
             {batchStatus && <p className="admin-status">{batchStatus}</p>}
             {batchRows.length > 0 && (
               <div className="admin-batch-preview">
                 {batchRows.slice(0, 12).map((row) => (
                   <div className={row.errors.length > 0 ? 'admin-batch-row has-error' : 'admin-batch-row'} key={`${row.rowNumber}-${row.name}`}>
                     <strong>{row.name || `Row ${row.rowNumber}`}</strong>
-                    <span>{row.categories.join(', ') || 'No categories'}</span>
+                    <span>{normalizePeptideKind(row.kind) === 'blend' ? `Blend: ${formatBlendComponents(row.components)}` : row.categories.join(', ') || 'No categories'}</span>
                     <small>{row.errors.length > 0 ? row.errors.join(', ') : 'Ready'}</small>
                   </div>
                 ))}
@@ -1978,7 +2415,7 @@ function AdminPage({
       )}
 
       {isNoteModalOpen && (
-        <AdminModal title="Add admin note" onClose={() => setIsNoteModalOpen(false)}>
+        <AdminModal title="Add admin note" titleId="admin-note-modal-title" onClose={() => setIsNoteModalOpen(false)}>
           <form className="admin-form" onSubmit={saveAdminNote}>
             <AdminTextField label="Sender" value={noteForm.sender} required onChange={(value) => setNoteForm({ ...noteForm, sender: value })} />
             <AdminTextField label="Subject" value={noteForm.subject} required onChange={(value) => setNoteForm({ ...noteForm, subject: value })} />
@@ -2015,7 +2452,7 @@ function AdminPage({
       )}
 
       {priceListVendor && (
-        <AdminModal title={`${priceListVendor.name} price list`} wide onClose={() => setPriceListVendor(null)}>
+        <AdminModal title={`${priceListVendor.name} price list`} titleId="admin-price-list-modal-title" wide onClose={() => setPriceListVendor(null)}>
           <div className="admin-form admin-form--wide">
             <div className="admin-price-source">
               <label className="admin-field">
@@ -2057,15 +2494,40 @@ function AdminPage({
 
             {priceListStatus && <p className="admin-status">{priceListStatus}</p>}
 
+            {!priceListDraft && (
+              <div className="admin-price-toolbar">
+                <div className="admin-price-meta">
+                  <span>No rows yet</span>
+                </div>
+                <button type="button" onClick={addManualPriceListRow}>
+                  Add Row
+                </button>
+              </div>
+            )}
+
             {priceListDraft && (
               <>
                 <div className="admin-price-toolbar">
                   <div className="admin-price-meta">
-                    <span>{priceListDraft.items.length} rows</span>
+                    <span>{filteredPriceListItems.length} of {priceListDraft.items.length} rows</span>
                     <span>Parsed {formatDateTime(priceListDraft.parsedAt)}</span>
                   </div>
-                  <button className="admin-delete-button" type="button" onClick={() => void deleteVendorPriceList()}>
-                    Delete Entire Price List
+                  <label className="admin-table-search admin-table-search--inline">
+                    <span>Search price rows</span>
+                    <input
+                      type="search"
+                      value={priceListSearch}
+                      placeholder="Search code, product, mass, peptide..."
+                      onChange={(event) => setPriceListSearch(event.target.value)}
+                    />
+                  </label>
+                  {priceLists.some((priceList) => priceList.id === priceListDraft.id) && (
+                    <button className="admin-delete-button" type="button" onClick={() => void deleteVendorPriceList()}>
+                      Delete Entire Price List
+                    </button>
+                  )}
+                  <button type="button" onClick={addManualPriceListRow}>
+                    Add Row
                   </button>
                 </div>
                 <div className="admin-price-table">
@@ -2078,31 +2540,41 @@ function AdminPage({
                     <span>Peptides</span>
                     <span />
                   </div>
-                  {priceListDraft.items.map((item) => (
+                  {filteredPriceListItems.map((item) => (
                     <div className={item.needsReview ? 'admin-price-row has-review' : 'admin-price-row'} key={item.id}>
                       <input value={item.vendorCode} onChange={(event) => updatePriceListItem(item.id, 'vendorCode', event.target.value)} />
                       <input value={item.productName} onChange={(event) => updatePriceListItem(item.id, 'productName', event.target.value)} />
                       <input value={item.mass} onChange={(event) => updatePriceListItem(item.id, 'mass', event.target.value)} />
                       <input value={item.price ?? ''} onChange={(event) => updatePriceListItem(item.id, 'price', event.target.value)} />
                       <input value={item.vialsPerPack} onChange={(event) => updatePriceListItem(item.id, 'vialsPerPack', event.target.value)} />
-                      <select
-                        className="admin-price-peptide-select"
-                        value={item.peptideIds[0] ?? ''}
-                        aria-label={`Peptide link for ${item.productName || item.vendorCode || 'price row'}`}
-                        onChange={(event) => updatePriceListItemPeptide(item.id, event.target.value)}
-                      >
-                        <option value="">Unlinked</option>
-                        {peptides.map((peptide) => (
-                          <option key={peptide.id} value={peptide.id}>
-                            {peptide.name}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="admin-peptide-link-cell">
+                        <select
+                          className="admin-price-peptide-select admin-peptide-link-select"
+                          value={item.peptideIds[0] ?? ''}
+                          aria-label={`Peptide link for ${item.productName || item.vendorCode || 'price row'}`}
+                          onChange={(event) => updatePriceListItemPeptide(item.id, event.target.value)}
+                        >
+                          <option value="">Unlinked</option>
+                          {peptides.map((peptide) => (
+                            <option key={peptide.id} value={peptide.id}>
+                              {peptide.name}
+                            </option>
+                          ))}
+                        </select>
+                        {!item.peptideIds[0] && (
+                          <button className="admin-inline-add-button" type="button" onClick={() => beginAddPeptideFromPriceListItem(item)}>
+                            Add Peptide
+                          </button>
+                        )}
+                      </div>
                       <button type="button" onClick={() => removePriceListItem(item.id)}>
                         Delete
                       </button>
                     </div>
                   ))}
+                  {priceListDraft.items.length > 0 && filteredPriceListItems.length === 0 && (
+                    <p className="admin-empty">No price rows match that search.</p>
+                  )}
                 </div>
               </>
             )}
@@ -2175,20 +2647,28 @@ function AdminPanelHeader({
 
 function AdminModal({
   title,
+  titleId,
   children,
   onClose,
   wide,
+  stacked,
 }: {
   title: string;
+  titleId: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  stacked?: boolean;
 }) {
+  const backdropClassName = stacked
+    ? 'admin-modal-backdrop admin-modal-backdrop--stacked'
+    : 'admin-modal-backdrop';
+
   return (
-    <div className="admin-modal-backdrop" role="presentation">
-      <section className={wide ? 'admin-modal admin-modal--wide' : 'admin-modal'} role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
+    <div className={backdropClassName} role="presentation">
+      <section className={wide ? 'admin-modal admin-modal--wide' : 'admin-modal'} role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="admin-modal__header">
-          <h2 id="admin-modal-title">{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button className="admin-modal__close" type="button" aria-label="Close" onClick={onClose}>
             x
           </button>
@@ -2302,6 +2782,69 @@ function AdminTextArea({
   );
 }
 
+async function readJsonResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    return undefined as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    console.error('[admin-api] response JSON parse failed', {
+      fallbackMessage,
+      status: response.status,
+      statusText: response.statusText,
+      bodyPreview: text.slice(0, 500),
+      error,
+    });
+    throw new Error(`${fallbackMessage} Response was not valid JSON.`);
+  }
+}
+
+async function throwResponseError(response: Response, fallbackMessage: string): Promise<never> {
+  let payload: unknown = null;
+  let bodyText = '';
+
+  try {
+    bodyText = await response.text();
+    payload = bodyText ? JSON.parse(bodyText) : null;
+  } catch (error) {
+    console.error('[admin-api] error response could not be parsed', {
+      fallbackMessage,
+      status: response.status,
+      statusText: response.statusText,
+      bodyPreview: bodyText.slice(0, 500),
+      error,
+    });
+  }
+
+  const apiError = payload && typeof payload === 'object' && 'error' in payload
+    ? String((payload as { error?: unknown }).error ?? '')
+    : '';
+  const details = payload && typeof payload === 'object' && 'details' in payload
+    ? (payload as { details?: unknown }).details
+    : undefined;
+  const detailsMessage = details === undefined ? '' : ` Details: ${JSON.stringify(details)}`;
+  const message = `${fallbackMessage} (${response.status} ${response.statusText || 'HTTP error'})${apiError ? `: ${apiError}` : ''}${detailsMessage}`;
+
+  console.error('[admin-api] request failed', {
+    fallbackMessage,
+    status: response.status,
+    statusText: response.statusText,
+    apiError,
+    details,
+    bodyPreview: bodyText.slice(0, 1000),
+  });
+
+  throw new Error(message);
+}
+
+function getErrorMessage(error: unknown, fallbackMessage: string) {
+  return error instanceof Error && error.message ? error.message : fallbackMessage;
+}
+
 async function loginAdmin(password: string, role: AdminRole): Promise<AdminSession> {
   const response = await fetch('/api/admin/login', {
     method: 'POST',
@@ -2313,10 +2856,10 @@ async function loginAdmin(password: string, role: AdminRole): Promise<AdminSessi
   });
 
   if (!response.ok) {
-    throw new Error('Admin login failed.');
+    await throwResponseError(response, 'Admin login failed.');
   }
 
-  return normalizeAdminSession(await response.json());
+  return normalizeAdminSession(await readJsonResponse<unknown>(response, 'Admin login failed.'));
 }
 
 async function logoutAdmin() {
@@ -2326,18 +2869,20 @@ async function logoutAdmin() {
   });
 
   if (!response.ok) {
-    throw new Error('Admin logout failed.');
+    await throwResponseError(response, 'Admin logout failed.');
   }
 }
 
 async function fetchCollection<T>(collectionName: string): Promise<T[]> {
-  const response = await fetch(`/api/data/${collectionName}`);
+  const response = await fetch(`/api/data/${collectionName}`, {
+    credentials: 'same-origin',
+  });
 
   if (!response.ok) {
-    throw new Error(`${collectionName} could not be loaded.`);
+    await throwResponseError(response, `${collectionName} could not be loaded.`);
   }
 
-  const records = (await response.json()) as unknown;
+  const records = await readJsonResponse<unknown>(response, `${collectionName} could not be loaded.`);
   return Array.isArray(records) ? (records as T[]) : [];
 }
 
@@ -2352,10 +2897,10 @@ async function saveCollectionItem<T extends { id: string }>(collectionName: stri
   });
 
   if (!response.ok) {
-    throw new Error(`${collectionName} item could not be saved.`);
+    await throwResponseError(response, `${collectionName} item could not be saved.`);
   }
 
-  const records = (await response.json()) as unknown;
+  const records = await readJsonResponse<unknown>(response, `${collectionName} item could not be saved.`);
   return Array.isArray(records) ? (records as T[]) : [];
 }
 
@@ -2366,10 +2911,10 @@ async function deleteCollectionItem<T>(collectionName: string, itemId: string): 
   });
 
   if (!response.ok) {
-    throw new Error(`${collectionName} item could not be deleted.`);
+    await throwResponseError(response, `${collectionName} item could not be deleted.`);
   }
 
-  const records = (await response.json()) as unknown;
+  const records = await readJsonResponse<unknown>(response, `${collectionName} item could not be deleted.`);
   return Array.isArray(records) ? (records as T[]) : [];
 }
 
@@ -2379,10 +2924,10 @@ async function exportPeptideTransfer(): Promise<PeptideTransfer> {
   });
 
   if (!response.ok) {
-    throw new Error('Peptide export failed.');
+    await throwResponseError(response, 'Peptide export failed.');
   }
 
-  return normalizePeptideTransfer(await response.json());
+  return normalizePeptideTransfer(await readJsonResponse<unknown>(response, 'Peptide export failed.'));
 }
 
 async function importPeptideTransfer(transfer: PeptideTransfer): Promise<Peptide[]> {
@@ -2396,11 +2941,82 @@ async function importPeptideTransfer(transfer: PeptideTransfer): Promise<Peptide
   });
 
   if (!response.ok) {
-    throw new Error('Peptide import failed.');
+    await throwResponseError(response, 'Peptide import failed.');
   }
 
-  const records = (await response.json()) as unknown;
+  const records = await readJsonResponse<unknown>(response, 'Peptide import failed.');
   return Array.isArray(records) ? (records as Peptide[]) : [];
+}
+
+async function importPeptideBatchRows(rows: BatchPeptideRow[]): Promise<PeptideBatchImportResult> {
+  const response = await fetch('/api/admin/peptides/import-batch', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ rows }),
+  });
+
+  if (!response.ok) {
+    await throwResponseError(response, 'Peptide batch import failed.');
+  }
+
+  const result = await readJsonResponse<Partial<PeptideBatchImportResult>>(response, 'Peptide batch import failed.');
+
+  return {
+    items: Array.isArray(result.items) ? result.items : [],
+    savedCount: Number(result.savedCount) || 0,
+    failedCount: Number(result.failedCount) || 0,
+    rowErrors: Array.isArray(result.rowErrors) ? result.rowErrors : [],
+  };
+}
+
+async function saveRoundBatchItems(rows: Round[]): Promise<BatchSaveResult<Round>> {
+  const response = await fetch('/api/admin/rounds/import-batch', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ rows }),
+  });
+
+  if (!response.ok) {
+    await throwResponseError(response, 'Round batch save failed.');
+  }
+
+  return normalizeBatchSaveResult<Round>(
+    await readJsonResponse<Partial<BatchSaveResult<Round>>>(response, 'Round batch save failed.'),
+  );
+}
+
+async function savePeptideCategoryBatchItems(rows: PeptideCategory[]): Promise<BatchSaveResult<PeptideCategory>> {
+  const response = await fetch('/api/admin/peptide-categories/import-batch', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ rows }),
+  });
+
+  if (!response.ok) {
+    await throwResponseError(response, 'Peptide category batch save failed.');
+  }
+
+  return normalizeBatchSaveResult<PeptideCategory>(
+    await readJsonResponse<Partial<BatchSaveResult<PeptideCategory>>>(response, 'Peptide category batch save failed.'),
+  );
+}
+
+function normalizeBatchSaveResult<T>(result: Partial<BatchSaveResult<T>> | undefined): BatchSaveResult<T> {
+  return {
+    items: Array.isArray(result?.items) ? result.items : [],
+    savedCount: Number(result?.savedCount) || 0,
+    failedCount: Number(result?.failedCount) || 0,
+    rowErrors: Array.isArray(result?.rowErrors) ? result.rowErrors : [],
+  };
 }
 
 async function resolveVendorPriceSheet(
@@ -2439,10 +3055,10 @@ async function resolveVendorPriceSheet(
   });
 
   if (!response.ok) {
-    throw new Error('Vendor price sheet could not be uploaded.');
+    await throwResponseError(response, 'Vendor price sheet could not be uploaded.');
   }
 
-  return (await response.json()) as VendorPriceSheet;
+  return await readJsonResponse<VendorPriceSheet>(response, 'Vendor price sheet could not be uploaded.');
 }
 
 function validateGoogleSheetSourceInput(value: string) {
@@ -2532,10 +3148,10 @@ async function parseVendorPriceListSource(
   });
 
   if (!response.ok) {
-    throw new Error('Vendor price list could not be parsed.');
+    await throwResponseError(response, 'Vendor price list could not be parsed.');
   }
 
-  return (await response.json()) as VendorPriceList;
+  return await readJsonResponse<VendorPriceList>(response, 'Vendor price list could not be parsed.');
 }
 
 async function parsePeptideBatchFile(file: File) {
@@ -2556,10 +3172,10 @@ async function parsePeptideBatchFile(file: File) {
   });
 
   if (!response.ok) {
-    throw new Error('Peptide batch file could not be parsed.');
+    await throwResponseError(response, 'Peptide batch file could not be parsed.');
   }
 
-  const result = (await response.json()) as { rows?: BatchPeptideRow[] };
+  const result = await readJsonResponse<{ rows?: BatchPeptideRow[] }>(response, 'Peptide batch file could not be parsed.');
   return Array.isArray(result.rows) ? result.rows : [];
 }
 
@@ -2587,10 +3203,10 @@ async function parseRoundPeptideBatchFile(
   });
 
   if (!response.ok) {
-    throw new Error('Round peptide batch file could not be parsed.');
+    await throwResponseError(response, 'Round peptide batch file could not be parsed.');
   }
 
-  const result = (await response.json()) as { rows?: RoundPeptideBatchRow[] };
+  const result = await readJsonResponse<{ rows?: RoundPeptideBatchRow[] }>(response, 'Round peptide batch file could not be parsed.');
   return Array.isArray(result.rows) ? result.rows : [];
 }
 
@@ -2621,6 +3237,18 @@ function sortRoundPeptideRows(rows: RoundPeptide[], sort: RoundPeptideSort | nul
   });
 
   return indexedRows.map(({ row }) => row);
+}
+
+function sortRoundPriceListItemsByVendorCode(items: RoundPriceListItem[]) {
+  return [...items].sort((first, second) => {
+    const vendorCodeComparison = compareText(first.vendorCode, second.vendorCode);
+
+    if (vendorCodeComparison !== 0) {
+      return vendorCodeComparison;
+    }
+
+    return compareText(first.productName, second.productName);
+  });
 }
 
 function getDefaultRoundPeptideSortDirection(key: RoundPeptideSortKey): RoundPeptideSort['direction'] {
@@ -2655,6 +3283,16 @@ function compareRoundPeptideRows(first: RoundPeptide, second: RoundPeptide, key:
 
 function compareText(first: string, second: string) {
   return first.localeCompare(second, undefined, { sensitivity: 'base', numeric: true });
+}
+
+function matchesAdminSearch(searchTerm: string, values: Array<string | number | null | undefined>) {
+  const normalizedSearchTerm = normalizeName(searchTerm);
+
+  if (!normalizedSearchTerm) {
+    return true;
+  }
+
+  return values.some((value) => normalizeName(String(value ?? '')).includes(normalizedSearchTerm));
 }
 
 function compareNumbers(first: number, second: number) {
@@ -2711,10 +3349,10 @@ async function uploadVendorPriceSheetFile(file: File): Promise<VendorPriceSheet>
   });
 
   if (!response.ok) {
-    throw new Error('Vendor price sheet could not be uploaded.');
+    await throwResponseError(response, 'Vendor price sheet could not be uploaded.');
   }
 
-  return (await response.json()) as VendorPriceSheet;
+  return await readJsonResponse<VendorPriceSheet>(response, 'Vendor price sheet could not be uploaded.');
 }
 
 async function searchWikiLinks(name: string): Promise<{ name: string; wikiLinks: WikiLink[]; categories?: string[] } | null> {
@@ -2723,18 +3361,23 @@ async function searchWikiLinks(name: string): Promise<{ name: string; wikiLinks:
   });
 
   if (!response.ok) {
-    throw new Error('Wiki search failed.');
+    await throwResponseError(response, 'Wiki search failed.');
   }
 
-  const result = (await response.json()) as { match?: { name: string; wikiLinks: WikiLink[]; categories?: string[] } | null };
+  const result = await readJsonResponse<{ match?: { name: string; wikiLinks: WikiLink[]; categories?: string[] } | null }>(
+    response,
+    'Wiki search failed.',
+  );
   return result.match ?? null;
 }
 
 function createEmptyPeptideForm(): PeptideForm {
   return {
     name: '',
+    kind: 'peptide',
     categories: '',
     description: '',
+    components: [],
     wikiLinks: createDefaultWikiLinks(),
   };
 }
@@ -2906,6 +3549,12 @@ function formatWikiLinks(peptide: Peptide): ReactNode {
   ));
 }
 
+function getPeptideWikiSearchText(peptide: Peptide) {
+  return normalizeWikiLinks(peptide)
+    .map((link) => `${getWikiSourceLabel(link.source)} ${link.status} ${link.url}`)
+    .join(' ');
+}
+
 function normalizeNoteTags(tags: AdminRole[]) {
   const nextTags: AdminRole[] = [];
 
@@ -2939,6 +3588,7 @@ async function ensurePeptideCategories(
   existingCategories: PeptideCategory[],
 ) {
   let nextCategories = existingCategories;
+  const categoriesToSave: PeptideCategory[] = [];
 
   for (const categoryName of categoryNames) {
     const existingCategory = findByNormalizedName(nextCategories, categoryName);
@@ -2952,10 +3602,16 @@ async function ensurePeptideCategories(
       name: categoryName,
     };
 
-    nextCategories = await saveCollectionItem<PeptideCategory>('peptide-categories', category);
+    categoriesToSave.push(category);
+    nextCategories = [category, ...nextCategories];
   }
 
-  return nextCategories;
+  if (categoriesToSave.length === 0) {
+    return nextCategories;
+  }
+
+  const result = await savePeptideCategoryBatchItems(categoriesToSave);
+  return result.items;
 }
 
 function mergeCategoryText(
@@ -3004,6 +3660,57 @@ function normalizePeptideName(value: string) {
   ]);
 
   return specialNames.get(normalizeName(cleanValue)) ?? titleCase(cleanValue);
+}
+
+function normalizePeptideKind(value: unknown): PeptideKind {
+  return value === 'blend' ? 'blend' : 'peptide';
+}
+
+function normalizeBlendComponents(value: unknown): BlendComponent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const components: BlendComponent[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const component of value) {
+    if (!component || typeof component !== 'object' || Array.isArray(component)) {
+      continue;
+    }
+
+    const sourceComponent = component as Partial<BlendComponent>;
+    const peptideId = sanitizeToken(sourceComponent.peptideId);
+    const name = sanitizeText(sourceComponent.name ?? '');
+    const ratio = sanitizeText(sourceComponent.ratio ?? '');
+
+    if (!name) {
+      continue;
+    }
+
+    const key = peptideId || normalizeName(name);
+
+    if (seenKeys.has(key)) {
+      continue;
+    }
+
+    seenKeys.add(key);
+    components.push({ peptideId, name, ratio });
+  }
+
+  return components;
+}
+
+function formatBlendComponents(components: unknown) {
+  const normalizedComponents = normalizeBlendComponents(components);
+
+  if (normalizedComponents.length === 0) {
+    return 'No components listed';
+  }
+
+  return normalizedComponents
+    .map((component) => component.ratio ? `${component.name} (${component.ratio})` : component.name)
+    .join(', ');
 }
 
 function normalizeCategories(value: string | string[]) {
@@ -3069,6 +3776,10 @@ function sanitizeUrl(value: string) {
   } catch {
     return '';
   }
+}
+
+function sanitizeToken(value: unknown) {
+  return String(value ?? '').trim().replace(/[^a-zA-Z0-9._:-]/g, '-').slice(0, 120);
 }
 
 function titleCase(value: string) {
@@ -3261,22 +3972,150 @@ function insertAfterRoundPeptide(rows: RoundPeptide[], sourceRowId: string, inse
   ];
 }
 
-function normalizeRoundPeptideFormRow(row: RoundPeptide): RoundPeptide {
+function normalizeRoundPeptideDraftRow(
+  row: RoundPeptide,
+  peptides: Peptide[],
+  priceListSnapshot: RoundPriceListSnapshot | null,
+): RoundPeptide {
+  const linkedPeptide = resolveRoundPeptideLink(row, peptides, priceListSnapshot);
+  const sourceName = getRoundRowSourceNameFromSnapshot(row, priceListSnapshot);
+
   return {
     ...row,
-    peptideId: sanitizeText(row.peptideId),
-    peptideName: sanitizeText(row.peptideName),
-    priceListItemId: sanitizeText(row.priceListItemId),
-    vendorCode: sanitizeText(row.vendorCode),
-    vendorPrice: row.vendorPrice === null ? null : Math.max(0, Number(row.vendorPrice) || 0),
-    mass: sanitizeText(row.mass),
-    additionalTesting: sanitizeText(row.additionalTesting),
-    batchConformity: row.batchConformity === true,
-    capColor: sanitizeText(row.capColor),
-    notes: sanitizeText(row.notes),
-    participantCount: Math.max(0, Math.trunc(Number(row.participantCount) || 0)),
-    totalOrdered: Math.max(0, Math.trunc(Number(row.totalOrdered) || 0)),
+    peptideId: linkedPeptide?.id ?? '',
+    peptideName: linkedPeptide?.name ?? sourceName,
   };
+}
+
+function reconcileRoundRowsWithPriceListSnapshot(
+  rows: RoundPeptide[],
+  priceListSnapshot: RoundPriceListSnapshot | null,
+  peptides: Peptide[],
+): RoundPeptide[] {
+  return rows.map((row) => {
+    const priceListItem = findUpdatedRoundPriceListItem(row, priceListSnapshot);
+
+    if (!priceListItem) {
+      return normalizeRoundPeptideDraftRow(row, peptides, priceListSnapshot);
+    }
+
+    return normalizeRoundPeptideDraftRow({
+      ...row,
+      priceListItemId: priceListItem.id,
+      vendorCode: priceListItem.vendorCode,
+      mass: priceListItem.mass,
+      vendorPrice: row.vendorPriceOverridden ? row.vendorPrice : priceListItem.price,
+    }, peptides, priceListSnapshot);
+  });
+}
+
+function findUpdatedRoundPriceListItem(
+  row: RoundPeptide,
+  priceListSnapshot: RoundPriceListSnapshot | null,
+) {
+  if (!priceListSnapshot) {
+    return null;
+  }
+
+  const exactItem = row.priceListItemId
+    ? priceListSnapshot.items.find((item) => item.id === row.priceListItemId)
+    : null;
+
+  if (exactItem) {
+    return exactItem;
+  }
+
+  const normalizedVendorCode = normalizeName(row.vendorCode);
+
+  if (normalizedVendorCode) {
+    const codeMatch = priceListSnapshot.items.find((item) => normalizeName(item.vendorCode) === normalizedVendorCode);
+
+    if (codeMatch) {
+      return codeMatch;
+    }
+  }
+
+  const normalizedMass = normalizeName(row.mass);
+  const peptideIdMatch = row.peptideId
+    ? priceListSnapshot.items.find((item) =>
+        item.peptideIds.includes(row.peptideId)
+        && (!normalizedMass || normalizeName(item.mass) === normalizedMass),
+      )
+    : null;
+
+  if (peptideIdMatch) {
+    return peptideIdMatch;
+  }
+
+  const normalizedProductName = normalizeName(row.peptideName);
+
+  return priceListSnapshot.items.find((item) =>
+    normalizeName(item.productName) === normalizedProductName
+    && (!normalizedMass || normalizeName(item.mass) === normalizedMass),
+  ) ?? null;
+}
+
+function normalizeRoundPeptideFormRow(
+  row: RoundPeptide,
+  peptides: Peptide[],
+  priceListSnapshot: RoundPriceListSnapshot | null,
+): RoundPeptide {
+  const normalizedRow = normalizeRoundPeptideDraftRow(row, peptides, priceListSnapshot);
+
+  return {
+    ...normalizedRow,
+    peptideId: sanitizeText(normalizedRow.peptideId),
+    peptideName: sanitizeText(normalizedRow.peptideName),
+    priceListItemId: sanitizeText(normalizedRow.priceListItemId),
+    vendorCode: sanitizeText(normalizedRow.vendorCode),
+    vendorPrice: normalizedRow.vendorPrice === null ? null : Math.max(0, Number(normalizedRow.vendorPrice) || 0),
+    mass: sanitizeText(normalizedRow.mass),
+    additionalTesting: sanitizeText(normalizedRow.additionalTesting),
+    batchConformity: normalizedRow.batchConformity === true,
+    capColor: sanitizeText(normalizedRow.capColor),
+    notes: sanitizeText(normalizedRow.notes),
+    participantCount: Math.max(0, Math.trunc(Number(normalizedRow.participantCount) || 0)),
+    totalOrdered: Math.max(0, Math.trunc(Number(normalizedRow.totalOrdered) || 0)),
+  };
+}
+
+function resolveRoundPeptideLink(
+  row: RoundPeptide,
+  peptides: Peptide[],
+  priceListSnapshot: RoundPriceListSnapshot | null,
+) {
+  const linkedById = row.peptideId
+    ? peptides.find((peptide) => peptide.id === row.peptideId)
+    : null;
+
+  if (linkedById) {
+    return linkedById;
+  }
+
+  const priceListItem = getRoundPriceListItem(row, priceListSnapshot);
+  const priceListPeptide = priceListItem?.peptideIds[0]
+    ? peptides.find((peptide) => peptide.id === priceListItem.peptideIds[0])
+    : null;
+
+  return priceListPeptide ?? findPeptideByName(row.peptideName || priceListItem?.productName || '', peptides);
+}
+
+function getRoundRowSourceName(form: RoundForm, rowId: string) {
+  const row = form.peptides.find((currentRow) => currentRow.id === rowId);
+
+  return row ? getRoundRowSourceNameFromSnapshot(row, form.priceListSnapshot) : '';
+}
+
+function getRoundRowSourceNameFromSnapshot(row: RoundPeptide, priceListSnapshot: RoundPriceListSnapshot | null) {
+  const priceListItem = getRoundPriceListItem(row, priceListSnapshot);
+
+  return sanitizeText(priceListItem?.productName || row.peptideName || '');
+}
+
+function getRoundPriceListItem(row: RoundPeptide, priceListSnapshot: RoundPriceListSnapshot | null) {
+  return row.priceListItemId
+    ? priceListSnapshot?.items.find((item) => item.id === row.priceListItemId) ?? null
+    : null;
 }
 
 function getRoundTierSummary(round: Round) {
@@ -3316,6 +4155,13 @@ function formatPeptideLinks(peptideIds: string[], peptides: Peptide[]) {
   return peptideIds
     .map((peptideId) => peptides.find((peptide) => peptide.id === peptideId)?.name ?? peptideId)
     .join(', ');
+}
+
+function findPeptideByName(productName: string, peptides: Peptide[]) {
+  const peptideIds = matchPeptideIds(productName, peptides);
+  const peptideId = peptideIds[0] ?? '';
+
+  return peptideId ? peptides.find((peptide) => peptide.id === peptideId) ?? null : null;
 }
 
 function matchPeptideIds(productName: string, peptides: Peptide[]) {
@@ -3360,6 +4206,35 @@ function formatDateTime(value: string) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
+}
+
+async function readPeptideTransferFile(file: File) {
+  let text = '';
+
+  try {
+    text = await file.text();
+  } catch (error) {
+    console.error('[peptide-import] file read failed', {
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      error,
+    });
+    throw new Error(`Peptide import failed. Could not read ${file.name}.`);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    console.error('[peptide-import] JSON parse failed', {
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      bodyPreview: text.slice(0, 1000),
+      error,
+    });
+    throw new Error(`Peptide import failed. ${file.name} is not valid JSON.`);
+  }
 }
 
 function normalizePeptideTransfer(value: unknown): PeptideTransfer {

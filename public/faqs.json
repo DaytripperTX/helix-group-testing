@@ -21,11 +21,11 @@
   },
   {
     "question": "What does platinum testing include?",
-    "answer": "Platinum testing is the most comprehensive tier. It may include purity and quantitation, identity confirmation, endotoxin screening, sterility screening, heavy metals, fentanyl screening, batch conformity, and related checks. Exact testing scope should be confirmed for each round."
+    "answer": "Platinum testing is the most comprehensive tier. It may include peptide identity, purity, content or quantity, endotoxin screening, heavy metals, microbial limits, sterility, and fentanyl screening. Exact testing scope should be confirmed for each round."
   },
   {
     "question": "What does gold testing include?",
-    "answer": "Gold testing is a mid-level tier intended to cover purity, composition, and identity confirmation. Exact testing scope should be confirmed for each round."
+    "answer": "Gold testing is the essential lower-risk tier. It may include peptide identity, purity, content or quantity, and fentanyl screening. Gold+ adds endotoxin screening for complex or moderate/high-risk peptides. Exact testing scope should be confirmed for each round."
   },
   {
     "question": "What does bronze testing include?",
