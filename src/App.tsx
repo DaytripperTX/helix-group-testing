@@ -896,6 +896,7 @@ function MissionIcon({ type }: { type: (typeof missionBenefits)[number]['icon'] 
 
 function TestingPage() {
   const [selectedTierId, setSelectedTierId] = useState<TestingTier['id']>('platinum');
+  const [expandedMobileTierId, setExpandedMobileTierId] = useState<TestingTier['id'] | null>(null);
   const [rounds, setRounds] = useState<Round[]>([]);
   const [selectedRoundId, setSelectedRoundId] = useState('');
   const [roundSearchTerm, setRoundSearchTerm] = useState('');
@@ -957,6 +958,12 @@ function TestingPage() {
     }
   }, [activeTestingTiers, selectedTierId]);
 
+  useEffect(() => {
+    if (expandedMobileTierId && !activeTestingTiers.some((tier) => tier.id === expandedMobileTierId)) {
+      setExpandedMobileTierId(null);
+    }
+  }, [activeTestingTiers, expandedMobileTierId]);
+
   return (
     <section className="testing-dashboard" aria-labelledby="testing-title">
       <div className="section__content testing-dashboard__content">
@@ -1009,38 +1016,74 @@ function TestingPage() {
             {testingTierSelectorOrder
               .map((tierId) => activeTestingTiers.find((tier) => tier.id === tierId))
               .filter((tier): tier is TestingTier => Boolean(tier))
-              .map((tier) => (
-              <button
-                className={`tier-button tier-button--${tier.id} ${
-                  selectedTier.id === tier.id ? 'is-selected' : ''
-                }`}
-                type="button"
-                key={tier.id}
-                aria-pressed={selectedTier.id === tier.id}
-                aria-controls="testing-tier-details"
-                onClick={() => setSelectedTierId(tier.id)}
-              >
-                <span>{tier.name}</span>
-                <strong>{tier.label}</strong>
-                <em>{tier.description}</em>
-                <small>
-                  {tier.assignmentLabel
-                    ? tier.assignmentLabel
-                    : `${tier.qualifiedCount} peptides`}
-                </small>
-              </button>
-            ))}
+              .map((tier) => {
+                const isMobileExpanded = expandedMobileTierId === tier.id;
+                const tierDetailId = getTestingTierDetailId(tier.id, 'mobile');
+
+                return (
+                  <div className="tier-selector__item" key={tier.id}>
+                    <button
+                      className={`tier-button tier-button--${tier.id} ${
+                        selectedTier.id === tier.id ? 'is-selected' : ''
+                      } ${isMobileExpanded ? 'is-expanded' : ''}`}
+                      type="button"
+                      aria-pressed={selectedTier.id === tier.id}
+                      aria-expanded={isMobileExpanded}
+                      aria-controls={tierDetailId}
+                      onClick={() => {
+                        setSelectedTierId(tier.id);
+                        setExpandedMobileTierId((currentTierId) =>
+                          currentTierId === tier.id ? null : tier.id,
+                        );
+                      }}
+                    >
+                      <span>{tier.name}</span>
+                      <strong>{tier.label}</strong>
+                      <em>{tier.description}</em>
+                      <small>
+                        {tier.assignmentLabel
+                          ? tier.assignmentLabel
+                          : `${tier.qualifiedCount} peptides`}
+                      </small>
+                    </button>
+                    <TestingTierDetails
+                      tier={tier}
+                      id={tierDetailId}
+                      titleId={`${tierDetailId}-title`}
+                      className={`tier-detail--mobile ${isMobileExpanded ? 'is-open' : ''}`}
+                      ariaHidden={!isMobileExpanded}
+                    />
+                  </div>
+                );
+              })}
           </div>
         </div>
 
-        <TestingTierDetails tier={selectedTier} />
+        <TestingTierDetails
+          tier={selectedTier}
+          id={getTestingTierDetailId(selectedTier.id, 'desktop')}
+          titleId={`${getTestingTierDetailId(selectedTier.id, 'desktop')}-title`}
+          className="tier-detail--desktop"
+        />
         <BatchConformityAddon />
       </div>
     </section>
   );
 }
 
-function TestingTierDetails({ tier }: { tier: TestingTier }) {
+function TestingTierDetails({
+  tier,
+  id,
+  titleId,
+  className = '',
+  ariaHidden = false,
+}: {
+  tier: TestingTier;
+  id: string;
+  titleId: string;
+  className?: string;
+  ariaHidden?: boolean;
+}) {
   const [activeBatchPill, setActiveBatchPill] = useState<{ id: string; pinned: boolean } | null>(null);
   const peptidePills = tier.peptides.map(normalizeTestingPeptidePill);
 
@@ -1057,9 +1100,10 @@ function TestingTierDetails({ tier }: { tier: TestingTier }) {
 
   return (
     <article
-      className={`tier-detail tier-detail--${tier.id}`}
-      id="testing-tier-details"
-      aria-labelledby="tier-detail-title"
+      className={`tier-detail tier-detail--${tier.id} ${className}`.trim()}
+      id={id}
+      aria-labelledby={titleId}
+      aria-hidden={ariaHidden || undefined}
     >
       <div className="tier-detail__main">
         <header className="tier-detail__header">
@@ -1068,7 +1112,7 @@ function TestingTierDetails({ tier }: { tier: TestingTier }) {
           </div>
           <div>
             <p className="eyebrow">{tier.name} testing</p>
-            <h2 id="tier-detail-title">{tier.name.toUpperCase()} TESTING</h2>
+            <h2 id={titleId}>{tier.name.toUpperCase()} TESTING</h2>
             <p>
               <strong className="testing-label">{tier.label}</strong> - {tier.description}
             </p>
@@ -1180,6 +1224,10 @@ function TestingTierDetails({ tier }: { tier: TestingTier }) {
       </section>
     </article>
   );
+}
+
+function getTestingTierDetailId(tierId: TestingTier['id'], context: 'desktop' | 'mobile') {
+  return `testing-tier-details-${context}-${tierId}`;
 }
 
 function normalizeTestingPeptidePill(peptide: string | TestingPeptidePill): TestingPeptidePill {
@@ -2395,6 +2443,8 @@ function CoaBatchDetail({
 }) {
   const isLocked = result.isResultLocked;
   const vialImageUrl = isLocked ? '' : getCoaVialImageUrl(result);
+  const [failedVialImageUrl, setFailedVialImageUrl] = useState('');
+  const shouldShowVialImage = Boolean(vialImageUrl && failedVialImageUrl !== vialImageUrl);
   const detailSummaryItems = [
     { label: 'Round', value: result.roundName },
     { label: 'Lab', value: result.lab },
@@ -2412,6 +2462,10 @@ function CoaBatchDetail({
           pillClassName: column.pillClassName,
         }))),
   ].filter((item) => item.value && item.value !== '-');
+
+  useEffect(() => {
+    setFailedVialImageUrl('');
+  }, [vialImageUrl]);
 
   return (
     <div className="coa-detail-stack">
@@ -2461,8 +2515,14 @@ function CoaBatchDetail({
 
         <div className="coa-detail__body">
           <div className="coa-vial-slot" aria-label={`Vial image for ${result.batchNumber}`}>
-            {vialImageUrl ? (
-              <img src={vialImageUrl} alt={`${result.batchNumber} vial`} />
+            {shouldShowVialImage ? (
+              <img
+                src={vialImageUrl}
+                alt={`${result.batchNumber} vial`}
+                decoding="async"
+                loading="eager"
+                onError={() => setFailedVialImageUrl(vialImageUrl)}
+              />
             ) : (
               <div className="coa-vial-placeholder" aria-hidden="true">
                 <span className="coa-vial-placeholder__cap" style={{ background: getCoaCapSwatchColor(result.capColor) }} />
@@ -2585,6 +2645,7 @@ function CoaPdfPreview({ result, pdfUrl }: { result: CoaResult; pdfUrl: string }
 
   useEffect(() => {
     let isCancelled = false;
+    const objectUrls: string[] = [];
     const renderedPages: CoaPreviewPage[] = [];
     const loadingTask = pdfjs.getDocument({ url: pdfUrl });
 
@@ -2602,7 +2663,7 @@ function CoaPdfPreview({ result, pdfUrl }: { result: CoaResult; pdfUrl: string }
 
           const page = await pdf.getPage(pageNumber);
           const baseViewport = page.getViewport({ scale: 1 });
-          const renderScale = Math.min(2.2, Math.max(1.35, 1120 / baseViewport.width));
+          const renderScale = getCoaPreviewRenderScale(baseViewport.width);
           const viewport = page.getViewport({ scale: renderScale });
           const canvas = document.createElement('canvas');
 
@@ -2615,9 +2676,28 @@ function CoaPdfPreview({ result, pdfUrl }: { result: CoaResult; pdfUrl: string }
             break;
           }
 
+          const pageBlob = await new Promise<Blob | null>((resolve) => {
+            canvas.toBlob(resolve, 'image/png');
+          });
+
+          canvas.width = 0;
+          canvas.height = 0;
+
+          if (!pageBlob) {
+            throw new Error('COA preview image could not be created.');
+          }
+
+          const pageUrl = URL.createObjectURL(pageBlob);
+
+          if (isCancelled) {
+            URL.revokeObjectURL(pageUrl);
+            break;
+          }
+
+          objectUrls.push(pageUrl);
           renderedPages.push({
             pageNumber,
-            src: canvas.toDataURL('image/png'),
+            src: pageUrl,
             width: viewport.width,
             height: viewport.height,
           });
@@ -2637,6 +2717,7 @@ function CoaPdfPreview({ result, pdfUrl }: { result: CoaResult; pdfUrl: string }
 
     return () => {
       isCancelled = true;
+      objectUrls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
       void loadingTask.destroy();
     };
   }, [pdfUrl]);
@@ -2812,6 +2893,16 @@ function CoaPdfPreview({ result, pdfUrl }: { result: CoaResult; pdfUrl: string }
       )}
     </section>
   );
+}
+
+function getCoaPreviewRenderScale(basePageWidth: number) {
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1280;
+
+  if (viewportWidth <= 760) {
+    return Math.min(1.55, Math.max(1.12, 760 / basePageWidth));
+  }
+
+  return Math.min(2.2, Math.max(1.35, 1120 / basePageWidth));
 }
 
 function CoaModal({

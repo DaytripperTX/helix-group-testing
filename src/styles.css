@@ -1863,6 +1863,7 @@ h2 {
   inset: 0;
   background: #657184;
   content: "";
+  -webkit-mask: url("/vial.svg") center / contain no-repeat;
   mask: url("/vial.svg") center / contain no-repeat;
   transform: scale(var(--vial-scale));
   transform-origin: center;
@@ -1887,6 +1888,16 @@ h2 {
   opacity: 0;
   transform: scale(var(--vial-scale));
   transform-origin: center;
+}
+
+@supports not ((mask: url("/vial.svg") center / contain no-repeat) or (-webkit-mask: url("/vial.svg") center / contain no-repeat)) {
+  .vial-preview__art::before {
+    display: none;
+  }
+
+  .vial-preview__art img {
+    opacity: 1;
+  }
 }
 
 .vial-preview__label {
@@ -3901,9 +3912,15 @@ h2 {
   gap: 16px;
 }
 
+.tier-selector__item {
+  display: grid;
+  min-width: 0;
+}
+
 .tier-button {
   position: relative;
   display: grid;
+  width: 100%;
   min-height: 160px;
   align-content: center;
   gap: 8px;
@@ -4079,6 +4096,10 @@ h2 {
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(249, 252, 255, 0.96)),
     radial-gradient(circle at 22% 100%, rgba(19, 244, 255, 0.15), transparent 26%);
   box-shadow: 0 22px 58px rgba(5, 8, 22, 0.1);
+}
+
+.tier-detail--mobile {
+  display: none;
 }
 
 .tier-detail__main {
@@ -5466,7 +5487,8 @@ h2 {
 
 @media (prefers-reduced-motion: reduce) {
   .coa-pdf-preview__pages,
-  .coa-pdf-preview__page {
+  .coa-pdf-preview__page,
+  .tier-detail--mobile {
     transition: none;
   }
 
@@ -6512,8 +6534,64 @@ h2 {
     padding: 20px;
   }
 
+  .tier-button.is-selected:not(.is-expanded)::after {
+    display: none;
+  }
+
+  .tier-detail--desktop {
+    display: none;
+  }
+
+  .tier-detail--mobile {
+    display: grid;
+    max-height: 0;
+    margin-top: 0;
+    border-width: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-8px);
+    transition:
+      max-height 260ms ease,
+      margin-top 220ms ease,
+      border-width 220ms ease,
+      padding-top 220ms ease,
+      padding-bottom 220ms ease,
+      opacity 180ms ease,
+      transform 220ms ease,
+      visibility 0s linear 260ms;
+  }
+
+  .tier-detail--mobile.is-open {
+    max-height: 3200px;
+    margin-top: 10px;
+    border-width: 1px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: none;
+    transition:
+      max-height 300ms ease,
+      margin-top 220ms ease,
+      border-width 220ms ease,
+      padding-top 220ms ease,
+      padding-bottom 220ms ease,
+      opacity 200ms ease 60ms,
+      transform 240ms ease,
+      visibility 0s linear;
+  }
+
   .tier-detail {
     padding: 14px;
+  }
+
+  .tier-detail--mobile:not(.is-open) {
+    padding-top: 0;
+    padding-bottom: 0;
   }
 
   .tier-detail__brand {
