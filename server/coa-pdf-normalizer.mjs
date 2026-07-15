@@ -1,9 +1,10 @@
-const parserVersion = 'coa-pdf-parser-v1';
+const currentParserVersion = 'coa-pdf-parser-v2';
+const legacyParserVersion = 'coa-pdf-parser-v1';
 const maxRawSnippetLength = 1200;
 
 export function createFailedParsedCoa(error) {
   return compactParsedCoa({
-    parserVersion,
+    parserVersion: currentParserVersion,
     extractionMethod: 'native_pdf',
     templateId: 'unknown',
     templateConfidence: 0,
@@ -33,7 +34,7 @@ export function compactParsedCoa(value) {
   const raw = value?.raw && typeof value.raw === 'object' ? value.raw : {};
 
   return {
-    parserVersion,
+    parserVersion: sanitizeText(value?.parserVersion) || legacyParserVersion,
     extractionMethod: sanitizeText(value?.extractionMethod) || 'native_pdf',
     templateId: sanitizeText(value?.templateId) || 'unknown',
     templateConfidence: normalizeConfidence(value?.templateConfidence),
@@ -66,6 +67,8 @@ function compactFields(fields) {
     purity: sanitizeText(fields.purity).slice(0, 40),
     averageNetContent: sanitizeText(fields.averageNetContent).slice(0, 40),
     meanPurity: sanitizeText(fields.meanPurity).slice(0, 40),
+    endotoxinResult: sanitizeText(fields.endotoxinResult).slice(0, 40),
+    endotoxinThreshold: sanitizeText(fields.endotoxinThreshold).slice(0, 40),
     heavyMetals: normalizePassFailPending(fields.heavyMetals),
     sterility: normalizePassFailPending(fields.sterility),
     endotoxins: normalizePassFailPending(fields.endotoxins),

@@ -5851,6 +5851,21 @@ h2 {
   align-items: center;
 }
 
+.coa-upload-file {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.coa-upload-file small {
+  color: #657184;
+  font-size: 0.74rem;
+  font-weight: 750;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-transform: none;
+}
+
 .coa-modal-actions {
   display: flex;
   flex-wrap: wrap;

@@ -13,6 +13,7 @@ import {
   importPeptideCategoryBatchItems,
   importPeptideCollectionTransfer,
   importRoundBatchItems,
+  identifyCoaPdfAsset,
   isPublicCollectionRead,
   publicReportLabelTemplate,
   publicUpsertLabelTemplate,
@@ -220,6 +221,16 @@ export async function handleHelixApiRequest(request) {
       }
 
       return jsonResponse(200, await writeCoaPdfAsset(parseJsonBody(request.bodyText)));
+    }
+
+    if (pathname === '/api/admin/assets/coa-pdf-identify' && method === 'POST') {
+      const session = getAdminSession(request.headers);
+
+      if (!session) {
+        return jsonResponse(401, { error: 'Admin login required' });
+      }
+
+      return jsonResponse(200, await identifyCoaPdfAsset(parseJsonBody(request.bodyText)));
     }
 
     if ((pathname === '/api/admin/wiki/search' || pathname === '/api/admin/peptidepedia/search') && method === 'GET') {

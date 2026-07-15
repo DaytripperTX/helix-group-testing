@@ -798,14 +798,14 @@ export async function writeCoaPdfAsset(asset) {
     throw createHttpError(400, 'COA file must be a PDF.');
   }
 
-  const safeFileName = asset.fileName.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const originalSafeFileName = sanitizeCoaPdfFileName(asset.fileName);
   const buffer = Buffer.from(asset.base64, 'base64');
   const uploadBufferSummary = summarizeBufferForDiagnostics(buffer);
 
   diagnostics.input = {
     fileName: asset.fileName,
     mimeType: asset.mimeType,
-    safeFileName,
+    safeFileName: originalSafeFileName,
     base64Length: asset.base64.length,
     ...uploadBufferSummary,
   };
@@ -825,7 +825,21 @@ export async function writeCoaPdfAsset(asset) {
     throw createHttpError(400, 'COA file must be a valid PDF.');
   }
 
+  const batchNumber = await identifyCoaPdfBatchNumberForUpload(buffer, uploadId, diagnostics);
+  const coaFileName = batchNumber
+    ? createBatchCoaPdfFileName(batchNumber)
+    : originalSafeFileName;
+  const safeFileName = sanitizeCoaPdfFileName(coaFileName);
   const blobKey = `${coaPdfAssetPrefix}${Date.now()}-${safeFileName || 'coa.pdf'}`;
+
+  diagnostics.naming = {
+    originalFileName: asset.fileName,
+    batchNumber,
+    coaFileName,
+    renamed: coaFileName !== originalSafeFileName,
+  };
+
+  logCoaPdfUpload(uploadId, diagnostics, 'filename-resolved', diagnostics.naming);
 
   logCoaPdfUpload(uploadId, diagnostics, 'store-start', {
     blobKey,
@@ -836,7 +850,7 @@ export async function writeCoaPdfAsset(asset) {
     const store = await getBlobStore();
     await store.set(blobKey, buffer, {
       metadata: {
-        fileName: asset.fileName,
+        fileName: coaFileName,
         mimeType: 'application/pdf',
       },
     });
@@ -852,10 +866,10 @@ export async function writeCoaPdfAsset(asset) {
   });
 
   const storedBuffer = await verifyStoredCoaPdfAsset(blobKey, buffer, uploadId, diagnostics);
-  const { parsedCoa, vialImage } = await parseStoredCoaPdf(storedBuffer, asset.fileName, uploadId, diagnostics);
+  const { parsedCoa, vialImage } = await parseStoredCoaPdf(storedBuffer, coaFileName, uploadId, diagnostics);
   const vialImageFields = vialImage
     ? await storeCoaVialImageAsset({
-        fileName: asset.fileName,
+        fileName: coaFileName,
         safeFileName,
         image: vialImage,
       })
@@ -881,13 +895,85 @@ export async function writeCoaPdfAsset(asset) {
   }, parsedCoa?.error ? 'error' : 'log');
 
   return {
-    coaFileName: asset.fileName,
+    coaFileName,
     coaMimeType: 'application/pdf',
     coaBlobKey: blobKey,
     coaUploadedAt: new Date().toISOString(),
     parsedCoa,
     diagnostics,
     ...vialImageFields,
+  };
+}
+
+async function identifyCoaPdfBatchNumberForUpload(buffer, uploadId, diagnostics) {
+  try {
+    const { identifyCoaPdfBatchNumber } = await import('./coa-pdf-parser.mjs');
+    const batchNumber = await identifyCoaPdfBatchNumber(buffer);
+
+    logCoaPdfUpload(uploadId, diagnostics, 'batch-number-identified', {
+      batchNumber,
+    });
+
+    return batchNumber;
+  } catch (error) {
+    logCoaPdfUpload(uploadId, diagnostics, 'batch-number-identification-failed', {
+      error: serializeErrorForDiagnostics(error),
+    }, 'warn');
+
+    return '';
+  }
+}
+
+function createBatchCoaPdfFileName(batchNumber) {
+  const safeBatchNumber = String(batchNumber ?? '')
+    .trim()
+    .replace(/\.pdf$/i, '')
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
+    .replace(/^[.-]+|[.-]+$/g, '')
+    .slice(0, 170);
+
+  return safeBatchNumber ? `${safeBatchNumber}.pdf` : 'coa.pdf';
+}
+
+function sanitizeCoaPdfFileName(fileName) {
+  const safeFileName = String(fileName ?? '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
+    .replace(/^[.-]+/, '')
+    .slice(0, 180);
+
+  return safeFileName || 'coa.pdf';
+}
+
+export async function identifyCoaPdfAsset(asset) {
+  if (
+    !asset ||
+    typeof asset !== 'object' ||
+    typeof asset.fileName !== 'string' ||
+    typeof asset.mimeType !== 'string' ||
+    typeof asset.base64 !== 'string'
+  ) {
+    throw createHttpError(400, 'Invalid COA PDF identification request.');
+  }
+
+  if (asset.mimeType !== 'application/pdf') {
+    throw createHttpError(400, 'COA file must be a PDF.');
+  }
+
+  const buffer = Buffer.from(asset.base64, 'base64');
+
+  if (buffer.length === 0 || buffer.length > maxCoaPdfBytes) {
+    throw createHttpError(400, 'COA PDF is too large.');
+  }
+
+  if (buffer.subarray(0, 5).toString('utf8') !== '%PDF-') {
+    throw createHttpError(400, 'COA file must be a valid PDF.');
+  }
+
+  const { identifyCoaPdfBatchNumber } = await import('./coa-pdf-parser.mjs');
+
+  return {
+    batchNumber: await identifyCoaPdfBatchNumber(buffer),
   };
 }
 
