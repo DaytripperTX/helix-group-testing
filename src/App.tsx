@@ -8,6 +8,13 @@ import LabelsPage from './LabelsPage';
 import OrderFormPage from './OrderFormPage';
 import DisclaimerSection from './Helpers/DisclaimerSection';
 import PageHero from './Helpers/PageHero';
+import {
+  createCoaDetailPath,
+  createCoaListPath,
+  createCoaPeptideFilterOptions,
+  defaultCoaFilters,
+  parseCoaFilterSearch,
+} from './coa-filter-url.mjs';
 import { publicPageItems, type PublicPageId } from './page-disables';
 import { fetchRounds, getCurrentRounds, sortRoundsForDisplay, type Round, type RoundPeptide, type TestingTierId } from './rounds';
 
@@ -674,6 +681,7 @@ function App() {
 
     window.history.pushState({}, '', targetPath);
     setActivePage(getPageFromPath());
+    window.dispatchEvent(new PopStateEvent('popstate'));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -1421,14 +1429,16 @@ function TestingIcon({ type }: { type: TestingIconType }) {
 }
 
 function CoasPage({ isAdmin }: { isAdmin: boolean }) {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [peptideFilter, setPeptideFilter] = useState('all');
+  const [initialFilters] = useState(getInitialCoaFilterState);
+  const [searchTerm, setSearchTerm] = useState(initialFilters.searchTerm);
+  const [peptideFilter, setPeptideFilter] = useState(initialFilters.peptideToken);
   const [selectedCoaId, setSelectedCoaId] = useState(getCoaHashSelection);
   const [coaResults, setCoaResults] = useState<CoaResult[]>([]);
   const [rounds, setRounds] = useState<Round[]>([]);
   const [coaStatus, setCoaStatus] = useState('');
   const [isSubmittingCoa, setIsSubmittingCoa] = useState(false);
-  const [roundFilter, setRoundFilter] = useState('all');
+  const [roundFilter, setRoundFilter] = useState(initialFilters.roundId);
+  const [hasLoadedCoaData, setHasLoadedCoaData] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [batchRoundId, setBatchRoundId] = useState('');
   const [batchRows, setBatchRows] = useState<CoaBatchFormRow[]>([]);
@@ -1445,12 +1455,15 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
   const [isUnlockingRound, setIsUnlockingRound] = useState(false);
   const sortedCoaResults = useMemo(() => sortCoaResults(coaResults, rounds), [coaResults, rounds]);
   const peptideOptions = useMemo(
-    () => [...new Set(sortedCoaResults.map((result) => result.peptideName).filter(Boolean))].sort((first, second) => first.localeCompare(second)),
+    () => createCoaPeptideFilterOptions(sortedCoaResults),
     [sortedCoaResults],
   );
+  const selectedPeptideName = peptideFilter === 'all'
+    ? 'all'
+    : peptideOptions.find((option) => option.token === peptideFilter)?.label ?? 'all';
   const filteredResults = useMemo(
-    () => filterCoaResults(sortedCoaResults, searchTerm, peptideFilter, roundFilter),
-    [sortedCoaResults, searchTerm, peptideFilter, roundFilter],
+    () => filterCoaResults(sortedCoaResults, searchTerm, selectedPeptideName, roundFilter),
+    [sortedCoaResults, searchTerm, selectedPeptideName, roundFilter],
   );
   const filteredResultGroups = useMemo(
     () => groupCoaResultsByRound(filteredResults),
@@ -1468,15 +1481,56 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
   const editRound = rounds.find((round) => round.id === coaEditForm.roundId) ?? null;
 
   useEffect(() => {
-    const handleHashChange = () => setSelectedCoaId(getCoaHashSelection());
+    const handleLocationChange = () => {
+      const nextSelectedCoaId = getCoaHashSelection();
 
-    window.addEventListener('hashchange', handleHashChange);
-    window.addEventListener('popstate', handleHashChange);
+      setSelectedCoaId(nextSelectedCoaId);
+
+      if (!nextSelectedCoaId) {
+        const nextFilters = parseCoaFilterSearch(window.location.search);
+
+        setRoundFilter(nextFilters.roundId);
+        setPeptideFilter(nextFilters.peptideToken);
+        setSearchTerm(nextFilters.searchTerm);
+      }
+    };
+
+    window.addEventListener('hashchange', handleLocationChange);
+    window.addEventListener('popstate', handleLocationChange);
     return () => {
-      window.removeEventListener('hashchange', handleHashChange);
-      window.removeEventListener('popstate', handleHashChange);
+      window.removeEventListener('hashchange', handleLocationChange);
+      window.removeEventListener('popstate', handleLocationChange);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const nextPath = selectedCoaId
+      ? createCoaDetailPath(window.location.pathname, selectedCoaId)
+      : createCoaListPath(window.location.pathname, {
+          roundId: roundFilter,
+          peptideToken: peptideFilter,
+          searchTerm,
+        });
+    const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+    if (currentPath !== nextPath) {
+      window.history.replaceState(window.history.state, '', nextPath);
+    }
+  }, [peptideFilter, roundFilter, searchTerm, selectedCoaId]);
+
+  useEffect(() => {
+    if (!hasLoadedCoaData) {
+      return;
+    }
+
+    if (roundFilter !== 'all' && !rounds.some((round) => round.id === roundFilter)) {
+      setRoundFilter('all');
+    }
+
+    if (peptideFilter !== 'all' && !peptideOptions.some((option) => option.token === peptideFilter)) {
+      setPeptideFilter('all');
+    }
+  }, [hasLoadedCoaData, peptideFilter, peptideOptions, roundFilter, rounds]);
 
   useEffect(() => {
     void refreshCoaData();
@@ -1493,11 +1547,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
 
       setCoaResults(nextCoas);
       setRounds(sortedRounds);
-      setRoundFilter((currentRoundId) =>
-        currentRoundId === 'all' || sortedRounds.some((round) => round.id === currentRoundId)
-          ? currentRoundId
-          : 'all',
-      );
+      setHasLoadedCoaData(true);
       setCoaStatus('');
     } catch (error) {
       console.error(error);
@@ -1547,17 +1597,22 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const selectCoaResult = (resultId: string) => {
-    const nextHash = `#${encodeURIComponent(resultId)}`;
+    const nextPath = createCoaDetailPath(window.location.pathname, resultId);
+    const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
 
-    if (window.location.hash !== nextHash) {
-      window.history.pushState({}, '', `${window.location.pathname}${window.location.search}${nextHash}`);
+    if (currentPath !== nextPath) {
+      window.history.pushState({}, '', nextPath);
     }
 
     setSelectedCoaId(resultId);
   };
 
   const clearSelectedCoaResult = () => {
-    window.history.pushState({}, '', `${window.location.pathname}${window.location.search}`);
+    window.history.pushState({}, '', createCoaListPath(window.location.pathname, {
+      roundId: roundFilter,
+      peptideToken: peptideFilter,
+      searchTerm,
+    }));
     setSelectedCoaId('');
   };
 
@@ -1995,9 +2050,9 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
                 <span>Peptide name</span>
                 <select value={peptideFilter} onChange={(event) => setPeptideFilter(event.target.value)}>
                   <option value="all">All peptides</option>
-                  {peptideOptions.map((peptideName) => (
-                    <option value={peptideName} key={peptideName}>
-                      {peptideName}
+                  {peptideOptions.map((option) => (
+                    <option value={option.token} key={option.token}>
+                      {option.label}
                     </option>
                   ))}
                 </select>
@@ -3078,6 +3133,14 @@ function getCoaHashSelection() {
   }
 
   return decodeURIComponent(window.location.hash.replace(/^#/, '')).trim();
+}
+
+function getInitialCoaFilterState() {
+  if (typeof window === 'undefined' || getCoaHashSelection()) {
+    return { ...defaultCoaFilters };
+  }
+
+  return parseCoaFilterSearch(window.location.search);
 }
 
 function filterCoaResults(results: CoaResult[], searchTerm: string, peptideFilter: string, roundFilter: string) {

@@ -257,6 +257,9 @@ test('coa pdf uploads are admin only, pdf only, and publicly served when attache
   assert.equal(validUpload.statusCode, 200);
 
   const asset = JSON.parse(validUpload.body);
+  assert.equal(asset.coaFileName, 'coa.pdf');
+  assert.match(asset.coaBlobKey, /-coa\.pdf$/);
+  assert.equal(asset.diagnostics.naming.batchNumber, '');
   const saveResponse = await apiRequest('/api/admin/data/coas/batch-with-pdf', 'PUT', {
     ...createCoa({
       id: 'batch-with-pdf',
@@ -343,16 +346,26 @@ test('coa pdf uploads preserve quantitative endotoxin results without requiring 
   await resetData();
   const adminCookie = await loginAdmin();
   await seedRound(adminCookie);
+  const unrelatedUpload = await createFixturePdfUpload('HLX-SOP-CP10-2PEP.pdf');
+  unrelatedUpload.fileName = 'unrelated lab document.pdf';
 
   const uploadResponse = await apiRequest(
     '/api/admin/assets/coa-pdf',
     'POST',
-    await createFixturePdfUpload('HLX-SOP-CP10-2PEP.pdf'),
+    unrelatedUpload,
     { cookie: adminCookie },
   );
   const asset = JSON.parse(uploadResponse.body);
 
   assert.equal(uploadResponse.statusCode, 200);
+  assert.equal(asset.coaFileName, 'HLX-SOP-CP10-2PEP.pdf');
+  assert.match(asset.coaBlobKey, /-HLX-SOP-CP10-2PEP\.pdf$/);
+  assert.deepEqual(asset.diagnostics.naming, {
+    originalFileName: 'unrelated lab document.pdf',
+    batchNumber: 'HLX-SOP-CP10-2PEP',
+    coaFileName: 'HLX-SOP-CP10-2PEP.pdf',
+    renamed: true,
+  });
   assert.equal(asset.parsedCoa.fields.averageNetContent, '10.17 mg');
   assert.equal(asset.parsedCoa.fields.endotoxins, 'Pass');
   assert.equal(asset.parsedCoa.fields.endotoxinResult, '0.096 EU/mL');
@@ -370,11 +383,25 @@ test('coa pdf uploads preserve quantitative endotoxin results without requiring 
     ...asset,
   }, { cookie: adminCookie });
   const stored = (await readCollection('coas')).find((coa) => coa.id === 'quantitative-no-vial');
+  const pdfResponse = await apiRequest('/api/coas/quantitative-no-vial/pdf', 'GET');
 
   assert.equal(saveResponse.statusCode, 200);
   assert.equal(stored.endotoxins, 'Pass');
   assert.equal(stored.parsedCoa.fields.endotoxinResult, '0.096 EU/mL');
   assert.equal(stored.vialImageAssetKey, undefined);
+  assert.equal(pdfResponse.headers['Content-Disposition'], 'inline; filename="HLX-SOP-CP10-2PEP.pdf"');
+
+  const canonicalUploadResponse = await apiRequest(
+    '/api/admin/assets/coa-pdf',
+    'POST',
+    await createFixturePdfUpload('HLX-SOP-CP10-2PEP.pdf'),
+    { cookie: adminCookie },
+  );
+  const canonicalAsset = JSON.parse(canonicalUploadResponse.body);
+
+  assert.equal(canonicalUploadResponse.statusCode, 200);
+  assert.equal(canonicalAsset.coaFileName, 'HLX-SOP-CP10-2PEP.pdf');
+  assert.equal(canonicalAsset.diagnostics.naming.renamed, false);
 });
 
 test('coa pdf uploads return parsed payload and stored entries preserve parsed fields', { skip: !sampleCoaFixturePath }, async () => {
