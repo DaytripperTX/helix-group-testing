@@ -29,6 +29,17 @@ Allowed values are `order-form`, `testing`, `coas`, `labels`, and `faqs`.
 Values may be comma or whitespace separated, and may use ids or paths such as
 `/order-form`. This is build-time config, so changes require rebuilding the app.
 
+Quantitative endotoxin results use a default pass threshold of `5 EU/mL`.
+Override it at runtime when needed:
+
+```bash
+HELIX_ENDOTOXIN_PASS_THRESHOLD_EU_ML=5
+```
+
+The result must be strictly below the configured positive number to pass. An
+invalid configured value leaves quantitative endotoxin results Pending and adds
+a parser warning instead of silently using the default.
+
 Install dependencies:
 
 ```bash
@@ -87,6 +98,7 @@ Set these environment variables in the Netlify site UI before sharing a deploy:
 - `HELIX_ADMIN_PASSWORD`
 - `HELIX_OWNER_PASSWORD`
 - `HELIX_ADMIN_SESSION_SECRET`
+- `HELIX_ENDOTOXIN_PASS_THRESHOLD_EU_ML` if the default `5 EU/mL` threshold should be overridden
 - `DISABLED_PAGES` if any public pages should be hidden
 
 Do not set `HELIX_ALLOW_LOCAL_DEFAULTS=true` in Netlify.

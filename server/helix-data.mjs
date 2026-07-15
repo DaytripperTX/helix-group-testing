@@ -891,6 +891,38 @@ export async function writeCoaPdfAsset(asset) {
   };
 }
 
+export async function identifyCoaPdfAsset(asset) {
+  if (
+    !asset ||
+    typeof asset !== 'object' ||
+    typeof asset.fileName !== 'string' ||
+    typeof asset.mimeType !== 'string' ||
+    typeof asset.base64 !== 'string'
+  ) {
+    throw createHttpError(400, 'Invalid COA PDF identification request.');
+  }
+
+  if (asset.mimeType !== 'application/pdf') {
+    throw createHttpError(400, 'COA file must be a PDF.');
+  }
+
+  const buffer = Buffer.from(asset.base64, 'base64');
+
+  if (buffer.length === 0 || buffer.length > maxCoaPdfBytes) {
+    throw createHttpError(400, 'COA PDF is too large.');
+  }
+
+  if (buffer.subarray(0, 5).toString('utf8') !== '%PDF-') {
+    throw createHttpError(400, 'COA file must be a valid PDF.');
+  }
+
+  const { identifyCoaPdfBatchNumber } = await import('./coa-pdf-parser.mjs');
+
+  return {
+    batchNumber: await identifyCoaPdfBatchNumber(buffer),
+  };
+}
+
 async function verifyStoredCoaPdfAsset(blobKey, expectedBuffer, uploadId, diagnostics) {
   logCoaPdfUpload(uploadId, diagnostics, 'verify-start', {
     blobKey,

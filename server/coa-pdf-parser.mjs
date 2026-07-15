@@ -1,7 +1,8 @@
 import { PNG } from 'pngjs';
 import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch } from './coa-pdf-normalizer.mjs';
 
-const parserVersion = 'coa-pdf-parser-v1';
+const parserVersion = 'coa-pdf-parser-v2';
+const defaultEndotoxinPassThresholdEuMl = 5;
 const maxRawSnippetLength = 1200;
 let pdfjsModulePromise;
 let pdfjsWorkerModulePromise;
@@ -10,6 +11,28 @@ export { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch };
 
 export async function parseCoaPdfBuffer(buffer, options = {}) {
   return (await parseCoaPdfUploadBuffer(buffer, options)).parsedCoa;
+}
+
+export async function identifyCoaPdfBatchNumber(buffer) {
+  const pdfjs = await loadPdfJs();
+  const document = await pdfjs.getDocument({
+    data: new Uint8Array(buffer),
+    disableWorker: true,
+    verbosity: pdfjs.VerbosityLevel.ERRORS,
+  }).promise;
+  const firstPage = await document.getPage(1);
+  const textContent = await firstPage.getTextContent();
+
+  return findCoaBatchNumber(createPageLines(textContent.items));
+}
+
+export function findCoaBatchNumber(lines) {
+  const fullText = lines.map(sanitizeText).filter(Boolean).join('\n');
+
+  return sanitizeText(
+    readValueAfterLabel(lines, ['Lot Number', 'Batch Number', 'Batch #', 'Batch', 'Lot']) ||
+      readInlineMatch(fullText, /\b(?:Lot|Batch)(?:\s+Number|\s*#)?\s*:\s*([A-Z0-9][A-Z0-9._/-]*)/i),
+  ).slice(0, 160);
 }
 
 export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
@@ -156,11 +179,17 @@ export async function parseCoaPdfUploadBuffer(buffer, options = {}) {
   const textUrls = extractVerificationUrls(fullText);
   const verificationUrl = [...annotationUrls, ...textUrls].find(isLikelyVerificationUrl) || textUrls[0] || '';
   const template = detectTemplate(fullText);
+  const thresholdInput = Object.prototype.hasOwnProperty.call(options, 'endotoxinThresholdEuMl')
+    ? options.endotoxinThresholdEuMl
+    : process.env.HELIX_ENDOTOXIN_PASS_THRESHOLD_EU_ML;
+  const endotoxinThreshold = resolveEndotoxinThreshold(thresholdInput);
+  const fieldWarnings = [];
   const fields = template.templateId === 'ils_laboratories_coa'
-    ? parseIlsFields(pages, fullText, verificationUrl)
-    : parseGenericFields(pages, fullText, verificationUrl);
+    ? parseIlsFields(pages, fullText, verificationUrl, { endotoxinThreshold, warnings: fieldWarnings })
+    : parseGenericFields(pages, fullText, verificationUrl, { endotoxinThreshold, warnings: fieldWarnings });
   const warnings = [
     ...validateParsedFields(fields, { fileName: options.fileName }),
+    ...fieldWarnings,
     ...parserWarnings,
   ];
   const confidence = calculateConfidence(fields, template, warnings);
@@ -776,13 +805,18 @@ function detectTemplate(fullText) {
   };
 }
 
-function parseIlsFields(pages, fullText, verificationUrl) {
+function parseIlsFields(pages, fullText, verificationUrl, { endotoxinThreshold, warnings }) {
   const lines = pages.flatMap((page) => page.lines);
   const issuedDate = normalizeDate(readValueAfterLabel(lines, ['Issued']));
   const productLabel = lines.find((line) => /\s-\s*\d+(?:\.\d+)?\s*mg\b/i.test(line)) || '';
   const productMatch = productLabel.match(/^(.+?)\s*-\s*([0-9.]+\s*mg)\b/i);
   const identityConfirmation = readValueAfterLabel(lines, ['Identity Confirmation', 'Identity']) || productMatch?.[1] || '';
   const conformity = parseConformityMean(lines);
+  const endotoxin = parseEndotoxinAssessment(lines, endotoxinThreshold);
+
+  if (endotoxin.warning) {
+    warnings.push(endotoxin.warning);
+  }
 
   return compactFields({
     lab: fullText.includes('ILS Laboratories') ? 'ILS Laboratories' : '',
@@ -796,11 +830,13 @@ function parseIlsFields(pages, fullText, verificationUrl) {
     issuedDate,
     labeledContent: normalizeMass(readValueAfterLabel(lines, ['Labeled Content']) || productMatch?.[2]),
     purity: normalizePercent(findValueAfterLine(lines, /^Peptide Purity$/i, /^[0-9.]+\s*%$/)),
-    averageNetContent: conformity.meanContent || normalizeMass(findTableResult(lines, 'Net Peptide Content', 'mg')),
+    averageNetContent: conformity.meanContent || parseNetPeptideContent(lines),
     meanPurity: conformity.meanPurity,
     heavyMetals: parseSectionStatus(lines, /Heavy Metals/i, /Sterility Testing|Endotoxin Testing|Notes & Methodology|COA #/i),
     sterility: parseSectionStatus(lines, /Sterility Testing/i, /Endotoxin Testing|Notes & Methodology|COA #/i),
-    endotoxins: parseSectionStatus(lines, /Endotoxin Testing/i, /Acceptance criteria|Notes & Methodology|COA #/i),
+    endotoxinResult: endotoxin.result,
+    endotoxinThreshold: endotoxin.threshold,
+    endotoxins: endotoxin.status,
     fentanyl: parseFentanylStatus(lines),
     accessCode: readValueAfterLabel(lines, ['Access Code']),
     verificationUrl: verificationUrl ? ensureHttpsUrl(verificationUrl) : '',
@@ -808,10 +844,15 @@ function parseIlsFields(pages, fullText, verificationUrl) {
   });
 }
 
-function parseGenericFields(pages, fullText, verificationUrl) {
+function parseGenericFields(pages, fullText, verificationUrl, { endotoxinThreshold, warnings }) {
   const lines = pages.flatMap((page) => page.lines);
   const identityConfirmation = readValueAfterLabel(lines, ['Identity Confirmation', 'Identity']);
   const productName = identityConfirmation || readValueAfterLabel(lines, ['Product Name', 'Product', 'Sample Name', 'Compound']);
+  const endotoxin = parseEndotoxinAssessment(lines, endotoxinThreshold);
+
+  if (endotoxin.warning) {
+    warnings.push(endotoxin.warning);
+  }
 
   return compactFields({
     lab: readLikelyLab(lines),
@@ -828,7 +869,9 @@ function parseGenericFields(pages, fullText, verificationUrl) {
     averageNetContent: normalizeMass(findFirstMatch(fullText, /\b(?:mean|average)[^\n]*?([0-9]+(?:\.[0-9]+)?\s*mg)\b/i)),
     heavyMetals: parseKeywordStatus(fullText, /heavy metals?/i),
     sterility: parseKeywordStatus(fullText, /sterility|sterile/i),
-    endotoxins: parseKeywordStatus(fullText, /endotoxin/i),
+    endotoxinResult: endotoxin.result,
+    endotoxinThreshold: endotoxin.threshold,
+    endotoxins: endotoxin.found ? endotoxin.status : parseKeywordStatus(fullText, /endotoxin/i),
     fentanyl: parseKeywordStatus(fullText, /fentanyl/i),
     verificationUrl: verificationUrl ? ensureHttpsUrl(verificationUrl) : '',
     overallStatus: normalizePassFail(findFirstMatch(fullText, /\b(PASS|FAIL)\b/i)),
@@ -905,6 +948,134 @@ function findTableResult(lines, rowLabel, unit) {
   }
 
   return '';
+}
+
+export function parseNetPeptideContent(lines) {
+  for (const rowLabel of ['Net Blend Peptide Content', 'Net Peptide Content']) {
+    const result = normalizeMass(findTableResult(lines, rowLabel, 'mg'));
+
+    if (result) {
+      return result;
+    }
+  }
+
+  return '';
+}
+
+export function resolveEndotoxinThreshold(value) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return {
+      valid: true,
+      value: defaultEndotoxinPassThresholdEuMl,
+      display: `${defaultEndotoxinPassThresholdEuMl} EU/mL`,
+    };
+  }
+
+  const parsed = Number(String(value).trim());
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return {
+      valid: false,
+      value: null,
+      display: '',
+    };
+  }
+
+  return {
+    valid: true,
+    value: parsed,
+    display: `${parsed} EU/mL`,
+  };
+}
+
+export function parseEndotoxinAssessment(lines, threshold = resolveEndotoxinThreshold()) {
+  const startIndex = lines.findIndex((line) => /Endotoxin(?:\s+Testing|\s*\(USP|$)/i.test(sanitizeText(line)));
+
+  if (startIndex === -1) {
+    return {
+      found: false,
+      result: '',
+      threshold: '',
+      status: 'Pending',
+      warning: '',
+    };
+  }
+
+  const endIndex = lines.findIndex((line, index) => (
+    index > startIndex && /Notes & Methodology|COA #|Certificate of Analysis/i.test(sanitizeText(line))
+  ));
+  const sectionLines = lines.slice(startIndex, endIndex === -1 ? Math.min(lines.length, startIndex + 80) : endIndex);
+  const explicitStatus = sectionLines
+    .map((line) => normalizePassFail(line))
+    .find(Boolean) || '';
+  const quantitative = findEndotoxinQuantitativeResult(sectionLines);
+
+  if (explicitStatus) {
+    return {
+      found: true,
+      result: quantitative.display,
+      threshold: '',
+      status: explicitStatus,
+      warning: '',
+    };
+  }
+
+  if (!quantitative.display) {
+    return {
+      found: true,
+      result: '',
+      threshold: '',
+      status: 'Pending',
+      warning: '',
+    };
+  }
+
+  if (!threshold?.valid) {
+    return {
+      found: true,
+      result: quantitative.display,
+      threshold: '',
+      status: 'Pending',
+      warning: 'HELIX_ENDOTOXIN_PASS_THRESHOLD_EU_ML must be a finite number greater than zero; endotoxin status was left Pending.',
+    };
+  }
+
+  return {
+    found: true,
+    result: quantitative.display,
+    threshold: threshold.display,
+    status: quantitative.value < threshold.value ? 'Pass' : 'Fail',
+    warning: '',
+  };
+}
+
+function findEndotoxinQuantitativeResult(lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = sanitizeText(lines[index]);
+    const combinedMatch = line.match(/^([0-9]+(?:\.[0-9]+)?)\s*EU\s*\/\s*mL$/i);
+
+    if (combinedMatch) {
+      return {
+        value: Number(combinedMatch[1]),
+        display: `${combinedMatch[1]} EU/mL`,
+      };
+    }
+
+    const numberMatch = line.match(/^([0-9]+(?:\.[0-9]+)?)$/);
+    const nextLine = sanitizeText(lines[index + 1]);
+
+    if (numberMatch && /^EU\s*\/\s*mL$/i.test(nextLine)) {
+      return {
+        value: Number(numberMatch[1]),
+        display: `${numberMatch[1]} EU/mL`,
+      };
+    }
+  }
+
+  return {
+    value: Number.NaN,
+    display: '',
+  };
 }
 
 function parseConformityMean(lines) {
@@ -1040,6 +1211,8 @@ function compactFields(fields) {
     purity: sanitizeText(fields.purity).slice(0, 40),
     averageNetContent: sanitizeText(fields.averageNetContent).slice(0, 40),
     meanPurity: sanitizeText(fields.meanPurity).slice(0, 40),
+    endotoxinResult: sanitizeText(fields.endotoxinResult).slice(0, 40),
+    endotoxinThreshold: sanitizeText(fields.endotoxinThreshold).slice(0, 40),
     heavyMetals: normalizePassFailPending(fields.heavyMetals),
     sterility: normalizePassFailPending(fields.sterility),
     endotoxins: normalizePassFailPending(fields.endotoxins),

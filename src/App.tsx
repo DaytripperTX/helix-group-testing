@@ -163,6 +163,8 @@ type ParsedCoa = {
     purity: string;
     averageNetContent: string;
     meanPurity: string;
+    endotoxinResult: string;
+    endotoxinThreshold: string;
     heavyMetals: string;
     sterility: string;
     endotoxins: string;
@@ -232,6 +234,8 @@ type CoaUploadDraft = {
   id: string;
   file: File;
   matchedCoaId: string;
+  parsedBatchNumber: string;
+  identificationStatus: 'pending' | 'complete' | 'error';
 };
 
 type CoaBatchImportRow = {
@@ -1688,12 +1692,44 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
 
   const loadBulkCoaFiles = (files: FileList | null) => {
     const nextFiles = Array.from(files ?? []).filter((file) => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
-
-    setBulkUploadDrafts(nextFiles.map((file) => ({
+    const nextDrafts = nextFiles.map((file) => ({
       id: `${file.name}-${file.lastModified}-${file.size}`,
       file,
       matchedCoaId: findCoaMatchForFile(file, coaResults)?.id ?? '',
-    })));
+      parsedBatchNumber: '',
+      identificationStatus: 'pending' as const,
+    }));
+
+    setBulkUploadDrafts(nextDrafts);
+
+    for (const draft of nextDrafts) {
+      void identifyCoaPdf(draft.file)
+        .then((batchNumber) => {
+          const parsedMatch = batchNumber ? findCoaMatchForBatchNumber(batchNumber, coaResults) : null;
+
+          setBulkUploadDrafts((currentDrafts) => currentDrafts.map((currentDraft) => (
+            currentDraft.id === draft.id
+              ? {
+                  ...currentDraft,
+                  matchedCoaId: batchNumber ? parsedMatch?.id ?? '' : currentDraft.matchedCoaId,
+                  parsedBatchNumber: batchNumber,
+                  identificationStatus: 'complete',
+                }
+              : currentDraft
+          )));
+        })
+        .catch((error) => {
+          console.error('[coa-pdf-identify] batch identification failed', {
+            fileName: draft.file.name,
+            error,
+          });
+          setBulkUploadDrafts((currentDrafts) => currentDrafts.map((currentDraft) => (
+            currentDraft.id === draft.id
+              ? { ...currentDraft, identificationStatus: 'error' }
+              : currentDraft
+          )));
+        });
+    }
   };
 
   const saveBulkCoaUploads = async () => {
@@ -2193,9 +2229,21 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
               <div className="coa-upload-list">
                 {bulkUploadDrafts.map((draft) => (
                   <label className="coa-upload-row" key={draft.id}>
-                    <span>{draft.file.name}</span>
+                    <span className="coa-upload-file">
+                      <span>{draft.file.name}</span>
+                      <small>
+                        {draft.identificationStatus === 'pending'
+                          ? 'Reading batch number...'
+                          : draft.parsedBatchNumber
+                            ? `PDF batch: ${draft.parsedBatchNumber}`
+                            : draft.identificationStatus === 'error'
+                              ? 'Could not read the PDF batch number; choose manually.'
+                              : 'Batch number not found; choose manually.'}
+                      </small>
+                    </span>
                     <select
                       value={draft.matchedCoaId}
+                      disabled={draft.identificationStatus === 'pending'}
                       onChange={(event) => setBulkUploadDrafts((currentDrafts) =>
                         currentDrafts.map((currentDraft) => currentDraft.id === draft.id ? { ...currentDraft, matchedCoaId: event.target.value } : currentDraft),
                       )}
@@ -2212,7 +2260,7 @@ function CoasPage({ isAdmin }: { isAdmin: boolean }) {
               </div>
               <div className="coa-modal-actions">
                 <button type="button" onClick={() => setIsBulkUploadModalOpen(false)}>Cancel</button>
-                <button className="coa-admin-primary" type="button" disabled={isSubmittingCoa || bulkUploadDrafts.length === 0} onClick={() => void saveBulkCoaUploads()}>
+                <button className="coa-admin-primary" type="button" disabled={isSubmittingCoa || bulkUploadDrafts.length === 0 || bulkUploadDrafts.some((draft) => draft.identificationStatus === 'pending')} onClick={() => void saveBulkCoaUploads()}>
                   Attach PDFs
                 </button>
               </div>
@@ -3280,6 +3328,8 @@ function normalizeParsedCoa(value: unknown): ParsedCoa | undefined {
       purity: sanitizeClientText(fields.purity),
       averageNetContent: sanitizeClientText(fields.averageNetContent),
       meanPurity: sanitizeClientText(fields.meanPurity),
+      endotoxinResult: sanitizeClientText(fields.endotoxinResult),
+      endotoxinThreshold: sanitizeClientText(fields.endotoxinThreshold),
       heavyMetals: sanitizeClientText(fields.heavyMetals) || 'Pending',
       sterility: sanitizeClientText(fields.sterility) || 'Pending',
       endotoxins: sanitizeClientText(fields.endotoxins) || 'Pending',
@@ -3580,6 +3630,29 @@ async function uploadCoaPdf(file: File): Promise<CoaPdfAsset> {
   return asset;
 }
 
+async function identifyCoaPdf(file: File) {
+  const base64 = await fileToBase64(file);
+  const response = await fetch('/api/admin/assets/coa-pdf-identify', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      fileName: file.name,
+      mimeType: file.type || 'application/pdf',
+      base64,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('COA PDF batch number could not be identified.');
+  }
+
+  const result = (await response.json()) as { batchNumber?: unknown };
+  return sanitizeClientText(result.batchNumber);
+}
+
 async function parseCoaBatchNumberFile(file: File): Promise<CoaBatchImportRow[]> {
   const response = await fetch('/api/admin/coas/parse-batch-numbers', {
     method: 'POST',
@@ -3842,6 +3915,14 @@ function findCoaMatchForFile(file: File, results: CoaResult[]) {
     const batch = normalizeBatchMatchText(result.batchNumber);
     return batch && fileName.includes(batch);
   }) ?? null;
+}
+
+function findCoaMatchForBatchNumber(batchNumber: string, results: CoaResult[]) {
+  const targetBatch = normalizeBatchMatchText(batchNumber);
+
+  return results.find((result) => (
+    targetBatch && normalizeBatchMatchText(result.batchNumber) === targetBatch
+  )) ?? null;
 }
 
 function normalizeBatchMatchText(value: string) {

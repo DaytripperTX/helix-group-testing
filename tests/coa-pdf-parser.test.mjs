@@ -4,7 +4,16 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { doesParsedLotMatchBatch, parseCoaPdfUploadBuffer } from '../server/coa-pdf-parser.mjs';
+import {
+  compactParsedCoa,
+  doesParsedLotMatchBatch,
+  findCoaBatchNumber,
+  identifyCoaPdfBatchNumber,
+  parseCoaPdfUploadBuffer,
+  parseEndotoxinAssessment,
+  parseNetPeptideContent,
+  resolveEndotoxinThreshold,
+} from '../server/coa-pdf-parser.mjs';
 
 const fixtureCases = [
   {
@@ -35,6 +44,102 @@ const fixtureCases = [
     vialHeight: 747,
   },
 ];
+
+const realFixtureCases = [
+  {
+    fileName: 'HLX-SOP-CP10-2PEP.pdf',
+    averageNetContent: '10.17 mg',
+  },
+  {
+    fileName: 'HLX-SOP-RT20-2PEP.pdf',
+    averageNetContent: '20.37 mg',
+  },
+];
+
+test('derives report-only endotoxin status from the default and overridden thresholds', () => {
+  const lines = [
+    'Endotoxin Testing (USP <85>)',
+    'Test',
+    'Specification',
+    'Result',
+    'Status',
+    'Endotoxin (USP <85>)',
+    'Report Result',
+    '0.096 EU/mL',
+    'Reported',
+    'About this result: no universal pass/fail threshold applies.',
+    'Notes & Methodology',
+  ];
+
+  assert.deepEqual(parseEndotoxinAssessment(lines, resolveEndotoxinThreshold()), {
+    found: true,
+    result: '0.096 EU/mL',
+    threshold: '5 EU/mL',
+    status: 'Pass',
+    warning: '',
+  });
+  assert.equal(
+    parseEndotoxinAssessment(lines, resolveEndotoxinThreshold('0.05')).status,
+    'Fail',
+  );
+});
+
+test('treats the endotoxin threshold as strict and leaves invalid configuration pending', () => {
+  const boundaryLines = ['Endotoxin Testing', 'Endotoxin', '5 EU/mL', 'Reported', 'Notes & Methodology'];
+  const invalid = parseEndotoxinAssessment(boundaryLines, resolveEndotoxinThreshold('not-a-number'));
+
+  assert.equal(parseEndotoxinAssessment(boundaryLines, resolveEndotoxinThreshold()).status, 'Fail');
+  assert.equal(invalid.result, '5 EU/mL');
+  assert.equal(invalid.threshold, '');
+  assert.equal(invalid.status, 'Pending');
+  assert.match(invalid.warning, /finite number greater than zero/i);
+});
+
+test('preserves an explicit lab endotoxin status', () => {
+  const assessment = parseEndotoxinAssessment([
+    'Endotoxin Testing',
+    'Endotoxin',
+    '8 EU/mL',
+    'PASS',
+    'Notes & Methodology',
+  ], resolveEndotoxinThreshold());
+
+  assert.equal(assessment.status, 'Pass');
+  assert.equal(assessment.result, '8 EU/mL');
+  assert.equal(assessment.threshold, '');
+});
+
+test('parses total blend content and a single net peptide content result', () => {
+  assert.equal(parseNetPeptideContent([
+    'Net Blend Peptide Content',
+    'Report Only',
+    '10.17',
+    'mg',
+    'N/A',
+    '-- CJC-1295',
+    '4.98',
+    'mg',
+  ]), '10.17 mg');
+  assert.equal(parseNetPeptideContent([
+    'Net Peptide Content',
+    'Report Only',
+    '20.37',
+    'mg',
+    'N/A',
+  ]), '20.37 mg');
+});
+
+test('normalization preserves the recorded parser version on existing COAs', () => {
+  assert.equal(compactParsedCoa({ parserVersion: 'coa-pdf-parser-v1' }).parserVersion, 'coa-pdf-parser-v1');
+});
+
+test('finds batch numbers from labeled and inline first-page text', () => {
+  assert.equal(findCoaBatchNumber(['Lot Number:', 'HLX-SOP-RT20-2PEP']), 'HLX-SOP-RT20-2PEP');
+  assert.equal(
+    findCoaBatchNumber(['COA: COA-2026-FHQ1Q8 | Lot: HLX-SOP-RT20-2PEP']),
+    'HLX-SOP-RT20-2PEP',
+  );
+});
 
 {
   const fixtureCase = fixtureCases[0];
@@ -79,6 +184,7 @@ for (const fixtureCase of fixtureCases) {
     const parsed = result.parsedCoa;
 
     assert.equal(parsed.templateId, 'ils_laboratories_coa');
+    assert.equal(parsed.parserVersion, 'coa-pdf-parser-v2');
     assert.equal(parsed.pageCount, 2);
     assert.equal(parsed.fields.lab, 'ILS Laboratories');
     assert.equal(parsed.fields.lotNumber, fixtureCase.lotNumber);
@@ -104,9 +210,41 @@ for (const fixtureCase of fixtureCases) {
   });
 }
 
+for (const fixtureCase of realFixtureCases) {
+  const fixturePath = resolveLocalCoaFixture(fixtureCase.fileName);
+
+  test(`parses quantitative real COA fixture ${fixtureCase.fileName}`, { skip: !fixturePath }, async () => {
+    const pdf = await readFile(fixturePath);
+    const result = await parseCoaPdfUploadBuffer(pdf, { fileName: fixtureCase.fileName });
+
+    assert.equal(result.parsedCoa.parserVersion, 'coa-pdf-parser-v2');
+    assert.equal(result.parsedCoa.fields.averageNetContent, fixtureCase.averageNetContent);
+    assert.equal(result.parsedCoa.fields.endotoxinResult, '0.096 EU/mL');
+    assert.equal(result.parsedCoa.fields.endotoxinThreshold, '5 EU/mL');
+    assert.equal(result.parsedCoa.fields.endotoxins, 'Pass');
+    assert.equal(result.vialImage, null);
+    assert.equal(result.parsedCoa.raw.vialImage, null);
+    assert.equal(result.parsedCoa.warnings.includes('COA vial image could not be extracted.'), false);
+    assert.equal(await identifyCoaPdfBatchNumber(pdf), fixtureCase.fileName.replace(/\.pdf$/i, ''));
+  });
+}
+
 {
   const fixtureCase = fixtureCases[0];
   const fixturePath = resolveLocalCoaFixture(fixtureCase.fileName);
+
+  test('continues parsing COA text when no vial image is present', { skip: !fixturePath }, async () => {
+    const pdf = await readFile(fixturePath);
+    const result = await parseCoaPdfUploadBuffer(pdf, {
+      fileName: fixtureCase.fileName,
+      imageExtractor: () => [],
+    });
+
+    assert.equal(result.parsedCoa.fields.averageNetContent, fixtureCase.averageNetContent);
+    assert.equal(result.vialImage, null);
+    assert.equal(result.parsedCoa.raw.vialImage, null);
+    assert.equal(result.parsedCoa.warnings.includes('COA vial image could not be extracted.'), false);
+  });
 
   test('continues parsing COA text when vial image extraction fails', { skip: !fixturePath }, async () => {
     const pdf = await readFile(fixturePath);
