@@ -1,0 +1,16 @@
+{
+    "pgsql.connections": [],
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "::1",
+            "port": 53173,
+            "driver": "PostgreSQL",
+            "name": "Helix Local Netlify",
+            "database": "postgres",
+            "username": "postgres",
+            "password": ""
+        }
+    ]
+}
