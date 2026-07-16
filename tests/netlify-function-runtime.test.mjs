@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-test('Netlify admin function loads and handles session/login requests', async () => {
+test('Netlify admin function uses the modern Request/Response runtime', async () => {
   const previousEnv = {
     NETLIFY: process.env.NETLIFY,
     HELIX_ADMIN_PASSWORD: process.env.HELIX_ADMIN_PASSWORD,
@@ -15,34 +15,24 @@ test('Netlify admin function loads and handles session/login requests', async ()
   process.env.HELIX_ADMIN_SESSION_SECRET = 'test-session-secret-for-netlify-function';
 
   try {
-    const { handler } = await import(`../netlify/functions/admin.mjs?runtime=${Date.now()}`);
-    const sessionResponse = await handler({
-      httpMethod: 'GET',
-      path: '/api/admin/session',
-      rawUrl: 'https://example.netlify.app/api/admin/session',
-      headers: {},
-      body: null,
-      isBase64Encoded: false,
-    });
+    const { default: handler } = await import(`../netlify/functions/admin.mjs?runtime=${Date.now()}`);
+    const sessionResponse = await handler(new Request('https://example.netlify.app/api/admin/session'));
 
-    assert.equal(sessionResponse.statusCode, 200);
-    assert.deepEqual(JSON.parse(sessionResponse.body), { isAuthenticated: false });
+    assert.equal(sessionResponse.status, 200);
+    assert.deepEqual(await sessionResponse.json(), { isAuthenticated: false });
 
-    const loginResponse = await handler({
-      httpMethod: 'POST',
-      path: '/api/admin/login',
-      rawUrl: 'https://example.netlify.app/api/admin/login',
+    const loginResponse = await handler(new Request('https://example.netlify.app/api/admin/login', {
+      method: 'POST',
       headers: {
         'content-type': 'application/json',
         'user-agent': 'node-test',
       },
       body: JSON.stringify({ role: 'admin', password: 'admin-test-password' }),
-      isBase64Encoded: false,
-    });
+    }));
 
-    assert.equal(loginResponse.statusCode, 200);
-    assert.match(loginResponse.headers['Set-Cookie'], /^helix_admin_session=/);
-    assert.deepEqual(JSON.parse(loginResponse.body), {
+    assert.equal(loginResponse.status, 200);
+    assert.match(loginResponse.headers.get('set-cookie'), /^helix_admin_session=/);
+    assert.deepEqual(await loginResponse.json(), {
       isAuthenticated: true,
       role: 'admin',
     });

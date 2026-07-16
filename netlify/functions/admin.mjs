@@ -1,16 +1,9 @@
-import { handleHelixApiRequest } from '../../server/helix-api.mjs';
-import { connectHelixNetlifyRuntime } from './helix-netlify-runtime.mjs';
+import {
+  handleHelixLambdaEvent,
+  handleHelixNetlifyRequest,
+} from '../../server/helix-netlify-runtime.mjs';
 
-export async function handler(event) {
-  connectHelixNetlifyRuntime(event);
+export default handleHelixNetlifyRequest;
 
-  return handleHelixApiRequest({
-    method: event.httpMethod ?? 'GET',
-    pathname: event.path ?? '/api/admin',
-    url: event.rawUrl ?? event.path ?? '/api/admin',
-    headers: event.headers ?? {},
-    bodyText: event.isBase64Encoded
-      ? Buffer.from(event.body ?? '', 'base64').toString('utf8')
-      : event.body ?? '',
-  });
-}
+// Kept for local persistence tests; Netlify uses the default Request/Response export above.
+export const handleLambdaEvent = handleHelixLambdaEvent;
