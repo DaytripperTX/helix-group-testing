@@ -8,7 +8,7 @@ or competing reuse. See [LICENSE.md](LICENSE.md).
 
 ## Local setup
 
-Use Node.js 18.18 or newer.
+Use Node.js 20.12.2 or newer.
 
 Create local-only environment variables:
 
@@ -51,6 +51,16 @@ Start the local development server:
 ```bash
 npm run dev
 ```
+
+For opt-in local labels database development, use Netlify Dev and its local
+PostgreSQL environment:
+
+```bash
+npm run dev:db
+```
+
+See [LABEL_DATABASE.md](LABEL_DATABASE.md) for storage modes, owner operations,
+verification, repair, and rollout safeguards.
 
 Build the production bundle:
 
@@ -98,6 +108,7 @@ Set these environment variables in the Netlify site UI before sharing a deploy:
 - `HELIX_ADMIN_PASSWORD`
 - `HELIX_OWNER_PASSWORD`
 - `HELIX_ADMIN_SESSION_SECRET`
+- `HELIX_DATA_MODE=legacy` during the additive database deployment
 - `HELIX_ENDOTOXIN_PASS_THRESHOLD_EU_ML` if the default `5 EU/mL` threshold should be overridden
 - `DISABLED_PAGES` if any public pages should be hidden
 

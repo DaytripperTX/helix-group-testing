@@ -56,8 +56,8 @@ test('Netlify data function seeds missing Blob documents and persists writes', a
   try {
     const importId = Date.now();
     const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?blobs=${importId}`);
-    const { handler } = await import(`../netlify/functions/data.mjs?blobs=${importId}`);
-    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?blobs=${importId}`);
+    const { handleLambdaEvent: handler } = await import(`../netlify/functions/data.mjs?blobs=${importId}`);
+    const { handleLambdaEvent: adminHandler } = await import(`../netlify/functions/admin.mjs?blobs=${importId}`);
     const eventBase = createNetlifyBlobsEvent();
     const peptidesResponse = await handler({
       ...eventBase,
@@ -216,8 +216,8 @@ test('Netlify label admin edits persist when the base label document is stale', 
   try {
     const importId = Date.now();
     const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?staleBlobs=${importId}`);
-    const { handler } = await import(`../netlify/functions/data.mjs?staleBlobs=${importId}`);
-    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?staleBlobs=${importId}`);
+    const { handleLambdaEvent: handler } = await import(`../netlify/functions/data.mjs?staleBlobs=${importId}`);
+    const { handleLambdaEvent: adminHandler } = await import(`../netlify/functions/admin.mjs?staleBlobs=${importId}`);
     const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
     const adminCookie = createAdminSessionCookie('admin');
     const firstUpload = await postNetlifyLabel(handler, eventBase, createLabelBody({
@@ -365,8 +365,8 @@ test('Netlify peptide batch import writes all rows from one stale Blob snapshot'
   try {
     const importId = Date.now();
     const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?peptideBatchBlobs=${importId}`);
-    const { handler } = await import(`../netlify/functions/data.mjs?peptideBatchBlobs=${importId}`);
-    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?peptideBatchBlobs=${importId}`);
+    const { handleLambdaEvent: handler } = await import(`../netlify/functions/data.mjs?peptideBatchBlobs=${importId}`);
+    const { handleLambdaEvent: adminHandler } = await import(`../netlify/functions/admin.mjs?peptideBatchBlobs=${importId}`);
     const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
 
     const seedResponse = await handler({
@@ -483,8 +483,8 @@ test('Netlify COA batch import writes all rows from one stale Blob snapshot', as
   try {
     const importId = Date.now();
     const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?coaBatchBlobs=${importId}`);
-    const { handler } = await import(`../netlify/functions/data.mjs?coaBatchBlobs=${importId}`);
-    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?coaBatchBlobs=${importId}`);
+    const { handleLambdaEvent: handler } = await import(`../netlify/functions/data.mjs?coaBatchBlobs=${importId}`);
+    const { handleLambdaEvent: adminHandler } = await import(`../netlify/functions/admin.mjs?coaBatchBlobs=${importId}`);
     const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
     const adminCookie = createAdminSessionCookie('admin');
 
@@ -633,8 +633,8 @@ test('Netlify COA batch delete removes all requested rows from one stale Blob sn
   try {
     const importId = Date.now();
     const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?coaDeleteBlobs=${importId}`);
-    const { handler } = await import(`../netlify/functions/data.mjs?coaDeleteBlobs=${importId}`);
-    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?coaDeleteBlobs=${importId}`);
+    const { handleLambdaEvent: handler } = await import(`../netlify/functions/data.mjs?coaDeleteBlobs=${importId}`);
+    const { handleLambdaEvent: adminHandler } = await import(`../netlify/functions/admin.mjs?coaDeleteBlobs=${importId}`);
     const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
     const adminCookie = createAdminSessionCookie('admin');
 
@@ -783,7 +783,7 @@ test('Netlify COA replacement deletes the detached PDF Blob immediately', async 
   try {
     const importId = Date.now();
     const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?coaReplaceBlob=${importId}`);
-    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?coaReplaceBlob=${importId}`);
+    const { handleLambdaEvent: adminHandler } = await import(`../netlify/functions/admin.mjs?coaReplaceBlob=${importId}`);
     const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
     const adminCookie = createAdminSessionCookie('admin');
 
@@ -922,8 +922,8 @@ test('Netlify round batch import writes all rows from one stale Blob snapshot', 
   try {
     const importId = Date.now();
     const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?roundBatchBlobs=${importId}`);
-    const { handler } = await import(`../netlify/functions/data.mjs?roundBatchBlobs=${importId}`);
-    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?roundBatchBlobs=${importId}`);
+    const { handleLambdaEvent: handler } = await import(`../netlify/functions/data.mjs?roundBatchBlobs=${importId}`);
+    const { handleLambdaEvent: adminHandler } = await import(`../netlify/functions/admin.mjs?roundBatchBlobs=${importId}`);
     const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
 
     const seedResponse = await handler({
@@ -1031,8 +1031,8 @@ test('Netlify peptide category batch import writes all rows from one stale Blob 
   try {
     const importId = Date.now();
     const { createAdminSessionCookie } = await import(`../server/helix-auth.mjs?categoryBatchBlobs=${importId}`);
-    const { handler } = await import(`../netlify/functions/data.mjs?categoryBatchBlobs=${importId}`);
-    const { handler: adminHandler } = await import(`../netlify/functions/admin.mjs?categoryBatchBlobs=${importId}`);
+    const { handleLambdaEvent: handler } = await import(`../netlify/functions/data.mjs?categoryBatchBlobs=${importId}`);
+    const { handleLambdaEvent: adminHandler } = await import(`../netlify/functions/admin.mjs?categoryBatchBlobs=${importId}`);
     const eventBase = createNetlifyBlobsEvent({ includeUncached: false });
 
     const seedResponse = await handler({

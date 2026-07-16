@@ -7,7 +7,9 @@ import {
   deleteCollectionItem,
   adminUpsertLabelTemplate,
   exportPeptideCollectionTransfer,
+  backfillLabelDatabase,
   getCollectionNames,
+  getLabelDatabaseStatus,
   importCoaBatchItems,
   importPeptideBatchItems,
   importPeptideCategoryBatchItems,
@@ -18,6 +20,7 @@ import {
   publicReportLabelTemplate,
   publicUpsertLabelTemplate,
   publicVoteLabelTemplate,
+  repairLabelDatabase,
   readCollection,
   readPublicCollection,
   readCoaPdfAsset,
@@ -29,6 +32,7 @@ import {
   upsertCollectionItem,
   writeAsset,
   writeCoaPdfAsset,
+  verifyLabelDatabase,
 } from './helix-data.mjs';
 import {
   createAdminSessionCookie,
@@ -201,6 +205,47 @@ export async function handleHelixApiRequest(request) {
 
     if (pathname === '/api/admin/logout' && method === 'POST') {
       return jsonResponse(200, { ok: true }, { 'Set-Cookie': createLogoutCookie() });
+    }
+
+    if (pathname === '/api/admin/database/labels/status' && method === 'GET') {
+      const ownerResponse = requireOwnerSession(request.headers);
+
+      if (ownerResponse) {
+        return ownerResponse;
+      }
+
+      return jsonResponse(200, await getLabelDatabaseStatus());
+    }
+
+    if (pathname === '/api/admin/database/labels/verify' && method === 'POST') {
+      const ownerResponse = requireOwnerSession(request.headers);
+
+      if (ownerResponse) {
+        return ownerResponse;
+      }
+
+      return jsonResponse(200, await verifyLabelDatabase());
+    }
+
+    if (pathname === '/api/admin/database/labels/backfill' && method === 'POST') {
+      const ownerResponse = requireOwnerSession(request.headers);
+
+      if (ownerResponse) {
+        return ownerResponse;
+      }
+
+      return jsonResponse(200, await backfillLabelDatabase());
+    }
+
+    if (pathname === '/api/admin/database/labels/repair' && method === 'POST') {
+      const ownerResponse = requireOwnerSession(request.headers);
+
+      if (ownerResponse) {
+        return ownerResponse;
+      }
+
+      const body = parseJsonBody(request.bodyText);
+      return jsonResponse(200, await repairLabelDatabase(body?.confirmation));
     }
 
     if (pathname === '/api/admin/assets/vendor-price-sheet' && method === 'POST') {
@@ -470,6 +515,20 @@ export function binaryResponse(statusCode, buffer, headers = {}) {
     body: Buffer.from(buffer).toString('base64'),
     isBase64Encoded: true,
   };
+}
+
+function requireOwnerSession(headers) {
+  const session = getAdminSession(headers);
+
+  if (!session) {
+    return jsonResponse(401, { error: 'Admin login required' });
+  }
+
+  if (session.role !== 'owner') {
+    return jsonResponse(403, { error: 'Owner login required' });
+  }
+
+  return null;
 }
 
 function parseJsonBody(bodyText) {

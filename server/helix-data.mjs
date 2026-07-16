@@ -4,6 +4,21 @@ import { createHash, createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { compactParsedCoa, createFailedParsedCoa, doesParsedLotMatchBatch } from './coa-pdf-normalizer.mjs';
 import { getCoaRoundAccess, hasCoaRoundAccess } from './helix-auth.mjs';
+import {
+  canonicalizeLabelTemplate,
+  createLabelPreviewUrl,
+  createLabelTemplateTombstone,
+  isLabelTemplateTombstone,
+  isPubliclyVisibleLabelTemplate,
+  normalizeFingerprintList,
+  normalizeModerationStatus,
+  normalizeReportReason,
+  normalizeStoredLabelTemplate,
+  purgeExpiredTrash,
+  stableStringify,
+  toPublicLabelTemplate,
+  validateLabelTemplateSnapshot,
+} from './helix-label-domain.mjs';
 
 const rootDir = process.env.HELIX_ROOT_DIR
   ? path.resolve(process.env.HELIX_ROOT_DIR)
@@ -15,16 +30,14 @@ const localDataDir = process.env.HELIX_LOCAL_DATA_DIR
 const legacyLabelsPath = path.join(rootDir, 'dist', 'stored-data', 'labels', 'templates.json');
 const storeName = 'helix-data';
 const labelTemplateOverridePrefix = 'label-template-overrides/';
+const labelSqlShadowFailurePrefix = 'label-sql-shadow-failures/';
 const coaPdfAssetPrefix = 'coa-pdfs/';
 const coaVialImageAssetPrefix = 'coa-vial-images/';
 const maxLabelPreviewBytes = 3 * 1024 * 1024;
 const maxLabelCodeLength = 20 * 1024;
 const maxCoaPdfBytes = 8 * 1024 * 1024;
 const maxCoaVialImageBytes = 1024 * 1024;
-const maxReportCountBeforeHide = 5;
-const trashRetentionMs = 5 * 24 * 60 * 60 * 1000;
 const allowedPreviewMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
-const allowedReportReasons = new Set(['offensive', 'spam', 'unsafe', 'other']);
 const redactedCoaResultFields = [
   'coaNumber',
   'accessionNumber',
@@ -80,6 +93,25 @@ const collections = new Map([
   ['current-round', { fileName: 'current-round.json', kind: 'data', readAccess: 'public' }],
   ['reports', { fileName: 'reports.json', kind: 'items', readAccess: 'admin' }],
 ]);
+const dataModes = new Set(['legacy', 'shadow', 'postgres']);
+let labelPostgresRepositoryPromise;
+
+export function getDataMode() {
+  const value = typeof process.env.HELIX_DATA_MODE === 'string'
+    ? process.env.HELIX_DATA_MODE.trim().toLowerCase()
+    : '';
+
+  return dataModes.has(value) ? value : 'legacy';
+}
+
+async function getLabelPostgresRepository() {
+  if (globalThis.__helixLabelPostgresRepository) {
+    return globalThis.__helixLabelPostgresRepository;
+  }
+
+  labelPostgresRepositoryPromise ??= import('./helix-label-postgres.mjs');
+  return labelPostgresRepositoryPromise;
+}
 
 export function getCollectionNames() {
   return [...collections.keys()];
@@ -91,9 +123,12 @@ export function isPublicCollectionRead(collectionName) {
 
 export async function readCollection(collectionName) {
   if (collectionName === 'label-templates') {
-    const document = await readLabelTemplateDocument();
+    if (getDataMode() === 'postgres') {
+      const repository = await getLabelPostgresRepository();
+      return repository.readPostgresLabelTemplates();
+    }
 
-    return document.items;
+    return (await readLabelTemplateDocument()).items;
   }
 
   const document = await readCollectionDocument(collectionName);
@@ -134,8 +169,8 @@ export async function readPublicLabelTemplates() {
 }
 
 export async function readLabelTemplatePreviewAsset(itemId, { isAdmin = false } = {}) {
-  const document = await readLabelTemplateDocument();
-  const template = document.items.find((item) => item?.id === itemId);
+  const templates = await readCollection('label-templates');
+  const template = templates.find((item) => item?.id === itemId);
 
   if (!template) {
     throw createHttpError(404, 'Label preview not found.');
@@ -749,7 +784,21 @@ export async function writeAsset(asset) {
 }
 
 export async function publicUpsertLabelTemplate(template) {
-  const currentItems = await readCollection('label-templates');
+  if (getDataMode() === 'postgres') {
+    const repository = await getLabelPostgresRepository();
+    const currentItems = await repository.readPostgresLabelTemplates();
+    const nextTemplate = await normalizePublicLabelTemplate(template, currentItems);
+    const result = await repository.upsertPostgresLabelSnapshot(nextTemplate, { force: true });
+
+    if (result.status === 'blocked') {
+      throw createHttpError(400, result.reason);
+    }
+
+    await mirrorPostgresLabelToLegacy('upload', nextTemplate);
+    return [nextTemplate, ...currentItems];
+  }
+
+  const currentItems = (await readLabelTemplateDocument()).items;
   const baseDocument = await readCollectionDocument('label-templates');
   const baseItems = Array.isArray(baseDocument.items) ? baseDocument.items.map(normalizeStoredLabelTemplate) : [];
   const nextTemplate = await normalizePublicLabelTemplate(template, currentItems);
@@ -757,6 +806,7 @@ export async function publicUpsertLabelTemplate(template) {
   const nextDocument = createCollectionDocument('label-templates', nextItems);
 
   await writeCollectionDocument('label-templates', nextDocument);
+  await mirrorLegacyLabelToPostgres('upload', nextTemplate);
 
   return [nextTemplate, ...currentItems];
 }
@@ -1231,7 +1281,26 @@ export async function publicReportLabelTemplate(report, headers = {}) {
   }
 
   const fingerprint = createLabelActionFingerprint(headers, labelId, 'report');
-  const item = await findLabelTemplate(labelId);
+  const now = new Date().toISOString();
+
+  if (getDataMode() === 'postgres') {
+    const repository = await getLabelPostgresRepository();
+    const nextItem = await repository.reportPostgresLabelTemplate({
+      itemId: labelId,
+      fingerprint,
+      reason,
+      details,
+      now,
+    });
+
+    await mirrorPostgresLabelToLegacy('report', nextItem);
+    return [
+      nextItem,
+      ...(await repository.readPostgresLabelTemplates()).filter((currentItem) => currentItem.id !== labelId),
+    ];
+  }
+
+  const item = await findLegacyLabelTemplate(labelId);
 
   if (!item) {
     throw createHttpError(404, 'Label template not found.');
@@ -1241,7 +1310,8 @@ export async function publicReportLabelTemplate(report, headers = {}) {
   const reportFingerprints = normalizeFingerprintList(item.reportFingerprints);
 
   if (reportFingerprints.includes(fingerprint)) {
-    return await readCollection('label-templates');
+    await mirrorLegacyLabelToPostgres('report', item);
+    return (await readLabelTemplateDocument()).items;
   }
 
   const nextReports = [
@@ -1250,7 +1320,7 @@ export async function publicReportLabelTemplate(report, headers = {}) {
       reason,
       details,
       fingerprint,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     },
   ];
   const nextReportFingerprints = [...reportFingerprints, fingerprint].slice(-50);
@@ -1259,12 +1329,13 @@ export async function publicReportLabelTemplate(report, headers = {}) {
     reports: nextReports,
     reportFingerprints: nextReportFingerprints,
     reportCount: nextReportFingerprints.length,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
   });
 
   await writeLabelTemplateOverride(nextItem);
+  await mirrorLegacyLabelToPostgres('report', nextItem);
 
-  return [nextItem, ...(await readCollection('label-templates')).filter((currentItem) => currentItem?.id !== labelId)];
+  return [nextItem, ...(await readLabelTemplateDocument()).items.filter((currentItem) => currentItem?.id !== labelId)];
 }
 
 export async function publicVoteLabelTemplate(vote, headers = {}) {
@@ -1276,7 +1347,25 @@ export async function publicVoteLabelTemplate(vote, headers = {}) {
   }
 
   const fingerprint = createLabelActionFingerprint(headers, labelId, 'vote');
-  const item = await findLabelTemplate(labelId);
+  const now = new Date().toISOString();
+
+  if (getDataMode() === 'postgres') {
+    const repository = await getLabelPostgresRepository();
+    const nextItem = await repository.votePostgresLabelTemplate({
+      itemId: labelId,
+      fingerprint,
+      direction,
+      now,
+    });
+
+    await mirrorPostgresLabelToLegacy('vote', nextItem);
+    return [
+      nextItem,
+      ...(await repository.readPostgresLabelTemplates()).filter((currentItem) => currentItem.id !== labelId),
+    ];
+  }
+
+  const item = await findLegacyLabelTemplate(labelId);
 
   if (!item) {
     throw createHttpError(404, 'Label template not found.');
@@ -1292,12 +1381,13 @@ export async function publicVoteLabelTemplate(vote, headers = {}) {
     ...item,
     voteFingerprints: nextVoteFingerprints,
     votes: nextVoteFingerprints.length,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
   });
 
   await writeLabelTemplateOverride(nextItem);
+  await mirrorLegacyLabelToPostgres('vote', nextItem);
 
-  return [nextItem, ...(await readCollection('label-templates')).filter((currentItem) => currentItem?.id !== labelId)];
+  return [nextItem, ...(await readLabelTemplateDocument()).items.filter((currentItem) => currentItem?.id !== labelId)];
 }
 
 export async function adminUpsertLabelTemplate(template) {
@@ -1305,7 +1395,24 @@ export async function adminUpsertLabelTemplate(template) {
     throw createHttpError(400, 'Invalid label template.');
   }
 
-  const currentItem = await findLabelTemplate(template.id);
+  if (getDataMode() === 'postgres') {
+    const repository = await getLabelPostgresRepository();
+    const currentItem = await repository.readPostgresLabelTemplate(template.id);
+
+    if (!currentItem) {
+      throw createHttpError(404, 'Label template not found.');
+    }
+
+    const nextTemplate = await normalizeAdminLabelTemplate(template, currentItem);
+    const storedTemplate = await repository.adminUpdatePostgresLabelTemplate(nextTemplate, {
+      clearReports: Boolean(template.clearReports),
+    });
+
+    await mirrorPostgresLabelToLegacy('admin-update', storedTemplate);
+    return storedTemplate;
+  }
+
+  const currentItem = await findLegacyLabelTemplate(template.id);
 
   if (!currentItem) {
     throw createHttpError(404, 'Label template not found.');
@@ -1314,12 +1421,21 @@ export async function adminUpsertLabelTemplate(template) {
   const nextTemplate = await normalizeAdminLabelTemplate(template, currentItem);
 
   await writeLabelTemplateOverride(nextTemplate);
+  await mirrorLegacyLabelToPostgres('admin-update', nextTemplate);
 
   return nextTemplate;
 }
 
 export async function recoverLabelTemplate(itemId) {
-  const item = await findLabelTemplate(itemId);
+  if (getDataMode() === 'postgres') {
+    const repository = await getLabelPostgresRepository();
+    const recoveredItem = await repository.recoverPostgresLabelTemplate(itemId);
+
+    await mirrorPostgresLabelToLegacy('recover', recoveredItem);
+    return recoveredItem;
+  }
+
+  const item = await findLegacyLabelTemplate(itemId);
 
   if (!item) {
     throw createHttpError(404, 'Label template not found.');
@@ -1333,12 +1449,166 @@ export async function recoverLabelTemplate(itemId) {
   });
 
   await writeLabelTemplateOverride(recoveredItem);
+  await mirrorLegacyLabelToPostgres('recover', recoveredItem);
 
   return recoveredItem;
 }
 
 export async function permanentlyDeleteLabelTemplate(itemId) {
   return hardDeleteLabelTemplate(itemId);
+}
+
+export async function getLabelDatabaseStatus() {
+  const mode = getDataMode();
+  const legacyItems = await readLegacyLabelTemplateSnapshot();
+  const failures = await readLabelSqlShadowFailures();
+  const unresolvedFailures = failures.filter((item) => !item.resolvedAt);
+  const runtime = getLabelDatabaseRuntimeStatus();
+  let checkStage = 'connection';
+
+  try {
+    const repository = await getLabelPostgresRepository();
+    const health = await repository.getPostgresLabelHealth();
+
+    checkStage = 'storage-read';
+    const [postgresItems, latestVerification, verificationHistory] = await Promise.all([
+      repository.readPostgresLabelTemplates(),
+      repository.readLatestPostgresLabelVerification(),
+      repository.readPostgresLabelVerificationHistory({ days: 8 }),
+    ]);
+    const comparison = compareLabelStores(legacyItems, postgresItems);
+
+    return {
+      mode,
+      database: {
+        ...health,
+        checkStage: 'complete',
+        runtime,
+      },
+      counts: {
+        legacy: legacyItems.length,
+        postgres: postgresItems.length,
+        blockedLegacy: comparison.blockedIds.length,
+        unresolvedShadowFailures: unresolvedFailures.length,
+      },
+      discrepancies: toDiscrepancyTotals(comparison),
+      latestVerification,
+      unresolvedShadowFailures: unresolvedFailures.map(toPublicLabelSqlShadowFailure),
+      observation: summarizeLabelObservation({
+        verificationHistory,
+        failures,
+        unresolvedFailures,
+      }),
+    };
+  } catch (error) {
+    return {
+      mode,
+      database: {
+        ok: false,
+        checkedAt: new Date().toISOString(),
+        errorCode: classifyLabelSqlError(error),
+        checkStage,
+        runtime,
+      },
+      counts: {
+        legacy: legacyItems.length,
+        postgres: null,
+        blockedLegacy: countBlockedLegacyLabels(legacyItems),
+        unresolvedShadowFailures: unresolvedFailures.length,
+      },
+      discrepancies: null,
+      latestVerification: null,
+      unresolvedShadowFailures: unresolvedFailures.map(toPublicLabelSqlShadowFailure),
+      observation: {
+        eligibleForCutover: false,
+        reason: 'database-unavailable',
+      },
+    };
+  }
+}
+
+export async function verifyLabelDatabase({ operation = 'manual', observationReset = false } = {}) {
+  const repository = await getLabelPostgresRepository();
+  const [legacyItems, postgresItems] = await Promise.all([
+    readLegacyLabelTemplateSnapshot(),
+    repository.readPostgresLabelTemplates(),
+  ]);
+  const comparison = compareLabelStores(legacyItems, postgresItems);
+  const verification = await repository.recordPostgresLabelVerification({
+    ...comparison,
+    operation,
+    observationReset,
+  });
+
+  if (comparison.isExact) {
+    await resolveLabelSqlShadowFailures();
+  }
+
+  return {
+    ...comparison,
+    verification,
+  };
+}
+
+export async function backfillLabelDatabase() {
+  const repository = await getLabelPostgresRepository();
+  const legacyItems = await readLegacyLabelTemplateSnapshot();
+  const blockedIds = [];
+  const results = [];
+
+  for (const item of legacyItems) {
+    if (!validateLabelTemplateSnapshot(item).ok) {
+      blockedIds.push(item.id);
+      continue;
+    }
+
+    results.push(await repository.upsertPostgresLabelSnapshot(item));
+  }
+
+  const verification = await verifyLabelDatabase({ operation: 'backfill' });
+
+  return {
+    insertedCount: results.filter((item) => item.status === 'inserted').length,
+    updatedCount: results.filter((item) => item.status === 'updated').length,
+    skippedNewerCount: results.filter((item) => item.status === 'skipped-newer').length,
+    blockedIds,
+    verification,
+  };
+}
+
+export async function repairLabelDatabase(confirmation) {
+  if (confirmation !== 'repair-postgres-from-legacy') {
+    throw createHttpError(400, 'Repair confirmation is required.');
+  }
+
+  const repository = await getLabelPostgresRepository();
+  const legacyItems = await readLegacyLabelTemplateSnapshot();
+  const blockedIds = legacyItems.filter((item) => !validateLabelTemplateSnapshot(item).ok).map((item) => item.id);
+
+  if (blockedIds.length) {
+    throw createHttpError(409, 'Legacy labels that cannot be represented in PostgreSQL block repair.', {
+      blockedIds,
+    });
+  }
+
+  const results = [];
+
+  for (const item of legacyItems) {
+    results.push(await repository.upsertPostgresLabelSnapshot(item, { force: true }));
+  }
+
+  const removedIds = await repository.deletePostgresLabelsNotIn(legacyItems.map((item) => item.id));
+  const verification = await verifyLabelDatabase({
+    operation: 'repair',
+    observationReset: true,
+  });
+
+  return {
+    insertedCount: results.filter((item) => item.status === 'inserted').length,
+    updatedCount: results.filter((item) => item.status === 'updated').length,
+    removedIds,
+    verification,
+  };
 }
 
 export function createHttpError(statusCode, message, details) {
@@ -1803,10 +2073,377 @@ async function readLabelTemplateDocument() {
   return nextDocument;
 }
 
-async function findLabelTemplate(itemId) {
+async function findLegacyLabelTemplate(itemId) {
   const document = await readLabelTemplateDocument();
 
   return document.items.find((item) => item?.id === itemId);
+}
+
+async function readLegacyLabelTemplateSnapshot() {
+  const document = await readCollectionDocument('label-templates');
+  const items = Array.isArray(document.items) ? document.items.map(normalizeStoredLabelTemplate) : [];
+  const overrides = await readLabelTemplateOverrides();
+
+  return purgeExpiredTrash(mergeLabelTemplateOverrides(items, overrides));
+}
+
+async function mirrorLegacyLabelToPostgres(operation, item) {
+  if (getDataMode() !== 'shadow') {
+    return;
+  }
+
+  try {
+    const repository = await getLabelPostgresRepository();
+
+    if (isLabelTemplateTombstone(item)) {
+      await repository.deletePostgresLabelTemplate(item.id, item.deletedAt);
+      return;
+    }
+
+    const result = await repository.upsertPostgresLabelSnapshot(item);
+
+    if (result.status === 'blocked') {
+      throw new Error('Label snapshot was blocked by SQL validation.');
+    }
+  } catch (error) {
+    console.error('[label-sql-shadow] mirror failed', {
+      operation,
+      labelId: item?.id,
+      errorCode: classifyLabelSqlError(error),
+    });
+
+    try {
+      await writeLabelSqlShadowFailure(operation, item?.id, error);
+    } catch (markerError) {
+      console.error('[label-sql-shadow] failure marker write failed', {
+        operation,
+        labelId: item?.id,
+        errorCode: classifyLabelSqlError(markerError),
+      });
+    }
+  }
+}
+
+async function mirrorPostgresLabelToLegacy(operation, item) {
+  if (getDataMode() !== 'postgres') {
+    return;
+  }
+
+  try {
+    if (operation === 'upload' && !isLabelTemplateTombstone(item)) {
+      await writeLegacyPublicLabelSnapshot(item);
+      return;
+    }
+
+    await writeLabelTemplateOverride(item);
+  } catch (error) {
+    console.error('[label-legacy-mirror] mirror failed', {
+      operation,
+      labelId: item?.id,
+      errorCode: classifyLabelSqlError(error),
+    });
+  }
+}
+
+async function writeLegacyPublicLabelSnapshot(item) {
+  const document = await readCollectionDocument('label-templates');
+  const items = Array.isArray(document.items) ? document.items.map(normalizeStoredLabelTemplate) : [];
+  const nextDocument = createCollectionDocument('label-templates', [
+    item,
+    ...items.filter((currentItem) => currentItem?.id !== item.id),
+  ]);
+
+  await writeCollectionDocument('label-templates', nextDocument);
+}
+
+async function writeLabelSqlShadowFailure(operation, labelId, error) {
+  const failedAt = new Date().toISOString();
+  const id = randomUUID();
+  const marker = {
+    id,
+    operation: String(operation || 'unknown').slice(0, 40),
+    labelId: String(labelId || '').slice(0, 180),
+    failedAt,
+    deployContext: getLabelDeployContext(),
+    errorCode: classifyLabelSqlError(error),
+  };
+  const key = `${labelSqlShadowFailurePrefix}${failedAt.replace(/[:.]/g, '-')}-${id}.json`;
+
+  await writeLabelSqlShadowFailureRecord(key, marker);
+  return marker;
+}
+
+async function readLabelSqlShadowFailures() {
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    const result = await store.list({ prefix: labelSqlShadowFailurePrefix });
+    const markers = [];
+
+    for (const blob of result.blobs ?? []) {
+      const marker = await store.get(blob.key, { type: 'json' });
+
+      if (isLabelSqlShadowFailureRecord(marker)) {
+        markers.push({ ...marker, storageKey: blob.key });
+      }
+    }
+
+    return markers.sort((left, right) => String(left.failedAt).localeCompare(String(right.failedAt)));
+  }
+
+  const failureDir = path.join(localDataDir, labelSqlShadowFailurePrefix);
+
+  try {
+    const entries = await readdir(failureDir, { withFileTypes: true });
+    const markers = [];
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) {
+        continue;
+      }
+
+      try {
+        const marker = JSON.parse(await readFile(path.join(failureDir, entry.name), 'utf8'));
+
+        if (isLabelSqlShadowFailureRecord(marker)) {
+          markers.push({ ...marker, storageKey: `${labelSqlShadowFailurePrefix}${entry.name}` });
+        }
+      } catch {
+        // Ignore corrupt failure markers without exposing their contents.
+      }
+    }
+
+    return markers.sort((left, right) => String(left.failedAt).localeCompare(String(right.failedAt)));
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+async function resolveLabelSqlShadowFailures() {
+  const markers = await readLabelSqlShadowFailures();
+  const resolvedAt = new Date().toISOString();
+
+  for (const marker of markers) {
+    if (!marker.resolvedAt) {
+      const { storageKey, ...record } = marker;
+      await writeLabelSqlShadowFailureRecord(storageKey, { ...record, resolvedAt });
+    }
+  }
+}
+
+async function writeLabelSqlShadowFailureRecord(key, marker) {
+  if (shouldUseNetlifyBlobs()) {
+    const store = await getBlobStore();
+    await store.setJSON(key, marker);
+    return;
+  }
+
+  const localPath = path.join(localDataDir, key);
+  await mkdir(path.dirname(localPath), { recursive: true });
+  await writeFile(localPath, `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+}
+
+function isLabelSqlShadowFailureRecord(value) {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    typeof value.id === 'string' &&
+    typeof value.operation === 'string' &&
+    typeof value.labelId === 'string' &&
+    typeof value.failedAt === 'string' &&
+    typeof value.deployContext === 'string' &&
+    typeof value.errorCode === 'string',
+  );
+}
+
+function toPublicLabelSqlShadowFailure(marker) {
+  return {
+    id: marker.id,
+    operation: marker.operation,
+    labelId: marker.labelId,
+    failedAt: marker.failedAt,
+    deployContext: marker.deployContext,
+    errorCode: marker.errorCode,
+  };
+}
+
+function getLabelDeployContext() {
+  const context = typeof process.env.CONTEXT === 'string' && process.env.CONTEXT.trim()
+    ? process.env.CONTEXT.trim()
+    : process.env.NETLIFY === 'true' ? 'netlify' : 'local';
+
+  return context.slice(0, 60);
+}
+
+function classifyLabelSqlError(error) {
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : '';
+  const name = typeof error?.name === 'string' ? error.name.toLowerCase() : '';
+
+  if (name === 'missingdatabaseconnectionerror') {
+    return 'not-configured';
+  }
+
+  if (['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET'].includes(code)) {
+    return 'connection';
+  }
+
+  if (code === 'ETIMEDOUT' || name.includes('timeout')) {
+    return 'timeout';
+  }
+
+  if (code.startsWith('23')) {
+    return 'constraint';
+  }
+
+  if (code.startsWith('28')) {
+    return 'authentication';
+  }
+
+  if (code.startsWith('42')) {
+    return 'schema';
+  }
+
+  if (Number(error?.statusCode) === 404) {
+    return 'missing-record';
+  }
+
+  return 'database';
+}
+
+function getLabelDatabaseRuntimeStatus() {
+  const helixOverride = getLabelRuntimeEnvironmentValue('HELIX_DATABASE_URL');
+  const netlifyDatabaseUrl = getLabelRuntimeEnvironmentValue('NETLIFY_DB_URL');
+  const driver = getLabelRuntimeEnvironmentValue('NETLIFY_DB_DRIVER');
+  const source = helixOverride.source !== 'none'
+    ? `helix-${helixOverride.source}`
+    : netlifyDatabaseUrl.source !== 'none'
+      ? `netlify-${netlifyDatabaseUrl.source}`
+      : 'none';
+
+  return {
+    connectionConfigured: source !== 'none',
+    connectionSource: source,
+    driverConfigured: driver.source !== 'none',
+  };
+}
+
+function getLabelRuntimeEnvironmentValue(name) {
+  const processValue = process.env[name];
+
+  if (typeof processValue === 'string' && processValue.trim()) {
+    return { source: 'process' };
+  }
+
+  try {
+    const runtimeValue = globalThis.Netlify?.env?.get?.(name);
+
+    if (typeof runtimeValue === 'string' && runtimeValue.trim()) {
+      return { source: 'runtime' };
+    }
+  } catch {
+    // The diagnostic must never interfere with the database operation itself.
+  }
+
+  return { source: 'none' };
+}
+
+function compareLabelStores(legacyItems, postgresItems) {
+  const legacyById = new Map(legacyItems.filter((item) => item?.id).map((item) => [item.id, canonicalizeLabelTemplate(item)]));
+  const postgresById = new Map(postgresItems.filter((item) => item?.id).map((item) => [item.id, canonicalizeLabelTemplate(item)]));
+  const missingInPostgresIds = [...legacyById.keys()].filter((id) => !postgresById.has(id)).sort();
+  const extraInPostgresIds = [...postgresById.keys()].filter((id) => !legacyById.has(id)).sort();
+  const differingIds = [...legacyById.keys()]
+    .filter((id) => postgresById.has(id) && stableStringify(legacyById.get(id)) !== stableStringify(postgresById.get(id)))
+    .sort();
+  const blockedIds = legacyItems.filter((item) => !validateLabelTemplateSnapshot(item).ok).map((item) => item.id).sort();
+  const legacyCanonical = [...legacyById.values()].sort((left, right) => left.id.localeCompare(right.id));
+  const postgresCanonical = [...postgresById.values()].sort((left, right) => left.id.localeCompare(right.id));
+
+  return {
+    checkedAt: new Date().toISOString(),
+    legacyCount: legacyById.size,
+    postgresCount: postgresById.size,
+    matchedCount: Math.max(0, legacyById.size - missingInPostgresIds.length - differingIds.length),
+    missingInPostgresIds,
+    extraInPostgresIds,
+    differentIds: differingIds,
+    blockedIds,
+    isExact:
+      missingInPostgresIds.length === 0 &&
+      extraInPostgresIds.length === 0 &&
+      differingIds.length === 0 &&
+      blockedIds.length === 0,
+    legacyHash: hashCanonicalLabels(legacyCanonical),
+    postgresHash: hashCanonicalLabels(postgresCanonical),
+  };
+}
+
+function hashCanonicalLabels(items) {
+  return createHash('sha256').update(stableStringify(items)).digest('hex');
+}
+
+function countBlockedLegacyLabels(items) {
+  return items.filter((item) => !validateLabelTemplateSnapshot(item).ok).length;
+}
+
+function toDiscrepancyTotals(comparison) {
+  return {
+    missingInPostgres: comparison.missingInPostgresIds.length,
+    extraInPostgres: comparison.extraInPostgresIds.length,
+    different: comparison.differentIds.length,
+    blocked: comparison.blockedIds.length,
+    isExact: comparison.isExact,
+  };
+}
+
+function summarizeLabelObservation({ verificationHistory, failures, unresolvedFailures }) {
+  if (unresolvedFailures.length) {
+    return {
+      eligibleForCutover: false,
+      reason: 'unresolved-shadow-failures',
+      unresolvedFailureCount: unresolvedFailures.length,
+    };
+  }
+
+  const now = Date.now();
+  const resetTimes = [
+    ...failures.map((item) => Date.parse(item.failedAt)),
+    ...verificationHistory
+      .filter((item) => item.observationReset || !item.isExact)
+      .map((item) => Date.parse(item.checkedAt)),
+  ].filter(Number.isFinite);
+  const resetAt = resetTimes.length ? Math.max(...resetTimes) : 0;
+  const exactChecks = verificationHistory
+    .filter((item) => item.isExact && Date.parse(item.checkedAt) >= resetAt)
+    .sort((left, right) => Date.parse(left.checkedAt) - Date.parse(right.checkedAt));
+
+  if (!exactChecks.length) {
+    return {
+      eligibleForCutover: false,
+      reason: 'no-exact-verification-after-reset',
+      resetAt: resetAt ? new Date(resetAt).toISOString() : null,
+      exactVerificationCount: 0,
+    };
+  }
+
+  const timestamps = exactChecks.map((item) => Date.parse(item.checkedAt));
+  const checkpoints = [...timestamps, now];
+  const hasDailyGap = checkpoints.some((timestamp, index) => index > 0 && timestamp - checkpoints[index - 1] > 24 * 60 * 60 * 1000);
+  const observationStartedAt = timestamps[0];
+  const hasSevenDays = now - observationStartedAt >= 7 * 24 * 60 * 60 * 1000;
+
+  return {
+    eligibleForCutover: hasSevenDays && !hasDailyGap,
+    reason: !hasSevenDays ? 'seven-day-window-incomplete' : hasDailyGap ? 'daily-verification-gap' : 'gate-passed',
+    resetAt: resetAt ? new Date(resetAt).toISOString() : null,
+    observationStartedAt: new Date(observationStartedAt).toISOString(),
+    latestExactVerificationAt: new Date(timestamps[timestamps.length - 1]).toISOString(),
+    exactVerificationCount: exactChecks.length,
+  };
 }
 
 function mergeLabelTemplateOverrides(baseItems, overrides) {
@@ -2917,10 +3554,6 @@ function createLabelPreviewAssetKey(labelId, mimeType) {
   return `label-previews/${safeLabelId}.${getPreviewExtension(mimeType)}`;
 }
 
-function createLabelPreviewUrl(labelId) {
-  return `/api/labels/${encodeURIComponent(labelId)}/preview`;
-}
-
 function getPreviewExtension(mimeType) {
   if (mimeType === 'image/jpeg') {
     return 'jpg';
@@ -3060,27 +3693,6 @@ function sanitizeStringArray(value, { maxItems, maxLength, fieldName }) {
   return nextValues;
 }
 
-function normalizeReportReason(value) {
-  const reason = typeof value === 'string' ? value.trim().toLowerCase() : '';
-
-  return allowedReportReasons.has(reason) ? reason : '';
-}
-
-function normalizeModerationStatus(value) {
-  if (value === 'pending') {
-    return 'unreviewed';
-  }
-
-  return ['unreviewed', 'approved', 'rejected'].includes(value) ? value : 'unreviewed';
-}
-
-function isPubliclyVisibleLabelTemplate(template) {
-  const status = normalizeModerationStatus(template?.moderationStatus ?? 'unreviewed');
-  const reportCount = getDistinctReportCount(template);
-
-  return !template?.deletedAt && status !== 'rejected' && reportCount < maxReportCountBeforeHide;
-}
-
 function softDeleteLabelTemplate(itemId, deletedReason) {
   return updateDeletedLabelTemplate(itemId, {
     moderationStatus: 'rejected',
@@ -3090,7 +3702,15 @@ function softDeleteLabelTemplate(itemId, deletedReason) {
 }
 
 async function updateDeletedLabelTemplate(itemId, fields) {
-  const item = await findLabelTemplate(itemId);
+  if (getDataMode() === 'postgres') {
+    const repository = await getLabelPostgresRepository();
+    const nextItem = await repository.softDeletePostgresLabelTemplate(itemId, fields.deletedReason);
+
+    await mirrorPostgresLabelToLegacy('soft-delete', nextItem);
+    return nextItem;
+  }
+
+  const item = await findLegacyLabelTemplate(itemId);
 
   if (!item) {
     throw createHttpError(404, 'Label template not found.');
@@ -3103,12 +3723,21 @@ async function updateDeletedLabelTemplate(itemId, fields) {
   });
 
   await writeLabelTemplateOverride(nextItem);
+  await mirrorLegacyLabelToPostgres('soft-delete', nextItem);
 
   return nextItem;
 }
 
 async function hardDeleteLabelTemplate(itemId) {
-  const item = await findLabelTemplate(itemId);
+  if (getDataMode() === 'postgres') {
+    const repository = await getLabelPostgresRepository();
+    const tombstone = await repository.deletePostgresLabelTemplate(itemId);
+
+    await mirrorPostgresLabelToLegacy('permanent-delete', tombstone);
+    return tombstone;
+  }
+
+  const item = await findLegacyLabelTemplate(itemId);
 
   if (!item) {
     throw createHttpError(404, 'Label template not found.');
@@ -3117,119 +3746,9 @@ async function hardDeleteLabelTemplate(itemId) {
   const tombstone = createLabelTemplateTombstone(itemId);
 
   await writeLabelTemplateOverride(tombstone);
+  await mirrorLegacyLabelToPostgres('permanent-delete', tombstone);
 
   return tombstone;
-}
-
-function normalizeStoredLabelTemplate(item) {
-  if (!item || typeof item !== 'object' || Array.isArray(item)) {
-    return item;
-  }
-
-  const reports = Array.isArray(item.reports)
-    ? item.reports.map((report) => ({
-        reason: normalizeReportReason(report?.reason) || 'other',
-        details: typeof report?.details === 'string' ? report.details : '',
-        ...(typeof report?.fingerprint === 'string' ? { fingerprint: report.fingerprint } : {}),
-        createdAt: typeof report?.createdAt === 'string' ? report.createdAt : new Date().toISOString(),
-      }))
-    : [];
-  const reportFingerprints = normalizeFingerprintList(item.reportFingerprints);
-  const nextReportFingerprints = reportFingerprints.length
-    ? reportFingerprints
-    : normalizeFingerprintList(reports.map((report) => report.fingerprint).filter(Boolean));
-  const voteFingerprints = normalizeFingerprintList(item.voteFingerprints);
-  const moderationStatus = normalizeModerationStatus(item.moderationStatus);
-  const nextItem = {
-    ...item,
-    moderationStatus,
-    votes: voteFingerprints.length || Math.max(0, Math.round(Number(item.votes) || 0)),
-    voteFingerprints,
-    reports,
-    reportFingerprints: nextReportFingerprints,
-    reportCount: nextReportFingerprints.length || reports.length || Math.max(0, Math.round(Number(item.reportCount) || 0)),
-  };
-
-  if (moderationStatus === 'rejected' && !nextItem.deletedAt) {
-    nextItem.deletedAt = typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString();
-    nextItem.deletedReason = 'rejected';
-  }
-
-  if (typeof nextItem.deletedAt !== 'string') {
-    delete nextItem.deletedAt;
-    delete nextItem.deletedReason;
-  } else if (!['admin', 'rejected'].includes(nextItem.deletedReason)) {
-    nextItem.deletedReason = moderationStatus === 'rejected' ? 'rejected' : 'admin';
-  }
-
-  return nextItem;
-}
-
-function createLabelTemplateTombstone(itemId) {
-  const now = new Date().toISOString();
-
-  return {
-    id: itemId,
-    permanentlyDeleted: true,
-    deletedAt: now,
-    deletedReason: 'permanent',
-    updatedAt: now,
-  };
-}
-
-function isLabelTemplateTombstone(item) {
-  return Boolean(
-    item &&
-    typeof item === 'object' &&
-    !Array.isArray(item) &&
-    typeof item.id === 'string' &&
-    item.permanentlyDeleted === true,
-  );
-}
-
-function purgeExpiredTrash(items) {
-  const now = Date.now();
-
-  return items.filter((item) => {
-    if (!item?.deletedAt) {
-      return true;
-    }
-
-    const deletedAt = Date.parse(item.deletedAt);
-
-    return !Number.isFinite(deletedAt) || now - deletedAt < trashRetentionMs;
-  });
-}
-
-function toPublicLabelTemplate(template) {
-  const {
-    reportFingerprints,
-    voteFingerprints,
-    reports,
-    deletedAt,
-    deletedReason,
-    ...publicTemplate
-  } = template;
-
-  return publicTemplate;
-}
-
-function getDistinctReportCount(template) {
-  const reportFingerprints = normalizeFingerprintList(template?.reportFingerprints);
-
-  if (reportFingerprints.length) {
-    return reportFingerprints.length;
-  }
-
-  return Math.max(0, Math.round(Number(template?.reportCount) || 0));
-}
-
-function normalizeFingerprintList(value) {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return [...new Set(value.filter((item) => typeof item === 'string' && item.trim()))];
 }
 
 function createLabelActionFingerprint(headers, labelId, action) {
