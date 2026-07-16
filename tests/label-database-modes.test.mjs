@@ -8,6 +8,7 @@ import { NetlifyDB } from '@netlify/database-dev';
 const testDataDir = path.resolve('.tmp', 'label-database-mode-test-data');
 const migrationsDirectory = fileURLToPath(new URL('../netlify/database/migrations/', import.meta.url));
 const database = new NetlifyDB({ logger: () => {} });
+let databaseConnectionString;
 
 process.env.HELIX_LOCAL_DATA_DIR = testDataDir;
 process.env.HELIX_DATA_ADAPTER = 'local';
@@ -23,7 +24,8 @@ const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z
 const validPreviewDataUrl = `data:image/png;base64,${pngBase64}`;
 
 before(async () => {
-  process.env.NETLIFY_DB_URL = await database.start();
+  databaseConnectionString = await database.start();
+  process.env.NETLIFY_DB_URL = databaseConnectionString;
   process.env.NETLIFY_DB_DRIVER = 'server';
 });
 
@@ -117,6 +119,12 @@ test('backfill is idempotent, protects newer SQL rows, and repair makes SQL exac
 
   assert.equal(status.mode, 'legacy');
   assert.equal(status.database.ok, true);
+  assert.equal(status.database.checkStage, 'complete');
+  assert.deepEqual(status.database.runtime, {
+    connectionConfigured: true,
+    connectionSource: 'netlify-process',
+    driverConfigured: true,
+  });
   assert.deepEqual(status.counts, {
     legacy: 1,
     postgres: 1,
@@ -124,6 +132,34 @@ test('backfill is idempotent, protects newer SQL rows, and repair makes SQL exac
     unresolvedShadowFailures: 0,
   });
   assert.equal(status.discrepancies.isExact, true);
+});
+
+test('owner status safely identifies a missing database runtime connection', async () => {
+  const ownerCookie = await login('owner');
+
+  delete process.env.NETLIFY_DB_URL;
+  await repository.closeLabelDatabaseClientForTests();
+
+  try {
+    const response = await apiRequest('/api/admin/database/labels/status', 'GET', undefined, {
+      cookie: ownerCookie,
+    });
+    const status = JSON.parse(response.body);
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(status.database.ok, false);
+    assert.equal(status.database.errorCode, 'not-configured');
+    assert.equal(status.database.checkStage, 'connection');
+    assert.deepEqual(status.database.runtime, {
+      connectionConfigured: false,
+      connectionSource: 'none',
+      driverConfigured: true,
+    });
+    assert.equal(JSON.stringify(status).includes(databaseConnectionString), false);
+  } finally {
+    process.env.NETLIFY_DB_URL = databaseConnectionString;
+    await repository.closeLabelDatabaseClientForTests();
+  }
 });
 
 test('backfill reports invalid external preview metadata without mutating legacy', async () => {

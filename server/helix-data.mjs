@@ -1463,11 +1463,15 @@ export async function getLabelDatabaseStatus() {
   const legacyItems = await readLegacyLabelTemplateSnapshot();
   const failures = await readLabelSqlShadowFailures();
   const unresolvedFailures = failures.filter((item) => !item.resolvedAt);
+  const runtime = getLabelDatabaseRuntimeStatus();
+  let checkStage = 'connection';
 
   try {
     const repository = await getLabelPostgresRepository();
-    const [health, postgresItems, latestVerification, verificationHistory] = await Promise.all([
-      repository.getPostgresLabelHealth(),
+    const health = await repository.getPostgresLabelHealth();
+
+    checkStage = 'storage-read';
+    const [postgresItems, latestVerification, verificationHistory] = await Promise.all([
       repository.readPostgresLabelTemplates(),
       repository.readLatestPostgresLabelVerification(),
       repository.readPostgresLabelVerificationHistory({ days: 8 }),
@@ -1476,7 +1480,11 @@ export async function getLabelDatabaseStatus() {
 
     return {
       mode,
-      database: health,
+      database: {
+        ...health,
+        checkStage: 'complete',
+        runtime,
+      },
       counts: {
         legacy: legacyItems.length,
         postgres: postgresItems.length,
@@ -1499,6 +1507,8 @@ export async function getLabelDatabaseStatus() {
         ok: false,
         checkedAt: new Date().toISOString(),
         errorCode: classifyLabelSqlError(error),
+        checkStage,
+        runtime,
       },
       counts: {
         legacy: legacyItems.length,
@@ -2273,6 +2283,10 @@ function classifyLabelSqlError(error) {
   const code = typeof error?.code === 'string' ? error.code.toUpperCase() : '';
   const name = typeof error?.name === 'string' ? error.name.toLowerCase() : '';
 
+  if (name === 'missingdatabaseconnectionerror') {
+    return 'not-configured';
+  }
+
   if (['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET'].includes(code)) {
     return 'connection';
   }
@@ -2285,6 +2299,10 @@ function classifyLabelSqlError(error) {
     return 'constraint';
   }
 
+  if (code.startsWith('28')) {
+    return 'authentication';
+  }
+
   if (code.startsWith('42')) {
     return 'schema';
   }
@@ -2294,6 +2312,43 @@ function classifyLabelSqlError(error) {
   }
 
   return 'database';
+}
+
+function getLabelDatabaseRuntimeStatus() {
+  const helixOverride = getLabelRuntimeEnvironmentValue('HELIX_DATABASE_URL');
+  const netlifyDatabaseUrl = getLabelRuntimeEnvironmentValue('NETLIFY_DB_URL');
+  const driver = getLabelRuntimeEnvironmentValue('NETLIFY_DB_DRIVER');
+  const source = helixOverride.source !== 'none'
+    ? `helix-${helixOverride.source}`
+    : netlifyDatabaseUrl.source !== 'none'
+      ? `netlify-${netlifyDatabaseUrl.source}`
+      : 'none';
+
+  return {
+    connectionConfigured: source !== 'none',
+    connectionSource: source,
+    driverConfigured: driver.source !== 'none',
+  };
+}
+
+function getLabelRuntimeEnvironmentValue(name) {
+  const processValue = process.env[name];
+
+  if (typeof processValue === 'string' && processValue.trim()) {
+    return { source: 'process' };
+  }
+
+  try {
+    const runtimeValue = globalThis.Netlify?.env?.get?.(name);
+
+    if (typeof runtimeValue === 'string' && runtimeValue.trim()) {
+      return { source: 'runtime' };
+    }
+  } catch {
+    // The diagnostic must never interfere with the database operation itself.
+  }
+
+  return { source: 'none' };
 }
 
 function compareLabelStores(legacyItems, postgresItems) {
