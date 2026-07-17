@@ -19,6 +19,7 @@ process.env.HELIX_ADMIN_SESSION_SECRET = 'database-test-session-secret';
 const { handleHelixApiRequest } = await import('../server/helix-api.mjs');
 const data = await import('../server/helix-data.mjs');
 const repository = await import('../server/helix-label-postgres.mjs');
+const scheduledVerification = await import('../netlify/functions/label-database-verify.mjs');
 
 const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzX7cgAAAABJRU5ErkJggg==';
 const validPreviewDataUrl = `data:image/png;base64,${pngBase64}`;
@@ -160,6 +161,44 @@ test('owner status safely identifies a missing database runtime connection', asy
     process.env.NETLIFY_DB_URL = databaseConnectionString;
     await repository.closeLabelDatabaseClientForTests();
   }
+});
+
+test('scheduled verification runs twice daily only while labels are in shadow mode', async () => {
+  assert.equal(scheduledVerification.config.schedule, '0 */12 * * *');
+
+  const skipped = await scheduledVerification.runScheduledLabelDatabaseVerification();
+  assert.deepEqual(skipped, {
+    skipped: true,
+    mode: 'legacy',
+    reason: 'mode-not-shadow',
+  });
+
+  await postLabel({ templateName: 'Scheduled verification label' });
+  const ownerCookie = await login('owner');
+  const backfill = await apiRequest('/api/admin/database/labels/backfill', 'POST', undefined, {
+    cookie: ownerCookie,
+  });
+
+  assert.equal(backfill.statusCode, 200);
+  assert.equal(JSON.parse(backfill.body).verification.isExact, true);
+
+  process.env.HELIX_DATA_MODE = 'shadow';
+  const result = await scheduledVerification.runScheduledLabelDatabaseVerification();
+
+  assert.deepEqual(result, {
+    skipped: false,
+    mode: 'shadow',
+    checkedAt: result.checkedAt,
+    isExact: true,
+    legacyCount: 1,
+    postgresCount: 1,
+    matchedCount: 1,
+    missingCount: 0,
+    extraCount: 0,
+    differentCount: 0,
+    blockedCount: 0,
+  });
+  assert.match(result.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
 test('backfill reports invalid external preview metadata without mutating legacy', async () => {

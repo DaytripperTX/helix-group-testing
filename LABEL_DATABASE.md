@@ -13,6 +13,12 @@ migrations. Future peptide, vendor, round, COA, and other tables will live besid
 the label tables in this same database. Large files and images remain in Blob
 storage while PostgreSQL stores their relational metadata.
 
+All newly introduced data collections must be PostgreSQL-native from their first
+implementation, including while an existing collection is still in its shadow
+observation window. Do not introduce new JSON-file or Netlify Blobs metadata
+collections as temporary storage. Existing legacy collections can still be
+migrated incrementally and safely in parallel.
+
 ## Modes
 
 Set the site-wide `HELIX_DATA_MODE` to one of:
@@ -30,6 +36,11 @@ switch to `postgres`.
 
 The switch is intentionally site-wide so the same rollout state applies as
 additional collections are migrated into the shared Helix database.
+
+`HELIX_DATA_MODE` governs transitional repositories that already have legacy
+storage. A newly introduced PostgreSQL-only collection has no legacy fallback,
+so PostgreSQL remains authoritative for that collection in every mode, including
+while Labels or another legacy collection is still in `shadow`.
 
 ## Local database development
 
@@ -67,6 +78,13 @@ legacy snapshot, including deleting SQL-only metadata. Neither operation deletes
 legacy label metadata or preview assets. Labels without valid external preview
 metadata are reported as blocked.
 
+Production also includes a scheduled `label-database-verify` function. It runs
+at 00:00 and 12:00 UTC, records a verification only while
+`HELIX_DATA_MODE=shadow`, and skips other modes. A non-exact result is recorded
+and then fails the scheduled invocation so the discrepancy is visible in the
+Netlify function logs. Scheduled functions run only on published production
+deploys; use Netlify's **Run now** control to test it immediately after deploy.
+
 ## Rollout gate
 
 1. Provision Netlify Database and publish the additive migration while mode is
@@ -75,11 +93,15 @@ metadata are reported as blocked.
    production Blobs.
 3. Set production to `shadow`, redeploy, run owner backfill, and verify exact
    parity.
-4. Record at least one exact verification every 24 hours for seven continuous
+4. Record at least one exact verification every 24 hours for three continuous
    days and after targeted label workflow tests.
 5. Any repair, non-exact verification, or shadow failure restarts the observation
    window. Unresolved shadow failures block the gate.
 6. Keep `postgres` disabled until a separately approved cutover.
+
+The Labels gate does not block implementing parallel PostgreSQL migrations for
+other existing collections. Each collection still needs its own parity and
+workflow validation before its authoritative read/write path changes.
 
 Netlify Blobs are site-wide and shared by deploy previews. Do not run preview
 tests that mutate label Blobs. Exercise SQL-authoritative writes through the

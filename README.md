@@ -126,6 +126,10 @@ secret security boundary.
 - `data/*.json` files are committed seed/default data.
 - Local development writes runtime data to `.local-data`.
 - Netlify production writes runtime data to the `helix-data` Netlify Blobs store.
+- New data collections must be implemented directly in the shared PostgreSQL
+  database; do not create new JSON/Blob metadata collections as temporary stores.
+- Existing JSON/Blob collections are migrated incrementally, with their own
+  parallel verification period before PostgreSQL becomes authoritative.
 - After a production Blob document has been initialized, editing the matching
   `data/*.json` file changes only the seed/default version, not the existing
   production Blob copy.

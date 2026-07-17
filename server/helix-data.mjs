@@ -37,6 +37,8 @@ const maxLabelPreviewBytes = 3 * 1024 * 1024;
 const maxLabelCodeLength = 20 * 1024;
 const maxCoaPdfBytes = 8 * 1024 * 1024;
 const maxCoaVialImageBytes = 1024 * 1024;
+const labelObservationWindowMs = 3 * 24 * 60 * 60 * 1000;
+const labelVerificationMaximumGapMs = 24 * 60 * 60 * 1000;
 const allowedPreviewMimeTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const redactedCoaResultFields = [
   'coaNumber',
@@ -1520,6 +1522,8 @@ export async function getLabelDatabaseStatus() {
       latestVerification: null,
       unresolvedShadowFailures: unresolvedFailures.map(toPublicLabelSqlShadowFailure),
       observation: {
+        requiredDays: labelObservationWindowMs / (24 * 60 * 60 * 1000),
+        maximumVerificationGapHours: labelVerificationMaximumGapMs / (60 * 60 * 1000),
         eligibleForCutover: false,
         reason: 'database-unavailable',
       },
@@ -2400,16 +2404,21 @@ function toDiscrepancyTotals(comparison) {
   };
 }
 
-function summarizeLabelObservation({ verificationHistory, failures, unresolvedFailures }) {
+export function summarizeLabelObservation({ verificationHistory, failures, unresolvedFailures }, now = Date.now()) {
+  const requirements = {
+    requiredDays: labelObservationWindowMs / (24 * 60 * 60 * 1000),
+    maximumVerificationGapHours: labelVerificationMaximumGapMs / (60 * 60 * 1000),
+  };
+
   if (unresolvedFailures.length) {
     return {
+      ...requirements,
       eligibleForCutover: false,
       reason: 'unresolved-shadow-failures',
       unresolvedFailureCount: unresolvedFailures.length,
     };
   }
 
-  const now = Date.now();
   const resetTimes = [
     ...failures.map((item) => Date.parse(item.failedAt)),
     ...verificationHistory
@@ -2423,6 +2432,7 @@ function summarizeLabelObservation({ verificationHistory, failures, unresolvedFa
 
   if (!exactChecks.length) {
     return {
+      ...requirements,
       eligibleForCutover: false,
       reason: 'no-exact-verification-after-reset',
       resetAt: resetAt ? new Date(resetAt).toISOString() : null,
@@ -2432,13 +2442,16 @@ function summarizeLabelObservation({ verificationHistory, failures, unresolvedFa
 
   const timestamps = exactChecks.map((item) => Date.parse(item.checkedAt));
   const checkpoints = [...timestamps, now];
-  const hasDailyGap = checkpoints.some((timestamp, index) => index > 0 && timestamp - checkpoints[index - 1] > 24 * 60 * 60 * 1000);
+  const hasDailyGap = checkpoints.some(
+    (timestamp, index) => index > 0 && timestamp - checkpoints[index - 1] > labelVerificationMaximumGapMs,
+  );
   const observationStartedAt = timestamps[0];
-  const hasSevenDays = now - observationStartedAt >= 7 * 24 * 60 * 60 * 1000;
+  const hasRequiredWindow = now - observationStartedAt >= labelObservationWindowMs;
 
   return {
-    eligibleForCutover: hasSevenDays && !hasDailyGap,
-    reason: !hasSevenDays ? 'seven-day-window-incomplete' : hasDailyGap ? 'daily-verification-gap' : 'gate-passed',
+    ...requirements,
+    eligibleForCutover: hasRequiredWindow && !hasDailyGap,
+    reason: !hasRequiredWindow ? 'three-day-window-incomplete' : hasDailyGap ? 'daily-verification-gap' : 'gate-passed',
     resetAt: resetAt ? new Date(resetAt).toISOString() : null,
     observationStartedAt: new Date(observationStartedAt).toISOString(),
     latestExactVerificationAt: new Date(timestamps[timestamps.length - 1]).toISOString(),
