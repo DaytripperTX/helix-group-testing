@@ -9,6 +9,10 @@ const coaRoundAccessMaxAgeSeconds = 60 * 60 * 24 * 365 * 10;
 const ephemeralLocalSessionSecret = randomBytes(32).toString('base64url');
 
 export function getAdminSession(headers = {}) {
+  if (!isLegacyAdminAuthEnabled()) {
+    return null;
+  }
+
   const token = getCookie(headers, adminCookieName);
 
   if (!token) {
@@ -27,6 +31,10 @@ export function getAdminSession(headers = {}) {
 }
 
 export function validateRolePassword(password, role = 'admin') {
+  if (!isLegacyAdminAuthEnabled()) {
+    return false;
+  }
+
   const configuredPassword = getConfiguredPasswordForRole(role);
 
   if (!configuredPassword || typeof password !== 'string') {
@@ -61,6 +69,10 @@ export function createLogoutCookie() {
     secure: shouldUseSecureCookies(),
     path: '/',
   });
+}
+
+export function isLegacyAdminAuthEnabled() {
+  return process.env.HELIX_LEGACY_ADMIN_AUTH === 'true';
 }
 
 export function getCoaRoundAccess(headers = {}) {

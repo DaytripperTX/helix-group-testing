@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+process.env.HELIX_LEGACY_ADMIN_AUTH = 'true';
+
 test('Netlify admin function uses the modern Request/Response runtime', async () => {
   const previousEnv = {
     NETLIFY: process.env.NETLIFY,

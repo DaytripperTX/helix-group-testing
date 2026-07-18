@@ -2,6 +2,7 @@ import { type FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, us
 import { CircleCheckBig } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import AccountPage from './AccountPage';
 import AdminPage from './AdminPage';
 import FaqsPage from './FaqsPage';
 import LabelsPage from './LabelsPage';
@@ -17,6 +18,10 @@ import {
 } from './coa-filter-url.mjs';
 import { publicPageItems, type PublicPageId } from './page-disables';
 import { fetchRounds, getCurrentRounds, sortRoundsForDisplay, type Round, type RoundPeptide, type TestingTierId } from './rounds';
+import {
+  type AccountSession,
+  signedOutAccountSession,
+} from './account-types';
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
@@ -617,15 +622,25 @@ const configuredDisabledPages =
   typeof __HELIX_DISABLED_PAGES__ === 'undefined' ? [] : __HELIX_DISABLED_PAGES__;
 const disabledPages = new Set<string>(configuredDisabledPages);
 
-type PageId = PublicPageId | 'hxadmin' | 'hxowner';
+type PageId = PublicPageId | 'account' | 'hxadmin' | 'hxowner';
 type TestingIconType = TestingTier['panel'][number]['icon'] | 'badge';
 type AdminSession = {
   isAuthenticated: boolean;
   role?: 'owner' | 'admin';
 };
 
+const identityCallbackHashPattern = /^#(?:confirmation_token|recovery_token|invite_token|email_change_token|access_token)=/;
+
 function getPageFromPath(): PageId {
+  if (identityCallbackHashPattern.test(window.location.hash)) {
+    return 'account';
+  }
+
   const currentPath = window.location.pathname.replace(/\/$/, '') || '/';
+
+  if (currentPath === '/account') {
+    return 'account';
+  }
 
   if (currentPath === '/hxadmin' || currentPath === '/hxowner') {
     return currentPath.slice(1) as PageId;
@@ -638,10 +653,19 @@ function getPageFromPath(): PageId {
 function App() {
   const [activePage, setActivePage] = useState<PageId>(getPageFromPath);
   const [adminSession, setAdminSession] = useState<AdminSession>({ isAuthenticated: false });
+  const [accountSession, setAccountSession] = useState<AccountSession>(signedOutAccountSession);
 
   useEffect(() => {
     const handleNavigation = () => {
       const nextPage = getPageFromPath();
+
+      if (nextPage === 'account' && identityCallbackHashPattern.test(window.location.hash)) {
+        const accountUrl = `/account${window.location.search}${window.location.hash}`;
+
+        if (window.location.pathname !== '/account') {
+          window.history.replaceState(window.history.state, '', accountUrl);
+        }
+      }
 
       if (nextPage === 'home' && isDisabledPublicPath(window.location.pathname)) {
         window.history.replaceState({}, '', '/');
@@ -659,14 +683,16 @@ function App() {
   useEffect(() => {
     let isMounted = true;
 
-    fetchAdminSession()
-      .then((session) => {
+    Promise.all([fetchAccountSession(), fetchAdminSession()])
+      .then(([nextAccountSession, nextAdminSession]) => {
         if (isMounted) {
-          setAdminSession(session);
+          setAccountSession(nextAccountSession);
+          setAdminSession(resolveClientAdminSession(nextAccountSession, nextAdminSession));
         }
       })
       .catch(() => {
         if (isMounted) {
+          setAccountSession(signedOutAccountSession);
           setAdminSession({ isAuthenticated: false });
         }
       });
@@ -685,9 +711,53 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const applyAccountSession = (nextSession: AccountSession) => {
+    const mergedSession = {
+      ...nextSession,
+      legacyAuthEnabled: nextSession.legacyAuthEnabled ?? accountSession.legacyAuthEnabled,
+    };
+
+    setAccountSession(mergedSession);
+
+    if (
+      mergedSession.account?.status === 'active'
+      && (mergedSession.account.role === 'admin' || mergedSession.account.role === 'owner')
+    ) {
+      setAdminSession({ isAuthenticated: true, role: mergedSession.account.role });
+    } else {
+      setAdminSession({ isAuthenticated: false });
+    }
+  };
+
+  const refreshAccountAndAdminSessions = async () => {
+    const [nextAccountSession, nextAdminSession] = await Promise.all([
+      fetchAccountSession(),
+      fetchAdminSession(),
+    ]);
+
+    setAccountSession(nextAccountSession);
+    setAdminSession(resolveClientAdminSession(nextAccountSession, nextAdminSession));
+    return nextAccountSession;
+  };
+
+  const logoutAccount = async () => {
+    await logoutAccountSession();
+    setAccountSession({
+      isAuthenticated: false,
+      legacyAuthEnabled: accountSession.legacyAuthEnabled,
+    });
+    setAdminSession({ isAuthenticated: false });
+  };
+
   return (
     <>
-      <SiteHeader activePage={activePage} isAdmin={adminSession.isAuthenticated} onNavigate={navigateTo} />
+      <SiteHeader
+        accountSession={accountSession}
+        activePage={activePage}
+        isAdmin={adminSession.isAuthenticated}
+        onLogout={logoutAccount}
+        onNavigate={navigateTo}
+      />
       <main>
         {activePage === 'home' && <HomePage />}
         {activePage === 'order-form' && <OrderFormPage />}
@@ -695,10 +765,20 @@ function App() {
         {activePage === 'coas' && <CoasPage isAdmin={adminSession.isAuthenticated} />}
         {activePage === 'labels' && <LabelsPage isAdmin={adminSession.isAuthenticated} />}
         {activePage === 'faqs' && <FaqsPage />}
+        {activePage === 'account' && (
+          <AccountPage
+            session={accountSession}
+            onSessionChange={applyAccountSession}
+            onRefreshSession={refreshAccountAndAdminSessions}
+            onNavigate={navigateTo}
+          />
+        )}
         {(activePage === 'hxadmin' || activePage === 'hxowner') && (
           <AdminPage
             session={adminSession}
             loginRole={activePage === 'hxowner' ? 'owner' : 'admin'}
+            legacyAuthEnabled={accountSession.legacyAuthEnabled === true}
+            onLogout={logoutAccount}
             onSessionChange={setAdminSession}
             onNavigate={navigateTo}
           />
@@ -709,16 +789,20 @@ function App() {
 }
 
 function SiteHeader({
+  accountSession,
   activePage,
   isAdmin,
+  onLogout,
   onNavigate,
 }: {
+  accountSession: AccountSession;
   activePage: PageId;
   isAdmin: boolean;
+  onLogout: () => Promise<void>;
   onNavigate: (path: string) => void;
 }) {
   const enabledNavItems = navItems.filter((item) => !disabledPages.has(item.id));
-  const visibleNavItems = isAdmin
+  const visibleNavItems = isAdmin && !accountSession.account
     ? [...enabledNavItems, { id: 'hxadmin', label: 'Admin', path: '/hxadmin' } as const]
     : enabledNavItems;
 
@@ -760,6 +844,73 @@ function SiteHeader({
             </a>
           ))}
         </nav>
+
+        <div className="site-account-actions">
+          {accountSession.account ? (
+            <details className="site-account-menu">
+              <summary>{accountSession.account.username}</summary>
+              <div className="site-account-menu__panel">
+                <a
+                  className={activePage === 'account' ? 'is-active' : ''}
+                  href="/account"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onNavigate('/account');
+                  }}
+                >
+                  Account
+                </a>
+                {accountSession.account.status === 'active'
+                  && (accountSession.account.role === 'admin' || accountSession.account.role === 'owner') && (
+                  <a
+                    href={accountSession.account.role === 'owner' ? '/hxowner' : '/hxadmin'}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      onNavigate(accountSession.account?.role === 'owner' ? '/hxowner' : '/hxadmin');
+                    }}
+                  >
+                    Admin
+                  </a>
+                )}
+                <button type="button" onClick={() => void onLogout()}>Sign out</button>
+              </div>
+            </details>
+          ) : accountSession.isAuthenticated ? (
+            <a
+              className="site-account-link site-account-link--primary"
+              href="/account"
+              onClick={(event) => {
+                event.preventDefault();
+                onNavigate('/account');
+              }}
+            >
+              Finish setup
+            </a>
+          ) : (
+            <>
+              <a
+                className="site-account-link"
+                href="/account?mode=signin"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onNavigate('/account?mode=signin');
+                }}
+              >
+                Sign in
+              </a>
+              <a
+                className="site-account-link site-account-link--primary"
+                href="/account?mode=signup"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onNavigate('/account?mode=signup');
+                }}
+              >
+                Sign up
+              </a>
+            </>
+          )}
+        </div>
       </div>
     </header>
   );
@@ -4080,15 +4231,40 @@ async function fetchAdminSession(): Promise<AdminSession> {
   return normalizeAdminSession(await response.json());
 }
 
-async function logoutAdmin() {
-  const response = await fetch('/api/admin/logout', {
+async function fetchAccountSession(): Promise<AccountSession> {
+  const response = await fetch('/api/account/session', {
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    return signedOutAccountSession;
+  }
+
+  return normalizeAccountSession(await response.json());
+}
+
+async function logoutAccountSession() {
+  const response = await fetch('/api/account/logout', {
     method: 'POST',
     credentials: 'same-origin',
   });
 
   if (!response.ok) {
-    throw new Error('Admin logout failed.');
+    throw new Error('Account logout failed.');
   }
+}
+
+function normalizeAccountSession(value: unknown): AccountSession {
+  if (!value || typeof value !== 'object') {
+    return signedOutAccountSession;
+  }
+
+  const session = value as AccountSession;
+
+  return {
+    ...session,
+    isAuthenticated: session.isAuthenticated === true,
+  };
 }
 
 function normalizeAdminSession(value: unknown): AdminSession {
@@ -4102,6 +4278,22 @@ function normalizeAdminSession(value: unknown): AdminSession {
     isAuthenticated: session.isAuthenticated === true,
     role: session.role === 'admin' ? 'admin' : session.isAuthenticated ? 'owner' : undefined,
   };
+}
+
+function resolveClientAdminSession(
+  accountSession: AccountSession,
+  fallbackSession: AdminSession,
+): AdminSession {
+  const account = accountSession.account;
+
+  if (
+    account?.status === 'active'
+    && (account.role === 'admin' || account.role === 'owner')
+  ) {
+    return { isAuthenticated: true, role: account.role };
+  }
+
+  return fallbackSession;
 }
 
 export default App;

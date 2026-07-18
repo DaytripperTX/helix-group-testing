@@ -40,11 +40,12 @@ import {
   createLogoutCookie,
   getCoaRoundAccess,
   getCoaRoundPasscodeFingerprint,
-  getAdminSession,
   getPublicSession,
+  isLegacyAdminAuthEnabled,
   validateCoaRoundPasscode,
   validateRolePassword,
 } from './helix-auth.mjs';
+import { resolveAdminSession } from './helix-account-auth.mjs';
 import { parsePeptideBatch } from './peptide-batch-parser.mjs';
 import { parseRoundPeptideBatch } from './round-peptide-batch-parser.mjs';
 import { parseCoaBatchRows } from './coa-batch-parser.mjs';
@@ -69,10 +70,30 @@ export async function handleHelixApiRequest(request) {
   const method = request.method.toUpperCase();
   const pathname = normalizeApiPath(request.pathname);
 
+  if (
+    request.identityUser
+    && !['GET', 'HEAD', 'OPTIONS'].includes(method)
+    && !request.identityOriginVerified
+  ) {
+    return jsonResponse(403, { error: 'Origin not allowed.' });
+  }
+
+  let adminSessionPromise;
+  const getRequestAdminSession = () => {
+    if (!adminSessionPromise) {
+      adminSessionPromise = resolveAdminSession({
+        identityUser: request.identityUser,
+        headers: request.headers,
+      });
+    }
+
+    return adminSessionPromise;
+  };
+
   try {
     if (method === 'GET' && pathname.startsWith('/api/data/')) {
       const collectionName = getPathPart(pathname, 3);
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session && !isPublicCollectionRead(collectionName)) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -100,7 +121,7 @@ export async function handleHelixApiRequest(request) {
     if (method === 'GET' && pathname.startsWith('/api/labels/') && getPathPart(pathname, 4) === 'preview') {
       const labelId = decodeURIComponent(getPathPart(pathname, 3));
       const preview = await readLabelTemplatePreviewAsset(labelId, {
-        isAdmin: Boolean(getAdminSession(request.headers)),
+        isAdmin: Boolean(await getRequestAdminSession()),
       });
 
       return binaryResponse(200, preview.buffer, {
@@ -114,7 +135,7 @@ export async function handleHelixApiRequest(request) {
       const coaId = decodeURIComponent(getPathPart(pathname, 3));
       const pdf = await readCoaPdfAsset(coaId, {
         headers: request.headers,
-        isAdmin: Boolean(getAdminSession(request.headers)),
+        isAdmin: Boolean(await getRequestAdminSession()),
       });
 
       return binaryResponse(200, pdf.buffer, {
@@ -128,7 +149,7 @@ export async function handleHelixApiRequest(request) {
       const coaId = decodeURIComponent(getPathPart(pathname, 3));
       const image = await readCoaVialImageAsset(coaId, {
         headers: request.headers,
-        isAdmin: Boolean(getAdminSession(request.headers)),
+        isAdmin: Boolean(await getRequestAdminSession()),
       });
 
       return binaryResponse(200, image.buffer, {
@@ -165,7 +186,7 @@ export async function handleHelixApiRequest(request) {
       if (method === 'GET') {
         return jsonResponse(
           200,
-          getAdminSession(request.headers)
+          await getRequestAdminSession()
             ? await readCollection('label-templates')
             : await readPublicLabelTemplates(),
         );
@@ -179,6 +200,10 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/login' && method === 'POST') {
+      if (!isLegacyAdminAuthEnabled()) {
+        return jsonResponse(404, { error: 'Legacy admin login is disabled.' });
+      }
+
       const body = parseJsonBody(request.bodyText);
       const role = body?.role === 'owner' ? 'owner' : 'admin';
       const lockoutResponse = getLoginLockoutResponse(request.headers, role);
@@ -200,7 +225,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/session' && method === 'GET') {
-      return jsonResponse(200, getPublicSession(getAdminSession(request.headers)));
+      return jsonResponse(200, getPublicSession(await getRequestAdminSession()));
     }
 
     if (pathname === '/api/admin/logout' && method === 'POST') {
@@ -208,7 +233,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/database/labels/status' && method === 'GET') {
-      const ownerResponse = requireOwnerSession(request.headers);
+      const ownerResponse = requireOwnerSession(await getRequestAdminSession());
 
       if (ownerResponse) {
         return ownerResponse;
@@ -218,7 +243,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/database/labels/verify' && method === 'POST') {
-      const ownerResponse = requireOwnerSession(request.headers);
+      const ownerResponse = requireOwnerSession(await getRequestAdminSession());
 
       if (ownerResponse) {
         return ownerResponse;
@@ -228,7 +253,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/database/labels/backfill' && method === 'POST') {
-      const ownerResponse = requireOwnerSession(request.headers);
+      const ownerResponse = requireOwnerSession(await getRequestAdminSession());
 
       if (ownerResponse) {
         return ownerResponse;
@@ -238,7 +263,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/database/labels/repair' && method === 'POST') {
-      const ownerResponse = requireOwnerSession(request.headers);
+      const ownerResponse = requireOwnerSession(await getRequestAdminSession());
 
       if (ownerResponse) {
         return ownerResponse;
@@ -249,7 +274,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/assets/vendor-price-sheet' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -259,7 +284,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/assets/coa-pdf' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -269,7 +294,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/assets/coa-pdf-identify' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -279,7 +304,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if ((pathname === '/api/admin/wiki/search' || pathname === '/api/admin/peptidepedia/search') && method === 'GET') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -290,7 +315,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/vendor-price-lists/parse' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -309,7 +334,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/peptides/parse-batch' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -325,7 +350,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/peptides/import-batch' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -336,7 +361,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/peptide-categories/import-batch' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -347,7 +372,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/rounds/parse-peptides' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -365,7 +390,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/rounds/import-batch' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -376,7 +401,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/coas/parse-batch-numbers' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -391,7 +416,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/coas/import-batch' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -402,7 +427,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname === '/api/admin/coas/delete-batch' && method === 'POST') {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -413,7 +438,7 @@ export async function handleHelixApiRequest(request) {
     }
 
     if (pathname.startsWith('/api/admin/data/')) {
-      const session = getAdminSession(request.headers);
+      const session = await getRequestAdminSession();
 
       if (!session) {
         return jsonResponse(401, { error: 'Admin login required' });
@@ -517,9 +542,7 @@ export function binaryResponse(statusCode, buffer, headers = {}) {
   };
 }
 
-function requireOwnerSession(headers) {
-  const session = getAdminSession(headers);
-
+function requireOwnerSession(session) {
   if (!session) {
     return jsonResponse(401, { error: 'Admin login required' });
   }

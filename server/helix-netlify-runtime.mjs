@@ -1,16 +1,48 @@
 import { connectLambda, setEnvironmentContext } from '@netlify/blobs';
+import { getUser, verifyRequestOrigin } from '@netlify/identity';
 import { handleHelixApiRequest } from './helix-api.mjs';
 
 export async function handleHelixNetlifyRequest(request) {
+  const identityUser = await getOptionalIdentityUser();
+  let identityOriginVerified = false;
+
+  if (identityUser && !isSafeHttpMethod(request.method)) {
+    try {
+      verifyRequestOrigin(request);
+      identityOriginVerified = true;
+    } catch {
+      return Response.json({ error: 'Origin not allowed.' }, {
+        status: 403,
+        headers: { 'Cache-Control': 'private, no-store' },
+      });
+    }
+  }
+
   const result = await handleHelixApiRequest({
     method: request.method ?? 'GET',
     pathname: new URL(request.url).pathname,
     url: request.url,
     headers: Object.fromEntries(request.headers.entries()),
     bodyText: await request.text(),
+    identityUser,
+    identityOriginVerified,
   });
 
   return createWebResponse(result);
+}
+
+function isSafeHttpMethod(method) {
+  return ['GET', 'HEAD', 'OPTIONS'].includes(String(method ?? 'GET').toUpperCase());
+}
+
+async function getOptionalIdentityUser() {
+  try {
+    return await getUser();
+  } catch {
+    // Identity may be disabled or unavailable. Public APIs remain public and
+    // protected APIs fail closed through their normal unauthenticated path.
+    return null;
+  }
 }
 
 export async function handleHelixLambdaEvent(event) {

@@ -6,6 +6,7 @@ import path from 'node:path';
 const testDataDir = path.resolve('.tmp', 'wiki-link-security-test-data');
 process.env.HELIX_LOCAL_DATA_DIR = testDataDir;
 process.env.HELIX_ALLOW_LOCAL_DEFAULTS = 'true';
+process.env.HELIX_LEGACY_ADMIN_AUTH = 'true';
 
 const { handleHelixApiRequest } = await import('../server/helix-api.mjs');
 const { createAdminSessionCookie } = await import('../server/helix-auth.mjs');

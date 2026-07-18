@@ -15,6 +15,7 @@ process.env.HELIX_DATA_ADAPTER = 'local';
 process.env.HELIX_ADMIN_PASSWORD = 'database-test-admin';
 process.env.HELIX_OWNER_PASSWORD = 'database-test-owner';
 process.env.HELIX_ADMIN_SESSION_SECRET = 'database-test-session-secret';
+process.env.HELIX_LEGACY_ADMIN_AUTH = 'true';
 
 const { handleHelixApiRequest } = await import('../server/helix-api.mjs');
 const data = await import('../server/helix-data.mjs');

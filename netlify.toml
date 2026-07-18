@@ -16,6 +16,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/account/*"
+  to = "/.netlify/functions/account/:splat"
+  status = 200
+
+[[redirects]]
   from = "/api/labels"
   to = "/.netlify/functions/data/labels"
   status = 200
