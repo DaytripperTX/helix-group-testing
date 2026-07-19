@@ -6,6 +6,10 @@ import { resolve } from 'node:path';
 import { handleHelixApiNodeRequest } from './server/helix-node-adapter.mjs';
 import { parseDisabledPages } from './src/page-disables';
 
+const previewServerAllowedHosts = [
+  'devserver-feat-user-accounts--helix-group-testing.netlify.app',
+];
+
 export default defineConfig(({ mode }) => {
   const cwd = process.cwd();
   const env = loadEnv(mode, cwd, '');
@@ -17,6 +21,9 @@ export default defineConfig(({ mode }) => {
       __HELIX_DISABLED_PAGES__: JSON.stringify(disabledPages),
     },
     plugins: [react(), helixApiPlugin()],
+    server: {
+      allowedHosts: previewServerAllowedHosts,
+    },
   };
 });
 

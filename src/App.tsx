@@ -654,6 +654,7 @@ function App() {
   const [activePage, setActivePage] = useState<PageId>(getPageFromPath);
   const [adminSession, setAdminSession] = useState<AdminSession>({ isAuthenticated: false });
   const [accountSession, setAccountSession] = useState<AccountSession>(signedOutAccountSession);
+  const [isSessionResolved, setIsSessionResolved] = useState(false);
 
   useEffect(() => {
     const handleNavigation = () => {
@@ -694,6 +695,11 @@ function App() {
         if (isMounted) {
           setAccountSession(signedOutAccountSession);
           setAdminSession({ isAuthenticated: false });
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsSessionResolved(true);
         }
       });
 
@@ -755,6 +761,7 @@ function App() {
         accountSession={accountSession}
         activePage={activePage}
         isAdmin={adminSession.isAuthenticated}
+        isSessionLoading={!isSessionResolved}
         onLogout={logoutAccount}
         onNavigate={navigateTo}
       />
@@ -765,7 +772,8 @@ function App() {
         {activePage === 'coas' && <CoasPage isAdmin={adminSession.isAuthenticated} />}
         {activePage === 'labels' && <LabelsPage isAdmin={adminSession.isAuthenticated} />}
         {activePage === 'faqs' && <FaqsPage />}
-        {activePage === 'account' && (
+        {activePage === 'account' && !isSessionResolved && <AccountSessionLoading />}
+        {activePage === 'account' && isSessionResolved && (
           <AccountPage
             session={accountSession}
             onSessionChange={applyAccountSession}
@@ -773,7 +781,8 @@ function App() {
             onNavigate={navigateTo}
           />
         )}
-        {(activePage === 'hxadmin' || activePage === 'hxowner') && (
+        {(activePage === 'hxadmin' || activePage === 'hxowner') && !isSessionResolved && <AccountSessionLoading />}
+        {(activePage === 'hxadmin' || activePage === 'hxowner') && isSessionResolved && (
           <AdminPage
             session={adminSession}
             loginRole={activePage === 'hxowner' ? 'owner' : 'admin'}
@@ -792,19 +801,31 @@ function SiteHeader({
   accountSession,
   activePage,
   isAdmin,
+  isSessionLoading,
   onLogout,
   onNavigate,
 }: {
   accountSession: AccountSession;
   activePage: PageId;
   isAdmin: boolean;
+  isSessionLoading: boolean;
   onLogout: () => Promise<void>;
   onNavigate: (path: string) => void;
 }) {
   const enabledNavItems = navItems.filter((item) => !disabledPages.has(item.id));
-  const visibleNavItems = isAdmin && !accountSession.account
-    ? [...enabledNavItems, { id: 'hxadmin', label: 'Admin', path: '/hxadmin' } as const]
-    : enabledNavItems;
+  const accountAdminItem = accountSession.account?.status === 'active'
+    && (accountSession.account.role === 'admin' || accountSession.account.role === 'owner')
+    ? {
+        id: accountSession.account.role === 'owner' ? 'hxowner' : 'hxadmin',
+        label: 'Admin',
+        path: accountSession.account.role === 'owner' ? '/hxowner' : '/hxadmin',
+      } as const
+    : null;
+  const legacyAdminItem = isAdmin && !accountSession.account
+    ? { id: 'hxadmin', label: 'Admin', path: '/hxadmin' } as const
+    : null;
+  const adminItem = accountAdminItem ?? legacyAdminItem;
+  const visibleNavItems = adminItem ? [...enabledNavItems, adminItem] : enabledNavItems;
 
   return (
     <header className="brand-band">
@@ -829,7 +850,7 @@ function SiteHeader({
               className={[
                 'site-nav__link',
                 item.id === activePage ? 'is-active' : '',
-                item.id === 'hxadmin' ? 'site-nav__link--admin' : '',
+                item.id === 'hxadmin' || item.id === 'hxowner' ? 'site-nav__link--admin' : '',
               ]
                 .filter(Boolean)
                 .join(' ')}
@@ -846,7 +867,9 @@ function SiteHeader({
         </nav>
 
         <div className="site-account-actions">
-          {accountSession.account ? (
+          {isSessionLoading ? (
+            <span className="site-account-loading" role="status">Loading account...</span>
+          ) : accountSession.account ? (
             <details className="site-account-menu">
               <summary>{accountSession.account.username}</summary>
               <div className="site-account-menu__panel">
@@ -913,6 +936,17 @@ function SiteHeader({
         </div>
       </div>
     </header>
+  );
+}
+
+function AccountSessionLoading() {
+  return (
+    <section className="account-page account-page--centered" aria-busy="true" aria-live="polite">
+      <div className="account-auth-card">
+        <p className="eyebrow">Helix account</p>
+        <h1>Loading account...</h1>
+      </div>
+    </section>
   );
 }
 

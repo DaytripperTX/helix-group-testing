@@ -155,6 +155,15 @@ test('admin invitations are email-bound, hashed, transactional, revocable, and o
 
   const admins = await repository.listAdminAccounts(owner.id);
   assert.deepEqual(admins.map((account) => account.username), ['FutureAdmin']);
+  assert.deepEqual(
+    (await repository.listOwnerManagedAccounts(owner.id)).map((account) => account.username),
+    ['FutureAdmin', 'WrongUser'],
+  );
+  assert.equal((await repository.getOwnerManagedAccount(owner.id, recipient.id)).identityUserId, 'identity-admin');
+  await assert.rejects(
+    repository.getOwnerManagedAccount(owner.id, owner.id),
+    (error) => error.statusCode === 404,
+  );
   assert.equal((await repository.demoteAdminAccount(owner.id, recipient.id)).role, 'user');
 
   const revocable = await repository.createAdminInvite(owner.id, 'another@example.com');

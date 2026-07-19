@@ -446,9 +446,15 @@ export async function acceptAdminInvite(accountId, token, now = new Date().toISO
        SET consumed_by_account_id = $2,
            consumed_at = $3
        WHERE id = $1
+         AND consumed_at IS NULL
+         AND revoked_at IS NULL
        RETURNING *`,
       [invite.id, accountId, now],
     );
+
+    if (!consumedInviteResult.rows[0]) {
+      throw createAccountError(404, 'Invitation is invalid or has already been used.');
+    }
 
     await client.query('COMMIT');
     return {
@@ -477,6 +483,52 @@ export async function listAdminAccounts(ownerAccountId) {
     );
 
     return result.rows.map(toAccount);
+  } finally {
+    client.release();
+  }
+}
+
+export async function listOwnerManagedAccounts(ownerAccountId) {
+  const database = getAccountDatabase();
+  const client = await database.pool.connect();
+
+  try {
+    await assertOwnerAccount(client, ownerAccountId);
+    const result = await client.query(
+      `SELECT *
+       FROM accounts
+       WHERE id <> $1
+       ORDER BY username_normalized, id`,
+      [ownerAccountId],
+    );
+
+    return result.rows.map(toAccount);
+  } finally {
+    client.release();
+  }
+}
+
+export async function getOwnerManagedAccount(ownerAccountId, managedAccountId) {
+  const database = getAccountDatabase();
+  const client = await database.pool.connect();
+
+  try {
+    await assertOwnerAccount(client, ownerAccountId);
+    const result = await client.query(
+      `SELECT *
+       FROM accounts
+       WHERE id = $1
+         AND id <> $2
+         AND role <> 'owner'
+       LIMIT 1`,
+      [managedAccountId, ownerAccountId],
+    );
+
+    if (!result.rows[0]) {
+      throw createAccountError(404, 'Account not found.');
+    }
+
+    return toAccount(result.rows[0]);
   } finally {
     client.release();
   }

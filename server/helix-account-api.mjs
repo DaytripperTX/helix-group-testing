@@ -11,10 +11,13 @@ import {
   acceptAdminInvite,
   cancelAccountDeletion,
   createAdminInvite,
+  deleteAccountByIdentityUserId,
   demoteAdminAccount,
+  getOwnerManagedAccount,
   isAccountUsernameAvailable,
   listAdminAccounts,
   listAdminInvites,
+  listOwnerManagedAccounts,
   requestAccountDeletion,
   revokeAdminInvite,
   syncAccountFromIdentity,
@@ -224,12 +227,16 @@ export async function handleAccountRequest(request, identity = defaultIdentitySe
       const { user, account } = await requireActiveAccount(identity);
       const body = await readJsonBody(request);
 
+      if (account.role === 'owner') {
+        throw createAccountApiError(403, 'The owner account cannot be deleted.');
+      }
+
       if (!hasRecentAccountAuthentication(request.headers, user.id)) {
         throw createAccountApiError(401, 'Recent authentication is required.');
       }
 
-      if (String(body?.username ?? '').trim() !== account.username) {
-        throw createAccountApiError(400, 'Type your username exactly to confirm deletion.');
+      if (body?.confirm !== true) {
+        throw createAccountApiError(400, 'Confirm account deletion to continue.');
       }
 
       const pendingAccount = await requestAccountDeletion(account.id);
@@ -288,10 +295,17 @@ export async function handleAccountRequest(request, identity = defaultIdentitySe
         assertRequestOrigin(request, identity);
         const body = await readJsonBody(request);
         const created = await createAdminInvite(account.id, body?.email);
+        const inviteLink = `${requestUrl.origin}/account?admin_invite=${encodeURIComponent(created.token)}`;
+        const emailDelivery = await sendAdminInviteEmail({
+          request,
+          recipientEmail: created.invite.recipientEmail,
+          inviteLink,
+        });
 
         return accountJsonResponse(201, {
           invite: created.invite,
-          inviteLink: `${requestUrl.origin}/account?admin_invite=${encodeURIComponent(created.token)}`,
+          inviteLink,
+          emailDelivery,
         });
       }
     }
@@ -309,6 +323,44 @@ export async function handleAccountRequest(request, identity = defaultIdentitySe
     if (method === 'GET' && pathname === '/api/account/admins') {
       const { account } = await requireOwnerAccount(identity);
       return accountJsonResponse(200, { accounts: await listAdminAccounts(account.id) });
+    }
+
+    if (method === 'GET' && pathname === '/api/account/accounts') {
+      const { account } = await requireOwnerAccount(identity);
+      return accountJsonResponse(200, { accounts: await listOwnerManagedAccounts(account.id) });
+    }
+
+    if (method === 'DELETE' && pathname.startsWith('/api/account/accounts/')) {
+      assertRequestOrigin(request, identity);
+      const { account: ownerAccount } = await requireOwnerAccount(identity);
+      const managedAccountId = decodeURIComponent(pathname.slice('/api/account/accounts/'.length));
+      const managedAccount = await getOwnerManagedAccount(ownerAccount.id, managedAccountId);
+
+      if (!identity.admin?.deleteUser) {
+        throw createAccountApiError(503, 'Identity account deletion is unavailable.');
+      }
+
+      try {
+        await identity.admin.deleteUser(managedAccount.identityUserId);
+      } catch (error) {
+        if (isMissingIdentityOperatorTokenError(error)) {
+          throw createAccountApiError(
+            409,
+            'Force deletion must be run from a deployed Netlify Preview Server or production site; Netlify Dev does not provide the Identity operator token.',
+            error,
+          );
+        }
+
+        if (!isIdentityNotFoundError(error)) {
+          throw createAccountApiError(502, 'Identity account could not be deleted.', error);
+        }
+      }
+
+      await deleteAccountByIdentityUserId(managedAccount.identityUserId);
+      return accountJsonResponse(200, {
+        ok: true,
+        account: toPublicAccount(managedAccount),
+      });
     }
 
     if (method === 'POST' && pathname.startsWith('/api/account/admins/') && pathname.endsWith('/demote')) {
@@ -391,6 +443,62 @@ async function updateIdentityUsername(identity, user, username) {
       message: error?.message,
     });
   }
+}
+
+async function sendAdminInviteEmail({ request, recipientEmail, inviteLink }) {
+  const emailSecret = String(process.env.NETLIFY_EMAILS_SECRET ?? '').trim();
+  const from = String(process.env.HELIX_ADMIN_INVITE_FROM ?? '').trim();
+
+  if (!emailSecret || !from) {
+    return 'not_configured';
+  }
+
+  const emailOrigin = new URL(request.url).origin;
+  const cookie = request.headers.get('cookie');
+
+  try {
+    const response = await fetch(`${emailOrigin}/.netlify/functions/emails/admin-invite`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'netlify-emails-secret': emailSecret,
+        ...(cookie ? { cookie } : {}),
+      },
+      body: JSON.stringify({
+        from,
+        to: recipientEmail,
+        subject: 'Your Helix admin invitation',
+        parameters: {
+          inviteLink,
+          recipientEmail,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn('[helix-account-api] admin invitation email failed', {
+        recipientEmail,
+        status: response.status,
+      });
+      return 'failed';
+    }
+
+    return 'sent';
+  } catch (error) {
+    console.warn('[helix-account-api] admin invitation email failed', {
+      recipientEmail,
+      message: error?.message,
+    });
+    return 'failed';
+  }
+}
+
+function isIdentityNotFoundError(error) {
+  return Number(error?.statusCode ?? error?.status) === 404;
+}
+
+function isMissingIdentityOperatorTokenError(error) {
+  return /operator token/i.test(String(error?.message ?? ''));
 }
 
 function assertRequestOrigin(request, identity) {

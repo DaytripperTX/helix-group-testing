@@ -18,6 +18,8 @@ process.env.HELIX_DATA_ADAPTER = 'local';
 process.env.HELIX_LEGACY_ADMIN_AUTH = 'false';
 process.env.HELIX_LOCAL_DATA_DIR = testDataDir;
 process.env.HELIX_OWNER_EMAIL = 'owner@example.com';
+delete process.env.HELIX_ADMIN_INVITE_FROM;
+delete process.env.NETLIFY_EMAILS_SECRET;
 
 before(async () => {
   process.env.NETLIFY_DB_URL = await database.start();
@@ -141,6 +143,7 @@ test('owner creates an email-bound link that promotes one matching account and c
 
   assert.equal(inviteResponse.status, 201);
   assert.ok(token);
+  assert.equal(invitation.emailDelivery, 'not_configured');
 
   identity.currentUser = adminUser;
   const acceptResponse = await accountRequest('/api/account/admin-invites/accept', 'POST', { token }, identity);
@@ -159,6 +162,98 @@ test('owner creates an email-bound link that promotes one matching account and c
     identity,
   );
   assert.equal((await demoteResponse.json()).account.role, 'user');
+
+  const accountsResponse = await accountRequest('/api/account/accounts', 'GET', undefined, identity);
+  const accounts = await accountsResponse.json();
+  assert.deepEqual(accounts.accounts.map((account) => account.username), ['AdminCandidate']);
+
+  identity.admin.deleteUser = async () => {
+    throw new Error('Admin operations require an operator token (only available in Netlify Functions)');
+  };
+  const localForceDeleteResponse = await accountRequest(
+    `/api/account/accounts/${accounts.accounts[0].id}`,
+    'DELETE',
+    undefined,
+    identity,
+  );
+  assert.equal(localForceDeleteResponse.status, 409);
+  assert.match((await localForceDeleteResponse.json()).error, /Preview Server/i);
+  assert.notEqual(await repository.getAccountByIdentityUserId('identity-admin'), null);
+
+  identity.admin.deleteUser = async (id) => {
+    identity.adminDeletedIds.push(id);
+  };
+
+  const forceDeleteResponse = await accountRequest(
+    `/api/account/accounts/${accounts.accounts[0].id}`,
+    'DELETE',
+    undefined,
+    identity,
+  );
+  assert.equal(forceDeleteResponse.status, 200);
+  assert.deepEqual(identity.adminDeletedIds, ['identity-admin']);
+  assert.equal(await repository.getAccountByIdentityUserId('identity-admin'), null);
+
+  const ownerDeleteResponse = await accountRequest(
+    `/api/account/accounts/${(await repository.getAccountByIdentityUserId('identity-owner')).id}`,
+    'DELETE',
+    undefined,
+    identity,
+  );
+  assert.equal(ownerDeleteResponse.status, 404);
+
+  const ownerSelfDeleteResponse = await accountRequest(
+    '/api/account/deletion/request',
+    'POST',
+    { confirm: true },
+    identity,
+  );
+  assert.equal(ownerSelfDeleteResponse.status, 403);
+  assert.match((await ownerSelfDeleteResponse.json()).error, /owner account cannot be deleted/i);
+});
+
+test('configured admin invitations are sent through the Netlify email handler with preview cookies', async () => {
+  const ownerUser = createIdentityUser({
+    id: 'identity-email-owner',
+    email: 'owner@example.com',
+    username: 'EmailOwner',
+  });
+  const identity = createFakeIdentity(ownerUser);
+  await repository.syncAccountFromIdentity(ownerUser);
+
+  const originalFetch = globalThis.fetch;
+  let emailRequest;
+
+  process.env.HELIX_ADMIN_INVITE_FROM = 'accounts@helix.test';
+  process.env.NETLIFY_EMAILS_SECRET = 'test-email-handler-secret';
+  globalThis.fetch = async (url, options) => {
+    emailRequest = { url: String(url), options };
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+
+  try {
+    const response = await accountRequest(
+      '/api/account/admin-invites',
+      'POST',
+      { email: 'new-admin@example.com' },
+      identity,
+      'nf_preview_auth=preview-cookie',
+    );
+    const body = await response.json();
+    const emailBody = JSON.parse(emailRequest.options.body);
+
+    assert.equal(response.status, 201);
+    assert.equal(body.emailDelivery, 'sent');
+    assert.equal(emailRequest.url, 'https://helix.test/.netlify/functions/emails/admin-invite');
+    assert.equal(emailRequest.options.headers.cookie, 'nf_preview_auth=preview-cookie');
+    assert.equal(emailBody.to, 'new-admin@example.com');
+    assert.equal(emailBody.from, 'accounts@helix.test');
+    assert.equal(emailBody.parameters.inviteLink, body.inviteLink);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.HELIX_ADMIN_INVITE_FROM;
+    delete process.env.NETLIFY_EMAILS_SECRET;
+  }
 });
 
 test('Postgres roles authorize existing admin APIs while users and pending accounts fail closed', async () => {
@@ -207,7 +302,7 @@ test('sensitive deletion requires reauthentication, supports cancellation, and c
   })).account;
 
   const withoutRecentAuth = await accountRequest('/api/account/deletion/request', 'POST', {
-    username: 'DeleteMe',
+    confirm: true,
   }, identity);
   assert.equal(withoutRecentAuth.status, 401);
 
@@ -218,8 +313,11 @@ test('sensitive deletion requires reauthentication, supports cancellation, and c
   const recentCookie = getCookiePair(reauthResponse.headers.get('set-cookie'), 'helix_recent_account_auth');
   assert.ok(recentCookie);
 
+  const withoutConfirmation = await accountRequest('/api/account/deletion/request', 'POST', {}, identity, recentCookie);
+  assert.equal(withoutConfirmation.status, 400);
+
   const deletionResponse = await accountRequest('/api/account/deletion/request', 'POST', {
-    username: 'DeleteMe',
+    confirm: true,
   }, identity, recentCookie);
   assert.equal(deletionResponse.status, 202);
   assert.equal((await repository.getAccountById(account.id)).status, 'deletion_pending');
@@ -283,9 +381,13 @@ function createFakeIdentity(initialUser = null) {
     currentUser: initialUser,
     signupCalls: [],
     adminUpdates: [],
+    adminDeletedIds: [],
     admin: {
       async updateUser(id, attributes) {
         fakeIdentity.adminUpdates.push({ id, attributes });
+      },
+      async deleteUser(id) {
+        fakeIdentity.adminDeletedIds.push(id);
       },
     },
     async getUser() {

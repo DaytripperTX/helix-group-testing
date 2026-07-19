@@ -5415,6 +5415,13 @@ h2 {
   gap: 8px;
 }
 
+.site-account-loading {
+  color: #c4d4dc;
+  font-size: 0.82rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
 .site-account-link,
 .site-account-menu summary {
   border: 1px solid rgba(212, 155, 255, 0.46);
@@ -5735,6 +5742,17 @@ h2 {
   margin-top: 24px;
 }
 
+.account-managed-accounts {
+  margin-top: 24px;
+}
+
+.account-card .account-local-notice {
+  border-left: 3px solid #8f60ad;
+  padding-left: 10px;
+  color: #513168;
+  font-size: 0.86rem;
+}
+
 .account-management-row {
   display: flex;
   align-items: center;
@@ -5764,6 +5782,10 @@ h2 {
   padding: 8px 10px;
   background: #5f3a78;
   font-size: 0.8rem;
+}
+
+.account-management-row .account-management-row__danger {
+  background: #a92735;
 }
 
 .account-signout-button {

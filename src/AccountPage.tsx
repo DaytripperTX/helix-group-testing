@@ -13,7 +13,9 @@ type AdminInvite = {
   revokedAt?: string;
 };
 
-type ManagedAdmin = AccountRecord;
+type ManagedAccount = AccountRecord;
+
+type AdminInviteDelivery = 'sent' | 'not_configured' | 'failed';
 
 const inviteStorageKey = 'helix_admin_invite_token';
 const oauthIntentStorageKey = 'helix_oauth_intent';
@@ -41,12 +43,14 @@ function AccountPage({
   const [status, setStatus] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecentAuthReady, setIsRecentAuthReady] = useState(false);
-  const [deletionUsername, setDeletionUsername] = useState('');
   const [scheduledDeletionDate, setScheduledDeletionDate] = useState('');
   const [adminInvites, setAdminInvites] = useState<AdminInvite[]>([]);
-  const [managedAdmins, setManagedAdmins] = useState<ManagedAdmin[]>([]);
+  const [managedAdmins, setManagedAdmins] = useState<ManagedAccount[]>([]);
+  const [managedAccounts, setManagedAccounts] = useState<ManagedAccount[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [newInviteLink, setNewInviteLink] = useState('');
+  const isLocalIdentityAdminUnavailable = ['localhost', '127.0.0.1', '[::1]', '::1']
+    .includes(window.location.hostname);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -102,7 +106,7 @@ function AccountPage({
           window.sessionStorage.removeItem(oauthIntentStorageKey);
           await accountFetch('/api/account/reauth/google', { method: 'POST', body: {} });
           setIsRecentAuthReady(true);
-          setStatus('Google sign-in verified. Confirm your username below.');
+          setStatus('Google sign-in verified. You can now delete your account.');
         } else {
           window.sessionStorage.removeItem(oauthIntentStorageKey);
           setStatus('Signed in.');
@@ -151,6 +155,7 @@ function AccountPage({
     if (session.account?.role !== 'owner' || session.account.status !== 'active') {
       setAdminInvites([]);
       setManagedAdmins([]);
+      setManagedAccounts([]);
       return;
     }
 
@@ -159,12 +164,14 @@ function AccountPage({
 
   const refreshOwnerData = async () => {
     try {
-      const [inviteResult, adminResult] = await Promise.all([
+      const [inviteResult, adminResult, accountResult] = await Promise.all([
         accountFetch<{ invites: AdminInvite[] }>('/api/account/admin-invites'),
-        accountFetch<{ accounts: ManagedAdmin[] }>('/api/account/admins'),
+        accountFetch<{ accounts: ManagedAccount[] }>('/api/account/admins'),
+        accountFetch<{ accounts: ManagedAccount[] }>('/api/account/accounts'),
       ]);
       setAdminInvites(inviteResult.invites);
       setManagedAdmins(adminResult.accounts);
+      setManagedAccounts(accountResult.accounts);
     } catch (error) {
       setStatus(getErrorMessage(error, 'Admin account list could not be loaded.'));
     }
@@ -333,7 +340,7 @@ function AccountPage({
       });
       setPassword('');
       setIsRecentAuthReady(true);
-      setStatus('Password verified. Confirm your username below.');
+      setStatus('Password verified. You can now delete your account.');
     } catch (error) {
       setStatus(getErrorMessage(error, 'Password was not recognized.'));
     } finally {
@@ -341,17 +348,19 @@ function AccountPage({
     }
   };
 
-  const requestDeletion = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const requestDeletion = async () => {
+    if (!window.confirm('Schedule this account for permanent deletion in seven days?')) {
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
       const result = await accountFetch<{ deletionScheduledFor: string }>('/api/account/deletion/request', {
         method: 'POST',
-        body: { username: deletionUsername },
+        body: { confirm: true },
       });
       setScheduledDeletionDate(result.deletionScheduledFor);
-      setDeletionUsername('');
       setIsRecentAuthReady(false);
       onSessionChange({ isAuthenticated: false, legacyAuthEnabled: session.legacyAuthEnabled });
     } catch (error) {
@@ -383,13 +392,17 @@ function AccountPage({
     setIsSubmitting(true);
 
     try {
-      const result = await accountFetch<{ invite: AdminInvite; inviteLink: string }>('/api/account/admin-invites', {
+      const result = await accountFetch<{
+        invite: AdminInvite;
+        inviteLink: string;
+        emailDelivery: AdminInviteDelivery;
+      }>('/api/account/admin-invites', {
         method: 'POST',
         body: { email: inviteEmail },
       });
       setNewInviteLink(result.inviteLink);
       setInviteEmail('');
-      setStatus('Admin link created. Copy it now; it cannot be shown again.');
+      setStatus(getInviteDeliveryStatus(result.emailDelivery));
       await refreshOwnerData();
     } catch (error) {
       setStatus(getErrorMessage(error, 'Admin link could not be created.'));
@@ -427,6 +440,26 @@ function AccountPage({
       await refreshOwnerData();
     } catch (error) {
       setStatus(getErrorMessage(error, 'Admin access could not be removed.'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const forceDeleteAccount = async (account: ManagedAccount) => {
+    if (!window.confirm(`Permanently delete ${account.username} (${account.email}) now? This cannot be undone.`)) {
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      await accountFetch(`/api/account/accounts/${encodeURIComponent(account.id)}`, {
+        method: 'DELETE',
+      });
+      setStatus(`${account.username} was permanently deleted.`);
+      await refreshOwnerData();
+    } catch (error) {
+      setStatus(getErrorMessage(error, 'Account could not be deleted.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -572,7 +605,7 @@ function AccountPage({
             <h2 id="admin-accounts-title">Admin accounts</h2>
             <form className="account-inline-form" onSubmit={submitAdminInvite}>
               <AccountField label="Admin email" type="email" value={inviteEmail} autoComplete="email" onChange={setInviteEmail} />
-              <button type="submit" disabled={isSubmitting || !inviteEmail.trim()}>Create 7-day link</button>
+              <button type="submit" disabled={isSubmitting || !inviteEmail.trim()}>Send 7-day link</button>
             </form>
 
             {newInviteLink && (
@@ -616,33 +649,62 @@ function AccountPage({
                 ))}
               </div>
             </div>
+
+            <div className="account-managed-accounts">
+              <h3>All accounts</h3>
+              <p>Force delete removes both the Identity login and PostgreSQL account immediately.</p>
+              {isLocalIdentityAdminUnavailable && (
+                <p className="account-local-notice">
+                  Force deletion must be tested on a deployed Netlify Preview Server because Netlify Dev does not provide the Identity operator token.
+                </p>
+              )}
+              {managedAccounts.length === 0 && <p>No other accounts.</p>}
+              {managedAccounts.map((account) => (
+                <article className="account-management-row" key={account.id}>
+                  <div>
+                    <strong>{account.username}</strong>
+                    <small>{account.email} · {account.role} · {account.status.replace('_', ' ')}</small>
+                  </div>
+                  <button
+                    className="account-management-row__danger"
+                    type="button"
+                    disabled={isSubmitting || isLocalIdentityAdminUnavailable}
+                    title={isLocalIdentityAdminUnavailable ? 'Available on a deployed Netlify Preview Server' : undefined}
+                    onClick={() => forceDeleteAccount(account)}
+                  >
+                    Force delete
+                  </button>
+                </article>
+              ))}
+            </div>
           </section>
         )}
 
-        <section className="account-card account-card--danger" aria-labelledby="delete-account-title">
-          <h2 id="delete-account-title">Delete account</h2>
-          <p>Deletion removes account access now and becomes permanent after seven days.</p>
+        {session.account.role !== 'owner' && (
+          <section className="account-card account-card--danger" aria-labelledby="delete-account-title">
+            <h2 id="delete-account-title">Delete account</h2>
+            <p>Deletion removes account access now and becomes permanent after seven days.</p>
 
-          {!isRecentAuthReady && session.identity?.provider === 'google' && (
-            <button type="button" disabled={isSubmitting} onClick={() => startGoogle('delete')}>
-              Verify with Google
-            </button>
-          )}
+            {!isRecentAuthReady && session.identity?.provider === 'google' && (
+              <button type="button" disabled={isSubmitting} onClick={() => startGoogle('delete')}>
+                Verify with Google
+              </button>
+            )}
 
-          {!isRecentAuthReady && session.identity?.provider !== 'google' && (
-            <form className="account-inline-form" onSubmit={verifyPasswordForDeletion}>
-              <AccountField label="Password" type="password" value={password} autoComplete="current-password" onChange={setPassword} />
-              <button type="submit" disabled={isSubmitting || !password}>Verify password</button>
-            </form>
-          )}
+            {!isRecentAuthReady && session.identity?.provider !== 'google' && (
+              <form className="account-inline-form" onSubmit={verifyPasswordForDeletion}>
+                <AccountField label="Password" type="password" value={password} autoComplete="current-password" onChange={setPassword} />
+                <button type="submit" disabled={isSubmitting || !password}>Verify password</button>
+              </form>
+            )}
 
-          {isRecentAuthReady && (
-            <form className="account-inline-form" onSubmit={requestDeletion}>
-              <AccountField label={`Type ${session.account.username}`} value={deletionUsername} onChange={setDeletionUsername} />
-              <button className="account-danger-button" type="submit" disabled={isSubmitting}>Schedule deletion</button>
-            </form>
-          )}
-        </section>
+            {isRecentAuthReady && (
+              <button className="account-danger-button" type="button" disabled={isSubmitting} onClick={requestDeletion}>
+                Schedule deletion
+              </button>
+            )}
+          </section>
+        )}
 
         <button className="account-signout-button" type="button" disabled={isSubmitting} onClick={signOut}>Sign out</button>
       </div>
@@ -752,6 +814,18 @@ function formatInviteState(invite: AdminInvite) {
   }
 
   return `Expires ${formatDateTime(invite.expiresAt)}`;
+}
+
+function getInviteDeliveryStatus(delivery: AdminInviteDelivery) {
+  if (delivery === 'sent') {
+    return 'Admin link emailed. The copy link is also available until you leave this page.';
+  }
+
+  if (delivery === 'failed') {
+    return 'Admin link created, but email delivery failed. Copy the link now.';
+  }
+
+  return 'Admin link created. Email delivery is not configured, so copy the link now.';
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
