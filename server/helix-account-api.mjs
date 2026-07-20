@@ -351,7 +351,7 @@ export async function handleAccountRequest(request, identity = defaultIdentitySe
         if (isMissingIdentityOperatorTokenError(error)) {
           throw createAccountApiError(
             409,
-            'Force deletion must be run from a deployed Netlify Preview Server or production site; Netlify Dev does not provide the Identity operator token.',
+            'Force deletion must be run from a Netlify Deploy Preview or production site; Netlify Dev does not provide the Identity operator token.',
             error,
           );
         }

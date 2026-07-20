@@ -71,7 +71,7 @@ test('verified Identity profiles bootstrap one owner and enforce normalized user
   );
 });
 
-test('Netlify Preview Server loopback database URLs get an explicit Postgres user', async () => {
+test('Netlify Dev loopback database URLs get an explicit Postgres user', async () => {
   const runtimeConnectionString = process.env.NETLIFY_DB_URL;
   const runtimeDriver = process.env.NETLIFY_DB_DRIVER;
   const originalNetlify = globalThis.Netlify;

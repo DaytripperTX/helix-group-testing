@@ -215,7 +215,7 @@ test('owner creates an email-bound link that promotes one matching account and c
     identity,
   );
   assert.equal(localForceDeleteResponse.status, 409);
-  assert.match((await localForceDeleteResponse.json()).error, /Preview Server/i);
+  assert.match((await localForceDeleteResponse.json()).error, /Deploy Preview/i);
   assert.notEqual(await repository.getAccountByIdentityUserId('identity-admin'), null);
 
   identity.admin.deleteUser = async (id) => {

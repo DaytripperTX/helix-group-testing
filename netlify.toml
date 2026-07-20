@@ -9,9 +9,6 @@
   command = "npm run dev:netlify"
   targetPort = 5173
 
-[context.preview-server.environment]
-  PGUSER = "netlify"
-
 [[redirects]]
   from = "/api/data/*"
   to = "/.netlify/functions/data/:splat"

@@ -27,14 +27,14 @@ test('Netlify routes account requests to the Identity-aware function before SPA 
   );
 });
 
-test('Netlify Preview Servers apply database migrations before starting Vite', async () => {
+test('Netlify Dev applies database migrations before starting Vite', async () => {
   const [config, packageJson] = await Promise.all([
     readFile('netlify.toml', 'utf8'),
     readFile('package.json', 'utf8').then(JSON.parse),
   ]);
 
   assert.match(config, /\[dev\]\s+command = "npm run dev:netlify"\s+targetPort = 5173/);
-  assert.match(config, /\[context\.preview-server\.environment\]\s+PGUSER = "netlify"/);
+  assert.doesNotMatch(config, /\[context\.preview-server(?:\.|\])/);
   assert.equal(packageJson.scripts['dev:netlify'], 'node scripts/start-netlify-dev.mjs');
 
   const startupScript = await readFile('scripts/start-netlify-dev.mjs', 'utf8');

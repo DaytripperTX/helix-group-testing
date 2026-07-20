@@ -657,7 +657,7 @@ function AccountPage({
               <p>Force delete removes both the Identity login and PostgreSQL account immediately.</p>
               {isLocalIdentityAdminUnavailable && (
                 <p className="account-local-notice">
-                  Force deletion must be tested on a deployed Netlify Preview Server because Netlify Dev does not provide the Identity operator token.
+                  Force deletion must be tested on a Netlify Deploy Preview because Netlify Dev does not provide the Identity operator token.
                 </p>
               )}
               {managedAccounts.length === 0 && <p>No other accounts.</p>}
@@ -671,7 +671,7 @@ function AccountPage({
                     className="account-management-row__danger"
                     type="button"
                     disabled={isSubmitting || isLocalIdentityAdminUnavailable}
-                    title={isLocalIdentityAdminUnavailable ? 'Available on a deployed Netlify Preview Server' : undefined}
+                    title={isLocalIdentityAdminUnavailable ? 'Available on a Netlify Deploy Preview' : undefined}
                     onClick={() => forceDeleteAccount(account)}
                   >
                     Force delete

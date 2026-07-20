@@ -49,14 +49,14 @@ Do not put real values in `.env.example` or commit them to Git.
    callback URL shown by Netlify's Google-provider configuration as an
    authorized redirect URI. At the time of writing, Netlify uses
    `https://api.netlify.com/auth/done`; use the value displayed in the Netlify
-   UI if it differs. A branch or Preview Server URL does not need a separate
+   UI if it differs. A Deploy Preview URL does not need a separate
    Google client because Google returns to Netlify's broker callback first.
 5. Copy the client ID and client secret. In the existing Netlify project, go to
    **Project configuration > Identity > Registration > External providers**,
    add or configure Google, choose the custom/branded credentials option, and
    paste those values. Never put the secret in repository environment files.
 6. Save, redeploy the feature branch, and test **Continue with Google** on the
-   Preview Server. Confirm the consent screen names Helix, the callback returns
+   Deploy Preview. Confirm the consent screen names Helix, the callback returns
    to `/account`, a first-time user must choose a username, and a repeat login
    returns to the same PostgreSQL account.
 
@@ -78,7 +78,7 @@ and use the copyable invitation link.
    its API key. Keep the default `emails` directory.
 3. Add `HELIX_ADMIN_INVITE_FROM` as a secret environment variable with a sender
    address authorized by that provider. Scope it to Builds and Functions and to
-   the feature Preview Server context while testing.
+   the Deploy Preview context while testing.
 4. Deploy the branch. The committed `emails/admin-invite/index.html` template
    becomes the `admin-invite` handler.
 5. Create an invitation from **Account > Admin accounts** and verify the UI says
@@ -113,33 +113,40 @@ The plain Vite server and `server.mjs` still support public-page development,
 but they do not emulate Netlify Identity.
 
 The PostgreSQL repositories let `@netlify/database` select the database for the
-current environment. Netlify Preview Servers run through `netlify dev`, whose
-loopback database URL may omit a username in the cloud container; the shared
-database runtime adds the harmless `netlify` username only to that loopback URL.
-The configured Netlify dev command also applies pending migrations before Vite
-starts. Do not manually define `NETLIFY_DB_URL` for a Preview Server.
-`HELIX_DATABASE_URL` is reserved for an intentional external Postgres override.
+current environment. The configured Netlify dev command applies pending local
+migrations before Vite starts and supplies a harmless username when Netlify
+Dev's loopback PostgreSQL URL omits one. `HELIX_DATABASE_URL` remains reserved
+for an intentional external Postgres override.
 
-The Vite host allowlist derives the one expected Preview Server hostname from
-Netlify's read-only `BRANCH` and `SITE_NAME` values. The account API and shared
-admin API also accept that exact Helix Preview Server domain when Netlify's
-internal request URL uses localhost or the canonical production domain. Keep
-these checks site-scoped; do not replace the host allowlist with `true` or allow
-all `netlify.app` domains.
+## Hosted feature verification
+
+Use a normal same-project **Deploy Preview** created from a pull request. Do not
+use a Netlify **Preview Server** for account verification. Preview Server URLs
+always require a Netlify collaborator login, while server-side
+`@netlify/identity` calls make internal requests that do not carry the browser's
+collaborator-access cookie. Those requests are rejected by the Preview Server
+access layer before they reach Identity.
+
+A Deploy Preview receives an isolated PostgreSQL branch and Netlify applies its
+migrations automatically. It does not require a second Netlify project and it
+does not continuously run a `netlify dev` container. The Netlify Identity user
+directory is project-wide, however: Identity users created from a Deploy Preview
+are shared with the project even though their Helix profile rows are isolated in
+the Deploy Preview database.
 
 Account and admin API requests remain relative to the current browser origin.
 Owner-created admin invitation links and optional invitation email dispatches
-also use the validated browser origin, so Preview Server testing cannot silently
+also use the validated browser origin, so Deploy Preview testing cannot silently
 send someone to production.
 
 Netlify Identity confirmation and password-recovery emails are generated from
-the project's shared Identity **Site URL**, not from a Preview Server's current
+the project's shared Identity **Site URL**, not from a Deploy Preview's current
 domain. If one of those links opens the production URL during preview testing,
 copy only its `#confirmation_token=...` or `#recovery_token=...` fragment onto
-the end of the Preview Server's `/account` URL. Treat the token as a password:
+the end of the Deploy Preview's `/account` URL. Treat the token as a password:
 do not paste it into logs, issues, or chat. Google OAuth should be tested from
-the Preview Server itself; if Netlify returns its callback fragment to the main
-site, move that complete hash fragment to the Preview Server's `/account` URL
+the Deploy Preview itself; if Netlify returns its callback fragment to the main
+site, move that complete hash fragment to the Deploy Preview's `/account` URL
 before continuing.
 
 Run repository verification with:
@@ -163,7 +170,7 @@ invites. The owner account is intentionally excluded.
 
 Netlify Dev can authenticate Identity users, but it does not inject the operator
 token needed for Identity admin deletion. Therefore, force deletion is disabled
-on localhost and must be tested on a deployed Netlify Preview Server. The API
+on localhost and must be tested on a Netlify Deploy Preview. The API
 also returns a clear non-destructive error if a local or live-dev request reaches
 it without an operator token. It never deletes only the PostgreSQL half.
 
