@@ -112,10 +112,27 @@ npm run dev:db
 The plain Vite server and `server.mjs` still support public-page development,
 but they do not emulate Netlify Identity.
 
-The Vite host allowlist includes the stable
-`devserver-feat-user-accounts--helix-group-testing.netlify.app` hostname used by
-this feature branch's Netlify Preview Server. Keep Preview Server hosts explicit;
-do not replace the allowlist with `true`.
+The Vite host allowlist derives the one expected Preview Server hostname from
+Netlify's read-only `BRANCH` and `SITE_NAME` values. The account API and shared
+admin API also accept that exact Helix Preview Server domain when Netlify's
+internal request URL uses localhost or the canonical production domain. Keep
+these checks site-scoped; do not replace the host allowlist with `true` or allow
+all `netlify.app` domains.
+
+Account and admin API requests remain relative to the current browser origin.
+Owner-created admin invitation links and optional invitation email dispatches
+also use the validated browser origin, so Preview Server testing cannot silently
+send someone to production.
+
+Netlify Identity confirmation and password-recovery emails are generated from
+the project's shared Identity **Site URL**, not from a Preview Server's current
+domain. If one of those links opens the production URL during preview testing,
+copy only its `#confirmation_token=...` or `#recovery_token=...` fragment onto
+the end of the Preview Server's `/account` URL. Treat the token as a password:
+do not paste it into logs, issues, or chat. Google OAuth should be tested from
+the Preview Server itself; if Netlify returns its callback fragment to the main
+site, move that complete hash fragment to the Preview Server's `/account` URL
+before continuing.
 
 Run repository verification with:
 

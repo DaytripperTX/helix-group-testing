@@ -1,14 +1,24 @@
 import { connectLambda, setEnvironmentContext } from '@netlify/blobs';
 import { getUser, verifyRequestOrigin } from '@netlify/identity';
 import { handleHelixApiRequest } from './helix-api.mjs';
+import { verifyHelixRequestOrigin } from './helix-request-origin.mjs';
+
+const defaultIdentityServices = {
+  getUser,
+  verifyRequestOrigin,
+};
 
 export async function handleHelixNetlifyRequest(request) {
-  const identityUser = await getOptionalIdentityUser();
+  return handleHelixNetlifyRequestWithIdentity(request, defaultIdentityServices);
+}
+
+export async function handleHelixNetlifyRequestWithIdentity(request, identity) {
+  const identityUser = await getOptionalIdentityUser(identity);
   let identityOriginVerified = false;
 
   if (identityUser && !isSafeHttpMethod(request.method)) {
     try {
-      verifyRequestOrigin(request);
+      verifyHelixRequestOrigin(request, identity.verifyRequestOrigin);
       identityOriginVerified = true;
     } catch {
       return Response.json({ error: 'Origin not allowed.' }, {
@@ -35,9 +45,9 @@ function isSafeHttpMethod(method) {
   return ['GET', 'HEAD', 'OPTIONS'].includes(String(method ?? 'GET').toUpperCase());
 }
 
-async function getOptionalIdentityUser() {
+async function getOptionalIdentityUser(identity) {
   try {
-    return await getUser();
+    return await identity.getUser();
   } catch {
     // Identity may be disabled or unavailable. Public APIs remain public and
     // protected APIs fail closed through their normal unauthenticated path.

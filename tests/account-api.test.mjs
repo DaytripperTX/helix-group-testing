@@ -120,6 +120,44 @@ test('account writes reject cross-origin requests and Google reauthentication mu
   assert.equal(staleResponse.status, 401);
 });
 
+test('Preview Server account writes accept the external Helix origin but reject lookalikes', async () => {
+  const previousEnvironment = {
+    NETLIFY_PREVIEW_SERVER: process.env.NETLIFY_PREVIEW_SERVER,
+    SITE_NAME: process.env.SITE_NAME,
+    URL: process.env.URL,
+  };
+  const previewOrigin = 'https://devserver-feat-user-accounts--helix-group-testing.netlify.app';
+  const identity = createFakeIdentity();
+
+  process.env.NETLIFY_PREVIEW_SERVER = 'true';
+  process.env.SITE_NAME = 'helix-group-testing';
+  process.env.URL = 'https://helix-group-testing.netlify.app';
+
+  try {
+    const accepted = await accountRequest('/api/account/signup', 'POST', {
+      username: 'PreviewUser',
+      email: 'preview@example.com',
+      password: 'a-long-password',
+    }, identity, '', {
+      requestBaseUrl: 'http://localhost:8888',
+      requestOrigin: previewOrigin,
+    });
+    assert.equal(accepted.status, 202);
+
+    const rejected = await accountRequest('/api/account/signup', 'POST', {
+      username: 'LookalikeUser',
+      email: 'lookalike@example.com',
+      password: 'a-long-password',
+    }, identity, '', {
+      requestBaseUrl: 'http://localhost:8888',
+      requestOrigin: `${previewOrigin}.attacker.example`,
+    });
+    assert.equal(rejected.status, 403);
+  } finally {
+    restoreEnvironment(previousEnvironment);
+  }
+});
+
 test('owner creates an email-bound link that promotes one matching account and can demote it', async () => {
   const ownerUser = createIdentityUser({
     id: 'identity-owner',
@@ -226,6 +264,9 @@ test('configured admin invitations are sent through the Netlify email handler wi
 
   process.env.HELIX_ADMIN_INVITE_FROM = 'accounts@helix.test';
   process.env.NETLIFY_EMAILS_SECRET = 'test-email-handler-secret';
+  process.env.NETLIFY_PREVIEW_SERVER = 'true';
+  process.env.SITE_NAME = 'helix-group-testing';
+  const previewOrigin = 'https://devserver-feat-user-accounts--helix-group-testing.netlify.app';
   globalThis.fetch = async (url, options) => {
     emailRequest = { url: String(url), options };
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -238,21 +279,28 @@ test('configured admin invitations are sent through the Netlify email handler wi
       { email: 'new-admin@example.com' },
       identity,
       'nf_preview_auth=preview-cookie',
+      {
+        requestBaseUrl: 'http://localhost:8888',
+        requestOrigin: previewOrigin,
+      },
     );
     const body = await response.json();
     const emailBody = JSON.parse(emailRequest.options.body);
 
     assert.equal(response.status, 201);
     assert.equal(body.emailDelivery, 'sent');
-    assert.equal(emailRequest.url, 'https://helix.test/.netlify/functions/emails/admin-invite');
+    assert.equal(emailRequest.url, `${previewOrigin}/.netlify/functions/emails/admin-invite`);
     assert.equal(emailRequest.options.headers.cookie, 'nf_preview_auth=preview-cookie');
     assert.equal(emailBody.to, 'new-admin@example.com');
     assert.equal(emailBody.from, 'accounts@helix.test');
     assert.equal(emailBody.parameters.inviteLink, body.inviteLink);
+    assert.equal(new URL(body.inviteLink).origin, previewOrigin);
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.HELIX_ADMIN_INVITE_FROM;
     delete process.env.NETLIFY_EMAILS_SECRET;
+    delete process.env.NETLIFY_PREVIEW_SERVER;
+    delete process.env.SITE_NAME;
   }
 });
 
@@ -423,10 +471,11 @@ function createFakeIdentity(initialUser = null) {
         userMetadata: data,
       };
     },
-    verifyRequestOrigin(request) {
+    verifyRequestOrigin(request, options) {
       const origin = request.headers.get('origin');
+      const allowedOrigins = options?.allowedOrigins ?? [new URL(request.url).origin];
 
-      if (origin !== new URL(request.url).origin) {
+      if (!allowedOrigins.includes(origin)) {
         const error = new Error('Origin not allowed.');
         error.status = 403;
         throw error;
@@ -454,8 +503,10 @@ function createIdentityUser({
   };
 }
 
-async function accountRequest(pathname, method, body, identity, cookie = '') {
-  const headers = new Headers({ origin: 'https://helix.test' });
+async function accountRequest(pathname, method, body, identity, cookie = '', options = {}) {
+  const requestOrigin = options.requestOrigin ?? 'https://helix.test';
+  const requestBaseUrl = options.requestBaseUrl ?? 'https://helix.test';
+  const headers = new Headers({ origin: requestOrigin });
 
   if (body !== undefined) {
     headers.set('content-type', 'application/json');
@@ -465,11 +516,21 @@ async function accountRequest(pathname, method, body, identity, cookie = '') {
     headers.set('cookie', cookie);
   }
 
-  return handleAccountRequest(new Request(`https://helix.test${pathname}`, {
+  return handleAccountRequest(new Request(`${requestBaseUrl}${pathname}`, {
     method,
     headers,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }), identity);
+}
+
+function restoreEnvironment(previousEnvironment) {
+  for (const [key, value] of Object.entries(previousEnvironment)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
 }
 
 function helixRequest(pathname, identityUser, overrides = {}) {

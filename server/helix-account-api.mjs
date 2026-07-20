@@ -34,6 +34,10 @@ import {
   createLogoutCookie as createLegacyLogoutCookie,
   isLegacyAdminAuthEnabled,
 } from './helix-auth.mjs';
+import {
+  getHelixPublicRequestOrigin,
+  verifyHelixRequestOrigin,
+} from './helix-request-origin.mjs';
 
 const maxAccountBodyBytes = 16 * 1024;
 const recentGoogleLoginMs = 10 * 60 * 1000;
@@ -295,7 +299,8 @@ export async function handleAccountRequest(request, identity = defaultIdentitySe
         assertRequestOrigin(request, identity);
         const body = await readJsonBody(request);
         const created = await createAdminInvite(account.id, body?.email);
-        const inviteLink = `${requestUrl.origin}/account?admin_invite=${encodeURIComponent(created.token)}`;
+        const publicOrigin = getHelixPublicRequestOrigin(request);
+        const inviteLink = `${publicOrigin}/account?admin_invite=${encodeURIComponent(created.token)}`;
         const emailDelivery = await sendAdminInviteEmail({
           request,
           recipientEmail: created.invite.recipientEmail,
@@ -453,7 +458,7 @@ async function sendAdminInviteEmail({ request, recipientEmail, inviteLink }) {
     return 'not_configured';
   }
 
-  const emailOrigin = new URL(request.url).origin;
+  const emailOrigin = getHelixPublicRequestOrigin(request);
   const cookie = request.headers.get('cookie');
 
   try {
@@ -502,7 +507,7 @@ function isMissingIdentityOperatorTokenError(error) {
 }
 
 function assertRequestOrigin(request, identity) {
-  identity.verifyRequestOrigin(request);
+  verifyHelixRequestOrigin(request, identity.verifyRequestOrigin);
 }
 
 async function readJsonBody(request) {
