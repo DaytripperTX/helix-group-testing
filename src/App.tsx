@@ -1,4 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { handleAuthCallback } from '@netlify/identity';
 import { CircleCheckBig } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
@@ -20,8 +21,10 @@ import { publicPageItems, type PublicPageId } from './page-disables';
 import { fetchRounds, getCurrentRounds, sortRoundsForDisplay, type Round, type RoundPeptide, type TestingTierId } from './rounds';
 import {
   type AccountSession,
+  type IdentityCallbackNotice,
   signedOutAccountSession,
 } from './account-types';
+import { hasIdentityCallbackHash } from './identity-callback.mjs';
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
@@ -629,10 +632,8 @@ type AdminSession = {
   role?: 'owner' | 'admin';
 };
 
-const identityCallbackHashPattern = /^#(?:confirmation_token|recovery_token|invite_token|email_change_token|access_token)=/;
-
 function getPageFromPath(): PageId {
-  if (identityCallbackHashPattern.test(window.location.hash)) {
+  if (hasIdentityCallbackHash(window.location.hash)) {
     return 'account';
   }
 
@@ -655,12 +656,14 @@ function App() {
   const [adminSession, setAdminSession] = useState<AdminSession>({ isAuthenticated: false });
   const [accountSession, setAccountSession] = useState<AccountSession>(signedOutAccountSession);
   const [isSessionResolved, setIsSessionResolved] = useState(false);
+  const [identityCallbackNotice, setIdentityCallbackNotice] = useState<IdentityCallbackNotice | null>(null);
+  const identityCallbackPromiseRef = useRef<Promise<IdentityCallbackNotice | null> | null>(null);
 
   useEffect(() => {
     const handleNavigation = () => {
       const nextPage = getPageFromPath();
 
-      if (nextPage === 'account' && identityCallbackHashPattern.test(window.location.hash)) {
+      if (nextPage === 'account' && hasIdentityCallbackHash(window.location.hash)) {
         const accountUrl = `/account${window.location.search}${window.location.hash}`;
 
         if (window.location.pathname !== '/account') {
@@ -684,9 +687,22 @@ function App() {
   useEffect(() => {
     let isMounted = true;
 
-    Promise.all([fetchAccountSession(), fetchAdminSession()])
-      .then(([nextAccountSession, nextAdminSession]) => {
+    const initializeSession = async () => {
+      identityCallbackPromiseRef.current ??= resolveIdentityCallbackNotice();
+      const callbackNotice = await identityCallbackPromiseRef.current;
+
+      const [nextAccountSession, nextAdminSession] = await Promise.all([
+        fetchAccountSession(),
+        fetchAdminSession(),
+      ]);
+
+      return { callbackNotice, nextAccountSession, nextAdminSession };
+    };
+
+    initializeSession()
+      .then(({ callbackNotice, nextAccountSession, nextAdminSession }) => {
         if (isMounted) {
+          setIdentityCallbackNotice(callbackNotice);
           setAccountSession(nextAccountSession);
           setAdminSession(resolveClientAdminSession(nextAccountSession, nextAdminSession));
         }
@@ -776,6 +792,7 @@ function App() {
         {activePage === 'account' && isSessionResolved && (
           <AccountPage
             session={accountSession}
+            identityCallbackNotice={identityCallbackNotice}
             onSessionChange={applyAccountSession}
             onRefreshSession={refreshAccountAndAdminSessions}
             onNavigate={navigateTo}
@@ -4275,6 +4292,25 @@ async function fetchAccountSession(): Promise<AccountSession> {
   }
 
   return normalizeAccountSession(await response.json());
+}
+
+async function resolveIdentityCallbackNotice(): Promise<IdentityCallbackNotice | null> {
+  if (!hasIdentityCallbackHash(window.location.hash)) {
+    return null;
+  }
+
+  try {
+    const callback = await handleAuthCallback();
+    return callback
+      ? { type: callback.type }
+      : { error: 'Authentication link could not be completed.' };
+  } catch (error) {
+    return { error: getClientErrorMessage(error, 'Authentication link could not be completed.') };
+  }
+}
+
+function getClientErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 async function logoutAccountSession() {

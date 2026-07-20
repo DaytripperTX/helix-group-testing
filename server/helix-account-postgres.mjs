@@ -1,5 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { getDatabase } from '@netlify/database';
+import {
+  createHelixDatabase,
+  getHelixDatabaseOverride,
+} from './helix-database-runtime.mjs';
 
 export const ACCOUNT_DELETION_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 export const ADMIN_INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
@@ -20,11 +23,11 @@ let cachedDatabase;
 let cachedConnectionString;
 
 export function getAccountDatabase() {
-  const connectionString = process.env.HELIX_DATABASE_URL || process.env.NETLIFY_DB_URL || '';
+  const connectionString = getHelixDatabaseOverride();
 
   if (!cachedDatabase || connectionString !== cachedConnectionString) {
     cachedConnectionString = connectionString;
-    cachedDatabase = getDatabase(connectionString ? { connectionString } : undefined);
+    cachedDatabase = createHelixDatabase(connectionString);
   }
 
   return cachedDatabase;

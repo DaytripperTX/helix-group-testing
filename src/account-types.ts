@@ -25,6 +25,11 @@ export type AccountSession = {
   account?: AccountRecord;
 };
 
+export type IdentityCallbackNotice = {
+  type?: 'oauth' | 'confirmation' | 'recovery' | 'invite' | 'email_change';
+  error?: string;
+};
+
 export const signedOutAccountSession: AccountSession = {
   isAuthenticated: false,
 };

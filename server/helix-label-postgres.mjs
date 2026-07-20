@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { getDatabase } from '@netlify/database';
 import {
   LABEL_TRASH_RETENTION_MS,
   MAX_LABEL_REPORTS,
@@ -10,16 +9,20 @@ import {
   normalizeReportReason,
   validateLabelTemplateSnapshot,
 } from './helix-label-domain.mjs';
+import {
+  createHelixDatabase,
+  getHelixDatabaseOverride,
+} from './helix-database-runtime.mjs';
 
 let cachedDatabase;
 let cachedConnectionString;
 
 export function getLabelDatabase() {
-  const connectionString = process.env.HELIX_DATABASE_URL || process.env.NETLIFY_DB_URL || '';
+  const connectionString = getHelixDatabaseOverride();
 
   if (!cachedDatabase || connectionString !== cachedConnectionString) {
     cachedConnectionString = connectionString;
-    cachedDatabase = getDatabase(connectionString ? { connectionString } : undefined);
+    cachedDatabase = createHelixDatabase(connectionString);
   }
 
   return cachedDatabase;

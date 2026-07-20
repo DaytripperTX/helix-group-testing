@@ -71,6 +71,45 @@ test('verified Identity profiles bootstrap one owner and enforce normalized user
   );
 });
 
+test('Netlify runtime database configuration is not replaced by the raw process connection value', async () => {
+  const runtimeConnectionString = process.env.NETLIFY_DB_URL;
+  const runtimeDriver = process.env.NETLIFY_DB_DRIVER;
+  const originalNetlify = globalThis.Netlify;
+
+  try {
+    process.env.NETLIFY_DB_URL = 'postgres://preview.invalid/database';
+    globalThis.Netlify = {
+      env: {
+        get(name) {
+          if (name === 'NETLIFY_DB_URL') {
+            return runtimeConnectionString;
+          }
+
+          if (name === 'NETLIFY_DB_DRIVER') {
+            return runtimeDriver;
+          }
+
+          return undefined;
+        },
+      },
+    };
+    repository.resetAccountDatabaseClientForTests();
+
+    const client = repository.getAccountDatabase();
+    assert.equal(client.connectionString, runtimeConnectionString);
+    assert.equal((await client.sql`SELECT 1 AS value`)[0].value, 1);
+  } finally {
+    await repository.closeAccountDatabaseClientForTests();
+    process.env.NETLIFY_DB_URL = runtimeConnectionString;
+
+    if (originalNetlify === undefined) {
+      delete globalThis.Netlify;
+    } else {
+      globalThis.Netlify = originalNetlify;
+    }
+  }
+});
+
 test('profile completion and username updates enforce validation and uniqueness', async () => {
   const missingUsername = await repository.syncAccountFromIdentity(createIdentityUser({
     id: 'google-user',

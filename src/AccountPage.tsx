@@ -1,6 +1,6 @@
-import { handleAuthCallback, oauthLogin, updateUser } from '@netlify/identity';
+import { oauthLogin, updateUser } from '@netlify/identity';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
-import type { AccountRecord, AccountSession } from './account-types';
+import type { AccountRecord, AccountSession, IdentityCallbackNotice } from './account-types';
 
 type AuthMode = 'signin' | 'signup' | 'recover' | 'reset';
 
@@ -22,11 +22,13 @@ const oauthIntentStorageKey = 'helix_oauth_intent';
 
 function AccountPage({
   session,
+  identityCallbackNotice,
   onSessionChange,
   onRefreshSession,
   onNavigate,
 }: {
   session: AccountSession;
+  identityCallbackNotice: IdentityCallbackNotice | null;
   onSessionChange: (session: AccountSession) => void;
   onRefreshSession: () => Promise<AccountSession>;
   onNavigate: (path: string) => void;
@@ -78,7 +80,7 @@ function AccountPage({
   }, [session.isAuthenticated]);
 
   useEffect(() => {
-    if (callbackHandledRef.current || !window.location.hash) {
+    if (callbackHandledRef.current || !identityCallbackNotice) {
       return;
     }
 
@@ -87,29 +89,29 @@ function AccountPage({
       setIsSubmitting(true);
 
       try {
-        const callback = await handleAuthCallback();
-
-        if (!callback) {
+        if (identityCallbackNotice.error) {
+          setStatus(identityCallbackNotice.error);
           return;
         }
 
-        if (callback.type === 'recovery') {
+        if (identityCallbackNotice.type === 'recovery') {
           setMode('reset');
           setStatus('Choose a new password.');
           return;
         }
 
-        const nextSession = await onRefreshSession();
         const oauthIntent = window.sessionStorage.getItem(oauthIntentStorageKey);
 
-        if (oauthIntent === 'delete' && nextSession.identity?.provider === 'google') {
-          window.sessionStorage.removeItem(oauthIntentStorageKey);
+        if (oauthIntent === 'delete' && session.identity?.provider === 'google') {
           await accountFetch('/api/account/reauth/google', { method: 'POST', body: {} });
+          window.sessionStorage.removeItem(oauthIntentStorageKey);
           setIsRecentAuthReady(true);
           setStatus('Google sign-in verified. You can now delete your account.');
         } else {
           window.sessionStorage.removeItem(oauthIntentStorageKey);
-          setStatus('Signed in.');
+          setStatus(session.onboardingRequired
+            ? 'Choose a username to finish setup.'
+            : session.isAuthenticated ? 'Signed in.' : 'Sign-in completed, but the account service could not be reached.');
         }
       } catch (error) {
         setStatus(getErrorMessage(error, 'Authentication link could not be completed.'));
@@ -117,7 +119,7 @@ function AccountPage({
         setIsSubmitting(false);
       }
     })();
-  }, [onRefreshSession]);
+  }, [identityCallbackNotice, session.identity?.provider, session.isAuthenticated, session.onboardingRequired]);
 
   useEffect(() => {
     const inviteToken = window.localStorage.getItem(inviteStorageKey) ?? '';
