@@ -71,7 +71,7 @@ test('verified Identity profiles bootstrap one owner and enforce normalized user
   );
 });
 
-test('Netlify runtime database configuration is not replaced by the raw process connection value', async () => {
+test('Netlify Preview Server loopback database URLs get an explicit Postgres user', async () => {
   const runtimeConnectionString = process.env.NETLIFY_DB_URL;
   const runtimeDriver = process.env.NETLIFY_DB_DRIVER;
   const originalNetlify = globalThis.Netlify;
@@ -96,7 +96,8 @@ test('Netlify runtime database configuration is not replaced by the raw process 
     repository.resetAccountDatabaseClientForTests();
 
     const client = repository.getAccountDatabase();
-    assert.equal(client.connectionString, runtimeConnectionString);
+    assert.equal(new URL(client.connectionString).username, 'netlify');
+    assert.equal(new URL(client.connectionString).port, new URL(runtimeConnectionString).port);
     assert.equal((await client.sql`SELECT 1 AS value`)[0].value, 1);
   } finally {
     await repository.closeAccountDatabaseClientForTests();

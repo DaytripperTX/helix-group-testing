@@ -112,10 +112,13 @@ npm run dev:db
 The plain Vite server and `server.mjs` still support public-page development,
 but they do not emulate Netlify Identity.
 
-The PostgreSQL repositories use `@netlify/database` without a connection
-override so Netlify can select the database for the current environment. Do not
-manually define `NETLIFY_DB_URL` for a Preview Server. `HELIX_DATABASE_URL` is
-reserved for an intentional external Postgres override.
+The PostgreSQL repositories let `@netlify/database` select the database for the
+current environment. Netlify Preview Servers run through `netlify dev`, whose
+loopback database URL may omit a username in the cloud container; the shared
+database runtime adds the harmless `netlify` username only to that loopback URL.
+The configured Netlify dev command also applies pending migrations before Vite
+starts. Do not manually define `NETLIFY_DB_URL` for a Preview Server.
+`HELIX_DATABASE_URL` is reserved for an intentional external Postgres override.
 
 The Vite host allowlist derives the one expected Preview Server hostname from
 Netlify's read-only `BRANCH` and `SITE_NAME` values. The account API and shared
