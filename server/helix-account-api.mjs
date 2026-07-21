@@ -64,6 +64,18 @@ export async function handleAccountRequest(request, identity = defaultIdentitySe
   const pathname = normalizeAccountPath(requestUrl.pathname);
 
   try {
+    if (method === 'GET' && pathname === '/api/account/session/current') {
+      const user = await identity.getUser();
+      const session = user
+        ? await resolveAccountSession(user, { sync: false })
+        : { isAuthenticated: false };
+
+      return accountJsonResponse(200, {
+        ...session,
+        legacyAuthEnabled: isLegacyAdminAuthEnabled(),
+      });
+    }
+
     if (method === 'GET' && pathname === '/api/account/session') {
       const user = await identity.getUser();
       const session = user

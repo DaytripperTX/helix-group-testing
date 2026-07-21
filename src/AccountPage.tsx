@@ -1,5 +1,6 @@
 import { oauthLogin, updateUser } from '@netlify/identity';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { createIdentityRequestHeaders } from './account-client-auth.mjs';
 import type { AccountRecord, AccountSession, IdentityCallbackNotice } from './account-types';
 
 type AuthMode = 'signin' | 'signup' | 'recover' | 'reset';
@@ -24,6 +25,7 @@ type AdminAccessRequest = {
 const inviteStorageKey = 'helix_admin_invite_token';
 const adminRequestStorageKey = 'helix_admin_request_token';
 const oauthIntentStorageKey = 'helix_oauth_intent';
+const adminRequestRefreshMs = 5_000;
 
 function AccountPage({
   session,
@@ -217,6 +219,53 @@ function AccountPage({
     }
 
     void refreshOwnerData();
+  }, [session.account?.id, session.account?.role, session.account?.status]);
+
+  useEffect(() => {
+    if (session.account?.role !== 'owner' || session.account.status !== 'active') {
+      return;
+    }
+
+    let isActive = true;
+    let isRefreshing = false;
+
+    const refreshRequests = async () => {
+      if (!isActive || isRefreshing) {
+        return;
+      }
+
+      isRefreshing = true;
+
+      try {
+        const result = await accountFetch<{ requests: AdminAccessRequest[] }>(
+          '/api/account/admin-access-requests',
+        );
+
+        if (isActive) {
+          setAdminAccessRequests(result.requests);
+        }
+      } catch {
+        // Keep the existing list during a transient background refresh failure.
+      } finally {
+        isRefreshing = false;
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshRequests();
+      }
+    };
+    const intervalId = window.setInterval(refreshWhenVisible, adminRequestRefreshMs);
+
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+
+    return () => {
+      isActive = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, [session.account?.id, session.account?.role, session.account?.status]);
 
   const refreshOwnerData = async () => {
@@ -865,7 +914,9 @@ async function accountFetch<T = unknown>(url: string, options: { method?: string
   const response = await fetch(url, {
     method: options.method ?? 'GET',
     credentials: 'same-origin',
-    headers: options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    headers: createIdentityRequestHeaders(
+      options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    ),
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const body = await response.json().catch(() => ({}));

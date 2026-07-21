@@ -237,6 +237,25 @@ test('one reusable link accepts multiple admin requests but only owner approval 
 
   const admins = await (await accountRequest('/api/account/admins', 'GET', undefined, identity)).json();
   assert.deepEqual(admins.accounts.map((account) => account.username), ['FirstCandidate']);
+
+  assert.equal((await helixRequest('/api/data/admin-notes', firstCandidate)).statusCode, 200);
+  identity.currentUser = firstCandidate;
+  const elevatedSession = await accountRequest('/api/account/session/current', 'GET', undefined, identity);
+  assert.equal((await elevatedSession.json()).account.role, 'admin');
+
+  identity.currentUser = ownerUser;
+  const demoteResponse = await accountRequest(
+    `/api/account/admins/${admins.accounts[0].id}/demote`,
+    'POST',
+    {},
+    identity,
+  );
+  assert.equal(demoteResponse.status, 200);
+  assert.equal((await helixRequest('/api/data/admin-notes', firstCandidate)).statusCode, 401);
+
+  identity.currentUser = firstCandidate;
+  const demotedSession = await accountRequest('/api/account/session/current', 'GET', undefined, identity);
+  assert.equal((await demotedSession.json()).account.role, 'user');
 });
 
 test('legacy email-bound admin links still promote one matching account and can be demoted', async () => {

@@ -131,6 +131,12 @@ Account and admin API requests remain relative to the current browser origin.
 Owner-created admin request links also use the validated browser origin, so
 Deploy Preview testing cannot silently send someone to production.
 
+Signed-in user and admin sessions refresh their PostgreSQL role when the tab
+regains focus and every five seconds while visible. The owner account page does
+the same for pending admin requests. These background checks use read-only
+queries; protected backend routes independently verify the current PostgreSQL
+role on every request, so demotion takes effect server-side immediately.
+
 Netlify Identity confirmation and password-recovery emails are generated from
 the project's shared Identity **Site URL**, not from a Deploy Preview's current
 domain. If one of those links opens the production URL during preview testing,

@@ -4,7 +4,9 @@ import { CircleCheckBig } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import AccountPage from './AccountPage';
+import { createIdentityRequestHeaders } from './account-client-auth.mjs';
 import AdminPage from './AdminPage';
+import { getAuthenticatedAccountUrl } from './account-url.mjs';
 import FaqsPage from './FaqsPage';
 import LabelsPage from './LabelsPage';
 import OrderFormPage from './OrderFormPage';
@@ -632,6 +634,8 @@ type AdminSession = {
   role?: 'owner' | 'admin';
 };
 
+const accountRoleRefreshMs = 5_000;
+
 function getPageFromPath(): PageId {
   if (hasIdentityCallbackHash(window.location.hash)) {
     return 'account';
@@ -685,6 +689,18 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!accountSession.isAuthenticated) {
+      return;
+    }
+
+    const authenticatedUrl = getAuthenticatedAccountUrl(window.location.href);
+
+    if (authenticatedUrl) {
+      window.history.replaceState(window.history.state, '', authenticatedUrl);
+    }
+  }, [accountSession.isAuthenticated]);
+
+  useEffect(() => {
     let isMounted = true;
 
     const initializeSession = async () => {
@@ -723,6 +739,67 @@ function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    const account = accountSession.account;
+
+    if (
+      !isSessionResolved
+      || !accountSession.isAuthenticated
+      || !account
+      || account.role === 'owner'
+    ) {
+      return;
+    }
+
+    let isActive = true;
+    let isRefreshing = false;
+
+    const refreshRole = async () => {
+      if (!isActive || isRefreshing) {
+        return;
+      }
+
+      isRefreshing = true;
+
+      try {
+        const nextAccountSession = await fetchCurrentAccountSession();
+
+        if (!isActive) {
+          return;
+        }
+
+        setAccountSession(nextAccountSession);
+        setAdminSession(resolveClientAdminSession(nextAccountSession, { isAuthenticated: false }));
+      } catch {
+        // Keep the last known session during a transient refresh failure.
+      } finally {
+        isRefreshing = false;
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshRole();
+      }
+    };
+    const intervalId = window.setInterval(refreshWhenVisible, accountRoleRefreshMs);
+
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+
+    return () => {
+      isActive = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [
+    accountSession.account?.id,
+    accountSession.account?.role,
+    accountSession.account?.status,
+    accountSession.isAuthenticated,
+    isSessionResolved,
+  ]);
 
   const navigateTo = (path: string) => {
     const targetPath = isDisabledPublicPath(path) ? '/' : path;
@@ -4273,6 +4350,7 @@ function getCoaCapSwatchColor(capColor: string) {
 async function fetchAdminSession(): Promise<AdminSession> {
   const response = await fetch('/api/admin/session', {
     credentials: 'same-origin',
+    headers: createIdentityRequestHeaders(),
   });
 
   if (!response.ok) {
@@ -4285,10 +4363,24 @@ async function fetchAdminSession(): Promise<AdminSession> {
 async function fetchAccountSession(): Promise<AccountSession> {
   const response = await fetch('/api/account/session', {
     credentials: 'same-origin',
+    headers: createIdentityRequestHeaders(),
   });
 
   if (!response.ok) {
-    return signedOutAccountSession;
+    throw new Error('Account session could not be loaded.');
+  }
+
+  return normalizeAccountSession(await response.json());
+}
+
+async function fetchCurrentAccountSession(): Promise<AccountSession> {
+  const response = await fetch('/api/account/session/current', {
+    credentials: 'same-origin',
+    headers: createIdentityRequestHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error('Current account session could not be loaded.');
   }
 
   return normalizeAccountSession(await response.json());
@@ -4317,6 +4409,7 @@ async function logoutAccountSession() {
   const response = await fetch('/api/account/logout', {
     method: 'POST',
     credentials: 'same-origin',
+    headers: createIdentityRequestHeaders(),
   });
 
   if (!response.ok) {
