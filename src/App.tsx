@@ -4,7 +4,6 @@ import { CircleCheckBig } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import AccountPage from './AccountPage';
-import { createIdentityRequestHeaders } from './account-client-auth.mjs';
 import AdminPage from './AdminPage';
 import { getAuthenticatedAccountUrl } from './account-url.mjs';
 import FaqsPage from './FaqsPage';
@@ -4350,7 +4349,6 @@ function getCoaCapSwatchColor(capColor: string) {
 async function fetchAdminSession(): Promise<AdminSession> {
   const response = await fetch('/api/admin/session', {
     credentials: 'same-origin',
-    headers: createIdentityRequestHeaders(),
   });
 
   if (!response.ok) {
@@ -4363,7 +4361,6 @@ async function fetchAdminSession(): Promise<AdminSession> {
 async function fetchAccountSession(): Promise<AccountSession> {
   const response = await fetch('/api/account/session', {
     credentials: 'same-origin',
-    headers: createIdentityRequestHeaders(),
   });
 
   if (!response.ok) {
@@ -4376,7 +4373,6 @@ async function fetchAccountSession(): Promise<AccountSession> {
 async function fetchCurrentAccountSession(): Promise<AccountSession> {
   const response = await fetch('/api/account/session/current', {
     credentials: 'same-origin',
-    headers: createIdentityRequestHeaders(),
   });
 
   if (!response.ok) {
@@ -4409,7 +4405,6 @@ async function logoutAccountSession() {
   const response = await fetch('/api/account/logout', {
     method: 'POST',
     credentials: 'same-origin',
-    headers: createIdentityRequestHeaders(),
   });
 
   if (!response.ok) {

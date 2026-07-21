@@ -1,10 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import {
-  createIdentityRequestHeaders,
-  getIdentityAuthorizationHeader,
-} from '../src/account-client-auth.mjs';
 import { getAuthenticatedAccountUrl } from '../src/account-url.mjs';
 
 test('authenticated account URLs remove only the stale auth mode parameter', () => {
@@ -22,21 +18,6 @@ test('authenticated account URLs remove only the stale auth mode parameter', () 
   );
 });
 
-test('Identity JWT cookies are forwarded as same-origin bearer credentials', () => {
-  assert.equal(
-    getIdentityAuthorizationHeader('other=value; nf_jwt=header.payload%2Esignature'),
-    'Bearer header.payload.signature',
-  );
-  assert.equal(getIdentityAuthorizationHeader('other=value'), '');
-
-  const headers = createIdentityRequestHeaders(
-    { 'content-type': 'application/json' },
-    'nf_jwt=test-token',
-  );
-  assert.equal(headers.get('authorization'), 'Bearer test-token');
-  assert.equal(headers.get('content-type'), 'application/json');
-});
-
 test('account roles and owner requests refresh on focus, visibility, and a short interval', async () => {
   const [appSource, accountPageSource] = await Promise.all([
     readFile(new URL('../src/App.tsx', import.meta.url), 'utf8'),
@@ -49,4 +30,14 @@ test('account roles and owner requests refresh on focus, visibility, and a short
   assert.match(appSource, /setAdminSession\(resolveClientAdminSession\(nextAccountSession/);
   assert.match(accountPageSource, /const adminRequestRefreshMs = 5_000/);
   assert.match(accountPageSource, /setAdminAccessRequests\(result\.requests\)/);
+});
+
+test('account session reloads use Netlify cookie credentials without an Authorization header', async () => {
+  const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const sessionFetchStart = source.indexOf("fetch('/api/account/session'");
+  const sessionFetch = source.slice(sessionFetchStart, sessionFetchStart + 180);
+
+  assert.notEqual(sessionFetchStart, -1);
+  assert.match(sessionFetch, /credentials: 'same-origin'/);
+  assert.doesNotMatch(sessionFetch, /authorization|createIdentityRequestHeaders/i);
 });

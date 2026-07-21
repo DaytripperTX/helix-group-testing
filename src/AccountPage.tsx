@@ -1,6 +1,5 @@
 import { oauthLogin, updateUser } from '@netlify/identity';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
-import { createIdentityRequestHeaders } from './account-client-auth.mjs';
 import type { AccountRecord, AccountSession, IdentityCallbackNotice } from './account-types';
 
 type AuthMode = 'signin' | 'signup' | 'recover' | 'reset';
@@ -914,9 +913,7 @@ async function accountFetch<T = unknown>(url: string, options: { method?: string
   const response = await fetch(url, {
     method: options.method ?? 'GET',
     credentials: 'same-origin',
-    headers: createIdentityRequestHeaders(
-      options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    ),
+    headers: options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const body = await response.json().catch(() => ({}));
