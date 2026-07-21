@@ -21,6 +21,7 @@ beforeEach(async () => {
   assert.deepEqual(applied, [
     '20260714000100_create-label-storage',
     '20260717000100_create-user-accounts',
+    '20260719000100_add-admin-access-approval',
   ]);
 });
 
@@ -220,6 +221,91 @@ test('admin invitations are email-bound, hashed, transactional, revocable, and o
   );
   await assert.rejects(
     repository.acceptAdminInvite(recipient.id, expired.token, '2026-07-08T00:00:00.001Z'),
+    (error) => error.statusCode === 410 && /expired/i.test(error.message),
+  );
+});
+
+test('reusable admin links create pending requests that require an owner decision', async () => {
+  const owner = (await repository.syncAccountFromIdentity(createIdentityUser({
+    id: 'identity-owner',
+    email: 'owner@example.com',
+    username: 'AccountOwner',
+  }))).account;
+  const firstCandidate = (await repository.syncAccountFromIdentity(createIdentityUser({
+    id: 'identity-first',
+    email: 'first@example.com',
+    username: 'FirstCandidate',
+  }))).account;
+  const secondCandidate = (await repository.syncAccountFromIdentity(createIdentityUser({
+    id: 'identity-second',
+    email: 'second@example.com',
+    username: 'SecondCandidate',
+  }))).account;
+  const created = await repository.createAdminAccessLink(owner.id, '2026-07-01T00:00:00.000Z');
+
+  assert.ok(created.token.length >= 40);
+  assert.equal((await repository.listAdminAccessLinks(owner.id)).length, 1);
+
+  const rawRows = await repository.getAccountDatabase().sql`SELECT token_hash FROM admin_access_links`;
+  assert.equal(rawRows[0].token_hash, repository.hashAdminAccessLinkToken(created.token));
+  assert.notEqual(rawRows[0].token_hash, created.token);
+
+  const firstRequest = await repository.submitAdminAccessRequest(
+    firstCandidate.id,
+    created.token,
+    '2026-07-02T00:00:00.000Z',
+  );
+  const replay = await repository.submitAdminAccessRequest(
+    firstCandidate.id,
+    created.token,
+    '2026-07-02T00:01:00.000Z',
+  );
+  const secondRequest = await repository.submitAdminAccessRequest(
+    secondCandidate.id,
+    created.token,
+    '2026-07-02T00:02:00.000Z',
+  );
+
+  assert.equal(replay.id, firstRequest.id);
+  assert.equal((await repository.getAccountById(firstCandidate.id)).role, 'user');
+  assert.equal((await repository.getAccountById(secondCandidate.id)).role, 'user');
+
+  const pending = await repository.listAdminAccessRequests(owner.id);
+  assert.deepEqual(pending.map((request) => request.account.username), [
+    'SecondCandidate',
+    'FirstCandidate',
+  ]);
+
+  const approved = await repository.reviewAdminAccessRequest(
+    owner.id,
+    firstRequest.id,
+    'approved',
+    '2026-07-03T00:00:00.000Z',
+  );
+  const rejected = await repository.reviewAdminAccessRequest(
+    owner.id,
+    secondRequest.id,
+    'rejected',
+    '2026-07-03T00:01:00.000Z',
+  );
+
+  assert.equal(approved.account.role, 'admin');
+  assert.equal(approved.request.status, 'approved');
+  assert.equal(rejected.account.role, 'user');
+  assert.equal(rejected.request.status, 'rejected');
+
+  const replacement = await repository.createAdminAccessLink(owner.id, '2026-07-04T00:00:00.000Z');
+  const links = await repository.listAdminAccessLinks(owner.id);
+  assert.equal(links[0].id, replacement.link.id);
+  assert.ok(links.find((link) => link.id === created.link.id).revokedAt);
+  await assert.rejects(
+    repository.submitAdminAccessRequest(secondCandidate.id, created.token, '2026-07-04T00:01:00.000Z'),
+    (error) => error.statusCode === 404 && /revoked/i.test(error.message),
+  );
+
+  const expiring = await repository.createAdminAccessLink(owner.id, '2026-07-01T00:00:00.000Z');
+  await assert.rejects(
+    repository.submitAdminAccessRequest(secondCandidate.id, expiring.token, '2026-07-31T00:00:00.001Z'),
     (error) => error.statusCode === 410 && /expired/i.test(error.message),
   );
 });

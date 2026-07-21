@@ -158,7 +158,88 @@ test('Preview Server account writes accept the external Helix origin but reject 
   }
 });
 
-test('owner creates an email-bound link that promotes one matching account and can demote it', async () => {
+test('one reusable link accepts multiple admin requests but only owner approval grants access', async () => {
+  const ownerUser = createIdentityUser({
+    id: 'identity-owner',
+    email: 'owner@example.com',
+    username: 'HelixOwner',
+  });
+  const firstCandidate = createIdentityUser({
+    id: 'identity-first-candidate',
+    email: 'first@example.com',
+    username: 'FirstCandidate',
+  });
+  const secondCandidate = createIdentityUser({
+    id: 'identity-second-candidate',
+    email: 'second@example.com',
+    username: 'SecondCandidate',
+  });
+  const identity = createFakeIdentity(ownerUser);
+  await repository.syncAccountFromIdentity(ownerUser);
+  await repository.syncAccountFromIdentity(firstCandidate);
+  await repository.syncAccountFromIdentity(secondCandidate);
+
+  const linkResponse = await accountRequest('/api/account/admin-access-links', 'POST', {}, identity);
+  const linkBody = await linkResponse.json();
+  const token = new URL(linkBody.adminRequestLink).searchParams.get('admin_request');
+
+  assert.equal(linkResponse.status, 201);
+  assert.ok(token);
+  assert.equal(new URL(linkBody.adminRequestLink).origin, 'https://helix.test');
+
+  identity.currentUser = firstCandidate;
+  const firstResponse = await accountRequest(
+    '/api/account/admin-access-requests',
+    'POST',
+    { token },
+    identity,
+  );
+  assert.equal(firstResponse.status, 202);
+  assert.equal((await firstResponse.json()).request.status, 'pending');
+
+  identity.currentUser = secondCandidate;
+  const secondResponse = await accountRequest(
+    '/api/account/admin-access-requests',
+    'POST',
+    { token },
+    identity,
+  );
+  assert.equal(secondResponse.status, 202);
+
+  assert.equal((await repository.getAccountByIdentityUserId(firstCandidate.id)).role, 'user');
+  assert.equal((await repository.getAccountByIdentityUserId(secondCandidate.id)).role, 'user');
+
+  identity.currentUser = ownerUser;
+  const requestsResponse = await accountRequest('/api/account/admin-access-requests', 'GET', undefined, identity);
+  const requests = (await requestsResponse.json()).requests;
+  const firstRequest = requests.find((request) => request.account.username === 'FirstCandidate');
+  const secondRequest = requests.find((request) => request.account.username === 'SecondCandidate');
+
+  assert.equal(requestsResponse.status, 200);
+  assert.equal(requests.length, 2);
+  assert.equal(firstRequest.account.identityUserId, undefined);
+
+  const approveResponse = await accountRequest(
+    `/api/account/admin-access-requests/${firstRequest.id}/approve`,
+    'POST',
+    {},
+    identity,
+  );
+  const rejectResponse = await accountRequest(
+    `/api/account/admin-access-requests/${secondRequest.id}/reject`,
+    'POST',
+    {},
+    identity,
+  );
+
+  assert.equal((await approveResponse.json()).account.role, 'admin');
+  assert.equal((await rejectResponse.json()).account.role, 'user');
+
+  const admins = await (await accountRequest('/api/account/admins', 'GET', undefined, identity)).json();
+  assert.deepEqual(admins.accounts.map((account) => account.username), ['FirstCandidate']);
+});
+
+test('legacy email-bound admin links still promote one matching account and can be demoted', async () => {
   const ownerUser = createIdentityUser({
     id: 'identity-owner',
     email: 'owner@example.com',

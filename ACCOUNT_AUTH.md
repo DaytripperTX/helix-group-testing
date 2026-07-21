@@ -1,10 +1,10 @@
 # Helix account authentication
 
 Helix accounts use Netlify Identity for credentials and sessions. Helix-owned
-profiles, roles, admin invitations, and deletion state live in Netlify Database
-(PostgreSQL).
+profiles, roles, admin-access requests, and deletion state live in Netlify
+Database (PostgreSQL).
 
-Passwords, OAuth tokens, refresh tokens, and plaintext admin-invitation tokens
+Passwords, OAuth tokens, refresh tokens, and plaintext admin-link tokens
 must never be written to PostgreSQL, logs, environment examples, or source.
 
 ## Netlify setup
@@ -13,8 +13,9 @@ These are manual project settings and are intentionally not automated by the
 repository:
 
 1. Confirm Netlify Database is enabled. Netlify will apply the additive
-   `20260717000100_create-user-accounts` migration during the deploy lifecycle;
-   verify it first on the feature branch's isolated Deploy Preview database.
+   `20260717000100_create-user-accounts` and
+   `20260719000100_add-admin-access-approval` migrations during the deploy
+   lifecycle; verify them first on the feature branch's isolated Deploy Preview database.
    See Netlify's [migration guide](https://docs.netlify.com/build/data-and-storage/netlify-database/migrations/).
 2. Follow Netlify's [Identity setup guide](https://docs.netlify.com/manage/security/secure-access-to-sites/identity/get-started/)
    and enable Identity under **Project configuration > Identity**.
@@ -64,26 +65,19 @@ Google requires the configured redirect URI to match exactly. A
 `redirect_uri_mismatch` error means the value in **Google Auth Platform >
 Clients** does not match the callback used by Netlify.
 
-### Automatic admin-invitation email
+### Reusable admin-access link
 
-The owner panel always returns a one-time copyable link. It also sends that link
-automatically when Netlify's Email Integration is configured:
+The owner panel creates one reusable, copyable link without requiring an email
+address. The same link can be sent to multiple prospective admins and remains
+valid for 30 days unless the owner revokes or replaces it. PostgreSQL stores
+only its SHA-256 token hash; the plaintext URL is displayed only in the response
+that creates it.
 
-Until the group has a verified sender address, leave this integration disabled
-and use the copyable invitation link.
-
-1. Create and verify a sender with Mailgun, Postmark, or SendGrid.
-2. In the existing Netlify project, open **Project configuration > Emails >
-   Configuration**, enable the email extension, select the provider, and enter
-   its API key. Keep the default `emails` directory.
-3. Add `HELIX_ADMIN_INVITE_FROM` as a secret environment variable with a sender
-   address authorized by that provider. Scope it to Builds and Functions and to
-   the Deploy Preview context while testing.
-4. Deploy the branch. The committed `emails/admin-invite/index.html` template
-   becomes the `admin-invite` handler.
-5. Create an invitation from **Account > Admin accounts** and verify the UI says
-   it was emailed. If delivery is unavailable or fails, copy the displayed link
-   before leaving the page.
+Opening the link never grants admin access. After the recipient signs in or
+creates an account, it creates a pending admin-access request. The account
+remains a `user` until the owner approves that specific request. Rejection leaves
+the account unchanged. Creating a replacement link immediately revokes the old
+one, but does not discard requests that were already submitted for review.
 
 ## Owner and admin rollout
 
@@ -91,11 +85,10 @@ and use the copyable invitation link.
 2. Sign up with the verified email in `HELIX_OWNER_EMAIL`. The first matching
    profile becomes the only owner; ownership is then bound to its Identity ID.
 3. Confirm `/hxowner` works through the new account.
-4. In **Account > Admin accounts**, send a seven-day link for each intended
-   admin email. The owner also sees a copy fallback; only the token hash is
-   retained in PostgreSQL.
-5. Have each admin create or sign into the matching verified account and accept
-   the link.
+4. In **Account > Admin accounts**, create the reusable 30-day link, copy it,
+   and send the same link to each intended admin.
+5. Have each admin open the link and create or sign into their account. Confirm
+   each account appears under **Pending requests**, then approve it explicitly.
 6. Set `HELIX_LEGACY_ADMIN_AUTH=false` and redeploy.
 7. After verifying owner and admin access, remove `HELIX_ADMIN_PASSWORD` and
    `HELIX_OWNER_PASSWORD`. Do not remove `HELIX_ADMIN_SESSION_SECRET`.
@@ -135,9 +128,8 @@ are shared with the project even though their Helix profile rows are isolated in
 the Deploy Preview database.
 
 Account and admin API requests remain relative to the current browser origin.
-Owner-created admin invitation links and optional invitation email dispatches
-also use the validated browser origin, so Deploy Preview testing cannot silently
-send someone to production.
+Owner-created admin request links also use the validated browser origin, so
+Deploy Preview testing cannot silently send someone to production.
 
 Netlify Identity confirmation and password-recovery emails are generated from
 the project's shared Identity **Site URL**, not from a Deploy Preview's current
@@ -147,7 +139,8 @@ the end of the Deploy Preview's `/account` URL. Treat the token as a password:
 do not paste it into logs, issues, or chat. Google OAuth should be tested from
 the Deploy Preview itself; if Netlify returns its callback fragment to the main
 site, move that complete hash fragment to the Deploy Preview's `/account` URL
-before continuing.
+before continuing. After processing a successful OAuth callback, the account
+page retries its server session once before reporting a session-loading error.
 
 Run repository verification with:
 
@@ -166,7 +159,7 @@ Functions UI when testing the grace-period cleanup path.
 The owner can use **Account > Admin accounts > All accounts > Force delete** to
 permanently remove any non-owner account immediately. This deletes the Netlify
 Identity login first and then removes the PostgreSQL profile and related admin
-invites. The owner account is intentionally excluded.
+requests. The owner account is intentionally excluded.
 
 Netlify Dev can authenticate Identity users, but it does not inject the operator
 token needed for Identity admin deletion. Therefore, force deletion is disabled
@@ -187,5 +180,5 @@ orphaned Identity login that can recreate profile state on its next session.
 - Accounts are not required to view COAs.
 - COA round passcodes and COA access cookies are unchanged.
 - PostgreSQL is the authorization source for `user`, `admin`, and `owner` roles.
-- Identity metadata, client state, and invitation URLs are never accepted as
+- Identity metadata, client state, and admin request URLs are never accepted as
   authorization by themselves.

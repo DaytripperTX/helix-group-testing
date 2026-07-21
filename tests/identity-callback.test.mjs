@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { hasIdentityCallbackHash } from '../src/identity-callback.mjs';
 
@@ -12,4 +13,11 @@ test('unrelated and empty hashes are not treated as Identity callbacks', () => {
   assert.equal(hasIdentityCallbackHash(''), false);
   assert.equal(hasIdentityCallbackHash('#faq'), false);
   assert.equal(hasIdentityCallbackHash('#access_token='), false);
+});
+
+test('the account page retries its server session after a successful Identity callback', async () => {
+  const source = await readFile(new URL('../src/AccountPage.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /if \(!resolvedSession\.isAuthenticated\) \{\s+resolvedSession = await onRefreshSession\(\);/);
+  assert.match(source, /resolvedSession\.onboardingRequired/);
 });

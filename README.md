@@ -64,7 +64,7 @@ verification, repair, and rollout safeguards.
 
 User accounts use Netlify Identity plus PostgreSQL profiles and roles. See
 [ACCOUNT_AUTH.md](ACCOUNT_AUTH.md) for local development, Netlify/Google setup,
-owner bootstrap, admin invitations, and the staged shared-password cutover.
+owner bootstrap, admin-access approval, and the staged shared-password cutover.
 
 Build the production bundle:
 

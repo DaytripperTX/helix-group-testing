@@ -4,20 +4,25 @@ import type { AccountRecord, AccountSession, IdentityCallbackNotice } from './ac
 
 type AuthMode = 'signin' | 'signup' | 'recover' | 'reset';
 
-type AdminInvite = {
+type AdminAccessLink = {
   id: string;
-  recipientEmail: string;
   createdAt: string;
   expiresAt: string;
-  consumedAt?: string;
   revokedAt?: string;
 };
 
 type ManagedAccount = AccountRecord;
 
-type AdminInviteDelivery = 'sent' | 'not_configured' | 'failed';
+type AdminAccessRequest = {
+  id: string;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedAt: string;
+  reviewedAt?: string;
+  account: ManagedAccount;
+};
 
 const inviteStorageKey = 'helix_admin_invite_token';
+const adminRequestStorageKey = 'helix_admin_request_token';
 const oauthIntentStorageKey = 'helix_oauth_intent';
 
 function AccountPage({
@@ -35,6 +40,7 @@ function AccountPage({
 }) {
   const callbackHandledRef = useRef(false);
   const inviteAcceptedRef = useRef('');
+  const adminRequestSubmittedRef = useRef('');
   const [mode, setMode] = useState<AuthMode>(() => getInitialMode());
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
@@ -46,26 +52,37 @@ function AccountPage({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecentAuthReady, setIsRecentAuthReady] = useState(false);
   const [scheduledDeletionDate, setScheduledDeletionDate] = useState('');
-  const [adminInvites, setAdminInvites] = useState<AdminInvite[]>([]);
+  const [adminAccessLinks, setAdminAccessLinks] = useState<AdminAccessLink[]>([]);
+  const [adminAccessRequests, setAdminAccessRequests] = useState<AdminAccessRequest[]>([]);
   const [managedAdmins, setManagedAdmins] = useState<ManagedAccount[]>([]);
   const [managedAccounts, setManagedAccounts] = useState<ManagedAccount[]>([]);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [newInviteLink, setNewInviteLink] = useState('');
+  const [newAdminRequestLink, setNewAdminRequestLink] = useState('');
   const isLocalIdentityAdminUnavailable = ['localhost', '127.0.0.1', '[::1]', '::1']
     .includes(window.location.hostname);
 
   useEffect(() => {
     const url = new URL(window.location.href);
     const inviteToken = url.searchParams.get('admin_invite');
+    const adminRequestToken = url.searchParams.get('admin_request');
 
-    if (!inviteToken) {
+    if (!inviteToken && !adminRequestToken) {
       return;
     }
 
-    window.localStorage.setItem(inviteStorageKey, inviteToken);
+    if (inviteToken) {
+      window.localStorage.setItem(inviteStorageKey, inviteToken);
+    }
+
+    if (adminRequestToken) {
+      window.localStorage.setItem(adminRequestStorageKey, adminRequestToken);
+    }
+
     url.searchParams.delete('admin_invite');
+    url.searchParams.delete('admin_request');
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
-    setStatus('Sign in or create the invited account to accept admin access.');
+    setStatus(adminRequestToken
+      ? 'Sign in or create an account to request admin access.'
+      : 'Sign in or create the invited account to accept admin access.');
   }, []);
 
   useEffect(() => {
@@ -100,18 +117,24 @@ function AccountPage({
           return;
         }
 
+        let resolvedSession = session;
+
+        if (!resolvedSession.isAuthenticated) {
+          resolvedSession = await onRefreshSession();
+        }
+
         const oauthIntent = window.sessionStorage.getItem(oauthIntentStorageKey);
 
-        if (oauthIntent === 'delete' && session.identity?.provider === 'google') {
+        if (oauthIntent === 'delete' && resolvedSession.identity?.provider === 'google') {
           await accountFetch('/api/account/reauth/google', { method: 'POST', body: {} });
           window.sessionStorage.removeItem(oauthIntentStorageKey);
           setIsRecentAuthReady(true);
           setStatus('Google sign-in verified. You can now delete your account.');
         } else {
           window.sessionStorage.removeItem(oauthIntentStorageKey);
-          setStatus(session.onboardingRequired
+          setStatus(resolvedSession.onboardingRequired
             ? 'Choose a username to finish setup.'
-            : session.isAuthenticated ? 'Signed in.' : 'Sign-in completed, but the account service could not be reached.');
+            : resolvedSession.isAuthenticated ? 'Signed in.' : 'Sign-in completed, but the account session could not be loaded. Refresh and try again.');
         }
       } catch (error) {
         setStatus(getErrorMessage(error, 'Authentication link could not be completed.'));
@@ -119,7 +142,7 @@ function AccountPage({
         setIsSubmitting(false);
       }
     })();
-  }, [identityCallbackNotice, session.identity?.provider, session.isAuthenticated, session.onboardingRequired]);
+  }, [identityCallbackNotice, onRefreshSession, session]);
 
   useEffect(() => {
     const inviteToken = window.localStorage.getItem(inviteStorageKey) ?? '';
@@ -154,8 +177,40 @@ function AccountPage({
   }, [onSessionChange, session]);
 
   useEffect(() => {
+    const token = window.localStorage.getItem(adminRequestStorageKey) ?? '';
+
+    if (
+      !token
+      || adminRequestSubmittedRef.current === token
+      || !session.account
+      || session.account.status !== 'active'
+    ) {
+      return;
+    }
+
+    adminRequestSubmittedRef.current = token;
+    void (async () => {
+      setIsSubmitting(true);
+
+      try {
+        await accountFetch('/api/account/admin-access-requests', {
+          method: 'POST',
+          body: { token },
+        });
+        window.localStorage.removeItem(adminRequestStorageKey);
+        setStatus('Admin access request sent for owner approval.');
+      } catch (error) {
+        setStatus(getErrorMessage(error, 'Admin access request could not be sent.'));
+      } finally {
+        setIsSubmitting(false);
+      }
+    })();
+  }, [session.account]);
+
+  useEffect(() => {
     if (session.account?.role !== 'owner' || session.account.status !== 'active') {
-      setAdminInvites([]);
+      setAdminAccessLinks([]);
+      setAdminAccessRequests([]);
       setManagedAdmins([]);
       setManagedAccounts([]);
       return;
@@ -166,12 +221,14 @@ function AccountPage({
 
   const refreshOwnerData = async () => {
     try {
-      const [inviteResult, adminResult, accountResult] = await Promise.all([
-        accountFetch<{ invites: AdminInvite[] }>('/api/account/admin-invites'),
+      const [linkResult, requestResult, adminResult, accountResult] = await Promise.all([
+        accountFetch<{ links: AdminAccessLink[] }>('/api/account/admin-access-links'),
+        accountFetch<{ requests: AdminAccessRequest[] }>('/api/account/admin-access-requests'),
         accountFetch<{ accounts: ManagedAccount[] }>('/api/account/admins'),
         accountFetch<{ accounts: ManagedAccount[] }>('/api/account/accounts'),
       ]);
-      setAdminInvites(inviteResult.invites);
+      setAdminAccessLinks(linkResult.links);
+      setAdminAccessRequests(requestResult.requests);
       setManagedAdmins(adminResult.accounts);
       setManagedAccounts(accountResult.accounts);
     } catch (error) {
@@ -389,42 +446,64 @@ function AccountPage({
     }
   };
 
-  const submitAdminInvite = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const createAdminRequestLink = async () => {
+    const hasActiveLink = adminAccessLinks.some((link) => (
+      !link.revokedAt && new Date(link.expiresAt).getTime() > Date.now()
+    ));
+
+    if (hasActiveLink && !window.confirm('Replace the current admin request link? The old link will stop working.')) {
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
       const result = await accountFetch<{
-        invite: AdminInvite;
-        inviteLink: string;
-        emailDelivery: AdminInviteDelivery;
-      }>('/api/account/admin-invites', {
+        link: AdminAccessLink;
+        adminRequestLink: string;
+      }>('/api/account/admin-access-links', {
         method: 'POST',
-        body: { email: inviteEmail },
+        body: {},
       });
-      setNewInviteLink(result.inviteLink);
-      setInviteEmail('');
-      setStatus(getInviteDeliveryStatus(result.emailDelivery));
+      setNewAdminRequestLink(result.adminRequestLink);
+      setStatus('Reusable admin request link created. Copy it now.');
       await refreshOwnerData();
     } catch (error) {
-      setStatus(getErrorMessage(error, 'Admin link could not be created.'));
+      setStatus(getErrorMessage(error, 'Admin request link could not be created.'));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const revokeInvite = async (inviteId: string) => {
+  const revokeAdminRequestLink = async (linkId: string) => {
     setIsSubmitting(true);
 
     try {
-      await accountFetch(`/api/account/admin-invites/${encodeURIComponent(inviteId)}`, {
+      await accountFetch(`/api/account/admin-access-links/${encodeURIComponent(linkId)}`, {
         method: 'DELETE',
       });
-      setNewInviteLink('');
-      setStatus('Admin link revoked.');
+      setNewAdminRequestLink('');
+      setStatus('Admin request link revoked.');
       await refreshOwnerData();
     } catch (error) {
-      setStatus(getErrorMessage(error, 'Admin link could not be revoked.'));
+      setStatus(getErrorMessage(error, 'Admin request link could not be revoked.'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const reviewAdminRequest = async (requestId: string, decision: 'approve' | 'reject') => {
+    setIsSubmitting(true);
+
+    try {
+      await accountFetch(`/api/account/admin-access-requests/${encodeURIComponent(requestId)}/${decision}`, {
+        method: 'POST',
+        body: {},
+      });
+      setStatus(decision === 'approve' ? 'Admin access approved.' : 'Admin access request rejected.');
+      await refreshOwnerData();
+    } catch (error) {
+      setStatus(getErrorMessage(error, 'Admin access request could not be reviewed.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -605,34 +684,55 @@ function AccountPage({
         {session.account.role === 'owner' && (
           <section className="account-card account-card--owner" aria-labelledby="admin-accounts-title">
             <h2 id="admin-accounts-title">Admin accounts</h2>
-            <form className="account-inline-form" onSubmit={submitAdminInvite}>
-              <AccountField label="Admin email" type="email" value={inviteEmail} autoComplete="email" onChange={setInviteEmail} />
-              <button type="submit" disabled={isSubmitting || !inviteEmail.trim()}>Send 7-day link</button>
-            </form>
+            <p>
+              Share one link with prospective admins. It only submits a request; you must approve each account below.
+            </p>
+            <button type="button" disabled={isSubmitting} onClick={createAdminRequestLink}>
+              Create reusable link
+            </button>
 
-            {newInviteLink && (
+            {newAdminRequestLink && (
               <div className="account-invite-link">
                 <label>
                   <span>Copy this link now</span>
-                  <input readOnly value={newInviteLink} onFocus={(event) => event.currentTarget.select()} />
+                  <input readOnly value={newAdminRequestLink} onFocus={(event) => event.currentTarget.select()} />
                 </label>
-                <button type="button" onClick={() => void navigator.clipboard?.writeText(newInviteLink)}>Copy</button>
+                <button type="button" onClick={() => void navigator.clipboard?.writeText(newAdminRequestLink)}>Copy</button>
               </div>
             )}
 
             <div className="account-management-grid">
               <div>
-                <h3>Invites</h3>
-                {adminInvites.length === 0 && <p>No admin links yet.</p>}
-                {adminInvites.map((invite) => (
-                  <article className="account-management-row" key={invite.id}>
+                <h3>Shared link</h3>
+                {adminAccessLinks.every((link) => (
+                  Boolean(link.revokedAt) || new Date(link.expiresAt).getTime() <= Date.now()
+                )) && <p>No active admin request link.</p>}
+                {adminAccessLinks.filter((link) => (
+                  !link.revokedAt && new Date(link.expiresAt).getTime() > Date.now()
+                )).map((link) => (
+                  <article className="account-management-row" key={link.id}>
                     <div>
-                      <strong>{invite.recipientEmail}</strong>
-                      <small>{formatInviteState(invite)}</small>
+                      <strong>Reusable request link</strong>
+                      <small>Expires {formatDateTime(link.expiresAt)}</small>
                     </div>
-                    {!invite.consumedAt && !invite.revokedAt && new Date(invite.expiresAt).getTime() > Date.now() && (
-                      <button type="button" disabled={isSubmitting} onClick={() => revokeInvite(invite.id)}>Revoke</button>
-                    )}
+                    <button type="button" disabled={isSubmitting} onClick={() => revokeAdminRequestLink(link.id)}>Revoke</button>
+                  </article>
+                ))}
+              </div>
+
+              <div>
+                <h3>Pending requests</h3>
+                {adminAccessRequests.every((request) => request.status !== 'pending') && <p>No pending requests.</p>}
+                {adminAccessRequests.filter((request) => request.status === 'pending').map((request) => (
+                  <article className="account-management-row" key={request.id}>
+                    <div>
+                      <strong>{request.account.username}</strong>
+                      <small>{request.account.email} · Requested {formatDateTime(request.requestedAt)}</small>
+                    </div>
+                    <div className="account-actions">
+                      <button type="button" disabled={isSubmitting} onClick={() => reviewAdminRequest(request.id, 'approve')}>Approve</button>
+                      <button type="button" disabled={isSubmitting} onClick={() => reviewAdminRequest(request.id, 'reject')}>Reject</button>
+                    </div>
                   </article>
                 ))}
               </div>
@@ -800,34 +900,6 @@ function formatDateTime(value?: string) {
     dateStyle: 'long',
     timeStyle: 'short',
   }).format(new Date(value));
-}
-
-function formatInviteState(invite: AdminInvite) {
-  if (invite.consumedAt) {
-    return `Accepted ${formatDateTime(invite.consumedAt)}`;
-  }
-
-  if (invite.revokedAt) {
-    return `Revoked ${formatDateTime(invite.revokedAt)}`;
-  }
-
-  if (new Date(invite.expiresAt).getTime() <= Date.now()) {
-    return `Expired ${formatDateTime(invite.expiresAt)}`;
-  }
-
-  return `Expires ${formatDateTime(invite.expiresAt)}`;
-}
-
-function getInviteDeliveryStatus(delivery: AdminInviteDelivery) {
-  if (delivery === 'sent') {
-    return 'Admin link emailed. The copy link is also available until you leave this page.';
-  }
-
-  if (delivery === 'failed') {
-    return 'Admin link created, but email delivery failed. Copy the link now.';
-  }
-
-  return 'Admin link created. Email delivery is not configured, so copy the link now.';
 }
 
 function getErrorMessage(error: unknown, fallback: string) {

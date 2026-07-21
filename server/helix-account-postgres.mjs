@@ -6,6 +6,7 @@ import {
 
 export const ACCOUNT_DELETION_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 export const ADMIN_INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+export const ADMIN_ACCESS_LINK_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 
 const reservedUsernames = new Set([
   'admin',
@@ -71,6 +72,10 @@ export function validateAccountUsername(value) {
 
 export function hashAdminInviteToken(token) {
   return createHash('sha256').update(String(token ?? '')).digest('hex');
+}
+
+export function hashAdminAccessLinkToken(token) {
+  return hashAdminInviteToken(token);
 }
 
 export async function getAccountByIdentityUserId(identityUserId) {
@@ -472,6 +477,305 @@ export async function acceptAdminInvite(accountId, token, now = new Date().toISO
   }
 }
 
+export async function createAdminAccessLink(ownerAccountId, now = new Date().toISOString()) {
+  const token = randomBytes(32).toString('base64url');
+  const tokenHash = hashAdminAccessLinkToken(token);
+  const expiresAt = new Date(new Date(now).getTime() + ADMIN_ACCESS_LINK_LIFETIME_MS).toISOString();
+  const database = getAccountDatabase();
+  const client = await database.pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    await assertOwnerAccount(client, ownerAccountId);
+    await client.query(
+      `UPDATE admin_access_links
+       SET revoked_at = $2
+       WHERE created_by_account_id = $1
+         AND revoked_at IS NULL`,
+      [ownerAccountId, now],
+    );
+    const result = await client.query(
+      `INSERT INTO admin_access_links (
+         id,
+         token_hash,
+         created_by_account_id,
+         created_at,
+         expires_at
+       ) VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [randomUUID(), tokenHash, ownerAccountId, now, expiresAt],
+    );
+    await client.query('COMMIT');
+
+    return { link: toAdminAccessLink(result.rows[0]), token };
+  } catch (error) {
+    await rollbackQuietly(client);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function listAdminAccessLinks(ownerAccountId) {
+  const database = getAccountDatabase();
+  const client = await database.pool.connect();
+
+  try {
+    await assertOwnerAccount(client, ownerAccountId);
+    const result = await client.query(
+      `SELECT *
+       FROM admin_access_links
+       WHERE created_by_account_id = $1
+       ORDER BY created_at DESC, id`,
+      [ownerAccountId],
+    );
+
+    return result.rows.map(toAdminAccessLink);
+  } finally {
+    client.release();
+  }
+}
+
+export async function revokeAdminAccessLink(ownerAccountId, linkId, now = new Date().toISOString()) {
+  const database = getAccountDatabase();
+  const client = await database.pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    await assertOwnerAccount(client, ownerAccountId);
+    const result = await client.query(
+      `UPDATE admin_access_links
+       SET revoked_at = $3
+       WHERE id = $1
+         AND created_by_account_id = $2
+         AND revoked_at IS NULL
+       RETURNING *`,
+      [linkId, ownerAccountId, now],
+    );
+
+    if (!result.rows[0]) {
+      throw createAccountError(404, 'Active admin access link not found.');
+    }
+
+    await client.query('COMMIT');
+    return toAdminAccessLink(result.rows[0]);
+  } catch (error) {
+    await rollbackQuietly(client);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function submitAdminAccessRequest(accountId, token, now = new Date().toISOString()) {
+  const tokenHash = hashAdminAccessLinkToken(token);
+  const database = getAccountDatabase();
+  const client = await database.pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const accountResult = await client.query(
+      'SELECT * FROM accounts WHERE id = $1 FOR UPDATE',
+      [accountId],
+    );
+    const account = accountResult.rows[0];
+
+    if (!account || account.status !== 'active') {
+      throw createAccountError(403, 'An active account is required.');
+    }
+
+    if (account.role !== 'user') {
+      throw createAccountError(409, 'This account already has admin access.');
+    }
+
+    const linkResult = await client.query(
+      'SELECT * FROM admin_access_links WHERE token_hash = $1 FOR UPDATE',
+      [tokenHash],
+    );
+    const link = linkResult.rows[0];
+
+    if (!link || link.revoked_at) {
+      throw createAccountError(404, 'Admin access link is invalid or has been revoked.');
+    }
+
+    if (new Date(link.expires_at).getTime() <= new Date(now).getTime()) {
+      throw createAccountError(410, 'Admin access link has expired.');
+    }
+
+    const pendingResult = await client.query(
+      `SELECT *
+       FROM admin_access_requests
+       WHERE account_id = $1
+         AND status = 'pending'
+       LIMIT 1
+       FOR UPDATE`,
+      [accountId],
+    );
+
+    if (pendingResult.rows[0]) {
+      await client.query('COMMIT');
+      return toAdminAccessRequest(pendingResult.rows[0]);
+    }
+
+    const priorResult = await client.query(
+      `SELECT status
+       FROM admin_access_requests
+       WHERE link_id = $1
+         AND account_id = $2
+       LIMIT 1`,
+      [link.id, accountId],
+    );
+
+    if (priorResult.rows[0]) {
+      throw createAccountError(409, 'This admin access request has already been reviewed.');
+    }
+
+    const requestResult = await client.query(
+      `INSERT INTO admin_access_requests (
+         id,
+         link_id,
+         account_id,
+         requested_at
+       ) VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [randomUUID(), link.id, accountId, now],
+    );
+    await client.query('COMMIT');
+    return toAdminAccessRequest(requestResult.rows[0]);
+  } catch (error) {
+    await rollbackQuietly(client);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function listAdminAccessRequests(ownerAccountId) {
+  const database = getAccountDatabase();
+  const client = await database.pool.connect();
+
+  try {
+    await assertOwnerAccount(client, ownerAccountId);
+    const result = await client.query(
+      `SELECT request.*, account.identity_user_id AS account_identity_user_id,
+              account.email AS account_email,
+              account.username AS account_username,
+              account.role AS account_role,
+              account.status AS account_status,
+              account.email_verified_at AS account_email_verified_at,
+              account.last_login_at AS account_last_login_at,
+              account.deletion_requested_at AS account_deletion_requested_at,
+              account.deletion_scheduled_for AS account_deletion_scheduled_for,
+              account.created_at AS account_created_at,
+              account.updated_at AS account_updated_at
+       FROM admin_access_requests AS request
+       INNER JOIN accounts AS account ON account.id = request.account_id
+       ORDER BY
+         CASE request.status WHEN 'pending' THEN 0 ELSE 1 END,
+         request.requested_at DESC,
+         request.id`,
+    );
+
+    return result.rows.map(toAdminAccessRequestWithAccount);
+  } finally {
+    client.release();
+  }
+}
+
+export async function reviewAdminAccessRequest(
+  ownerAccountId,
+  requestId,
+  decision,
+  now = new Date().toISOString(),
+) {
+  if (!['approved', 'rejected'].includes(decision)) {
+    throw createAccountError(400, 'Admin access decision must be approved or rejected.');
+  }
+
+  const database = getAccountDatabase();
+  const client = await database.pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    await assertOwnerAccount(client, ownerAccountId);
+    const requestLookup = await client.query(
+      `SELECT account_id, status
+       FROM admin_access_requests
+       WHERE id = $1
+       LIMIT 1`,
+      [requestId],
+    );
+    const requestSummary = requestLookup.rows[0];
+
+    if (!requestSummary || requestSummary.status !== 'pending') {
+      throw createAccountError(404, 'Pending admin access request not found.');
+    }
+
+    let accountResult = await client.query(
+      'SELECT * FROM accounts WHERE id = $1 FOR UPDATE',
+      [requestSummary.account_id],
+    );
+
+    if (!accountResult.rows[0]) {
+      throw createAccountError(404, 'Requesting account not found.');
+    }
+
+    const requestResult = await client.query(
+      `SELECT *
+       FROM admin_access_requests
+       WHERE id = $1
+       FOR UPDATE`,
+      [requestId],
+    );
+    const request = requestResult.rows[0];
+
+    if (!request || request.status !== 'pending') {
+      throw createAccountError(404, 'Pending admin access request not found.');
+    }
+
+    if (decision === 'approved') {
+      if (accountResult.rows[0].status !== 'active') {
+        throw createAccountError(409, 'Only an active account can become an admin.');
+      }
+
+      accountResult = await client.query(
+        `UPDATE accounts
+         SET role = 'admin', updated_at = $2
+         WHERE id = $1
+           AND role = 'user'
+         RETURNING *`,
+        [request.account_id, now],
+      );
+
+      if (!accountResult.rows[0]) {
+        throw createAccountError(409, 'This account already has elevated access.');
+      }
+    }
+
+    const reviewedResult = await client.query(
+      `UPDATE admin_access_requests
+       SET status = $2,
+           reviewed_at = $3,
+           reviewed_by_account_id = $4
+       WHERE id = $1
+         AND status = 'pending'
+       RETURNING *`,
+      [requestId, decision, now, ownerAccountId],
+    );
+
+    await client.query('COMMIT');
+    return {
+      request: toAdminAccessRequest(reviewedResult.rows[0]),
+      account: toAccount(accountResult.rows[0]),
+    };
+  } catch (error) {
+    await rollbackQuietly(client);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function listAdminAccounts(ownerAccountId) {
   const database = getAccountDatabase();
   const client = await database.pool.connect();
@@ -686,6 +990,48 @@ function toAdminInvite(row) {
     expiresAt: toIsoString(row.expires_at),
     consumedAt: toIsoString(row.consumed_at),
     revokedAt: toIsoString(row.revoked_at),
+  };
+}
+
+function toAdminAccessLink(row) {
+  return {
+    id: row.id,
+    createdByAccountId: row.created_by_account_id,
+    createdAt: toIsoString(row.created_at),
+    expiresAt: toIsoString(row.expires_at),
+    revokedAt: toIsoString(row.revoked_at),
+  };
+}
+
+function toAdminAccessRequest(row) {
+  return {
+    id: row.id,
+    linkId: row.link_id,
+    accountId: row.account_id,
+    status: row.status,
+    requestedAt: toIsoString(row.requested_at),
+    reviewedAt: toIsoString(row.reviewed_at),
+    reviewedByAccountId: row.reviewed_by_account_id ?? undefined,
+  };
+}
+
+function toAdminAccessRequestWithAccount(row) {
+  return {
+    ...toAdminAccessRequest(row),
+    account: toAccount({
+      id: row.account_id,
+      identity_user_id: row.account_identity_user_id,
+      email: row.account_email,
+      username: row.account_username,
+      role: row.account_role,
+      status: row.account_status,
+      email_verified_at: row.account_email_verified_at,
+      last_login_at: row.account_last_login_at,
+      deletion_requested_at: row.account_deletion_requested_at,
+      deletion_scheduled_for: row.account_deletion_scheduled_for,
+      created_at: row.account_created_at,
+      updated_at: row.account_updated_at,
+    }),
   };
 }
 

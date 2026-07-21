@@ -10,16 +10,22 @@ import {
 import {
   acceptAdminInvite,
   cancelAccountDeletion,
+  createAdminAccessLink,
   createAdminInvite,
   deleteAccountByIdentityUserId,
   demoteAdminAccount,
   getOwnerManagedAccount,
   isAccountUsernameAvailable,
+  listAdminAccessLinks,
+  listAdminAccessRequests,
   listAdminAccounts,
   listAdminInvites,
   listOwnerManagedAccounts,
   requestAccountDeletion,
+  reviewAdminAccessRequest,
+  revokeAdminAccessLink,
   revokeAdminInvite,
+  submitAdminAccessRequest,
   syncAccountFromIdentity,
   updateAccountUsername,
   validateAccountUsername,
@@ -286,6 +292,81 @@ export async function handleAccountRequest(request, identity = defaultIdentitySe
       const accepted = await acceptAdminInvite(account.id, body?.token);
 
       return accountJsonResponse(200, { account: toPublicAccount(accepted.account) });
+    }
+
+    if (method === 'POST' && pathname === '/api/account/admin-access-requests') {
+      assertRequestOrigin(request, identity);
+      const { account } = await requireActiveAccount(identity);
+      const body = await readJsonBody(request);
+      const accessRequest = await submitAdminAccessRequest(account.id, body?.token);
+
+      return accountJsonResponse(202, { request: accessRequest });
+    }
+
+    if (method === 'GET' && pathname === '/api/account/admin-access-requests') {
+      const { account } = await requireOwnerAccount(identity);
+      const requests = await listAdminAccessRequests(account.id);
+
+      return accountJsonResponse(200, {
+        requests: requests.map((accessRequest) => ({
+          ...accessRequest,
+          account: toPublicAccount(accessRequest.account),
+        })),
+      });
+    }
+
+    if (
+      method === 'POST'
+      && pathname.startsWith('/api/account/admin-access-requests/')
+      && (pathname.endsWith('/approve') || pathname.endsWith('/reject'))
+    ) {
+      assertRequestOrigin(request, identity);
+      const { account } = await requireOwnerAccount(identity);
+      const isApproval = pathname.endsWith('/approve');
+      const suffix = isApproval ? '/approve' : '/reject';
+      const requestId = decodeURIComponent(
+        pathname.slice('/api/account/admin-access-requests/'.length, -suffix.length),
+      );
+      const reviewed = await reviewAdminAccessRequest(
+        account.id,
+        requestId,
+        isApproval ? 'approved' : 'rejected',
+      );
+
+      return accountJsonResponse(200, {
+        request: reviewed.request,
+        account: toPublicAccount(reviewed.account),
+      });
+    }
+
+    if (pathname === '/api/account/admin-access-links') {
+      const { account } = await requireOwnerAccount(identity);
+
+      if (method === 'GET') {
+        return accountJsonResponse(200, { links: await listAdminAccessLinks(account.id) });
+      }
+
+      if (method === 'POST') {
+        assertRequestOrigin(request, identity);
+        const created = await createAdminAccessLink(account.id);
+        const publicOrigin = getHelixPublicRequestOrigin(request);
+        const adminRequestLink = `${publicOrigin}/account?admin_request=${encodeURIComponent(created.token)}`;
+
+        return accountJsonResponse(201, {
+          link: created.link,
+          adminRequestLink,
+        });
+      }
+    }
+
+    if (method === 'DELETE' && pathname.startsWith('/api/account/admin-access-links/')) {
+      assertRequestOrigin(request, identity);
+      const { account } = await requireOwnerAccount(identity);
+      const linkId = decodeURIComponent(pathname.slice('/api/account/admin-access-links/'.length));
+
+      return accountJsonResponse(200, {
+        link: await revokeAdminAccessLink(account.id, linkId),
+      });
     }
 
     if (pathname === '/api/account/admin-invites') {
