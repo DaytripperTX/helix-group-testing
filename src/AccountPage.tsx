@@ -24,7 +24,11 @@ type AdminAccessRequest = {
 const inviteStorageKey = 'helix_admin_invite_token';
 const adminRequestStorageKey = 'helix_admin_request_token';
 const oauthIntentStorageKey = 'helix_oauth_intent';
-const adminRequestRefreshMs = 5_000;
+const accountStatusDurationMs = 5_000;
+const persistentAccountStatusMessages = new Set([
+  'Check your email to confirm your account.',
+  'Check your email for the confirmation link before signing in.',
+]);
 
 function AccountPage({
   session,
@@ -60,6 +64,15 @@ function AccountPage({
   const [newAdminRequestLink, setNewAdminRequestLink] = useState('');
   const isLocalIdentityAdminUnavailable = ['localhost', '127.0.0.1', '[::1]', '::1']
     .includes(window.location.hostname);
+
+  useEffect(() => {
+    if (!status || persistentAccountStatusMessages.has(status)) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setStatus(''), accountStatusDurationMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [status]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -135,7 +148,11 @@ function AccountPage({
           window.sessionStorage.removeItem(oauthIntentStorageKey);
           setStatus(resolvedSession.onboardingRequired
             ? 'Choose a username to finish setup.'
-            : resolvedSession.isAuthenticated ? 'Signed in.' : 'Sign-in completed, but the account session could not be loaded. Refresh and try again.');
+            : resolvedSession.isAuthenticated
+              ? (identityCallbackNotice.type === 'confirmation'
+                  ? 'Email confirmed. Signed in.'
+                  : 'Signed in.')
+              : 'Sign-in completed, but the account session could not be loaded. Refresh and try again.');
         }
       } catch (error) {
         setStatus(getErrorMessage(error, 'Authentication link could not be completed.'));
@@ -254,15 +271,16 @@ function AccountPage({
         void refreshRequests();
       }
     };
-    const intervalId = window.setInterval(refreshWhenVisible, adminRequestRefreshMs);
-
     window.addEventListener('focus', refreshWhenVisible);
+    window.addEventListener('online', refreshWhenVisible);
+    window.addEventListener('pageshow', refreshWhenVisible);
     document.addEventListener('visibilitychange', refreshWhenVisible);
 
     return () => {
       isActive = false;
-      window.clearInterval(intervalId);
       window.removeEventListener('focus', refreshWhenVisible);
+      window.removeEventListener('online', refreshWhenVisible);
+      window.removeEventListener('pageshow', refreshWhenVisible);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
   }, [session.account?.id, session.account?.role, session.account?.status]);

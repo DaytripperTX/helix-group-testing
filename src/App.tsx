@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { handleAuthCallback } from '@netlify/identity';
+import { handleAuthCallback, onAuthChange } from '@netlify/identity';
 import { CircleCheckBig } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
@@ -25,6 +25,13 @@ import {
   type IdentityCallbackNotice,
   signedOutAccountSession,
 } from './account-types';
+import {
+  accountSessionRefreshChannel,
+  accountSessionRefreshEvent,
+  accountSessionRefreshMessage,
+  notifyAccountAuthorizationFailure,
+  requestAccountSessionRefresh,
+} from './account-session-events';
 import { hasIdentityCallbackHash } from './identity-callback.mjs';
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
@@ -633,8 +640,6 @@ type AdminSession = {
   role?: 'owner' | 'admin';
 };
 
-const accountRoleRefreshMs = 5_000;
-
 function getPageFromPath(): PageId {
   if (hasIdentityCallbackHash(window.location.hash)) {
     return 'account';
@@ -661,6 +666,7 @@ function App() {
   const [isSessionResolved, setIsSessionResolved] = useState(false);
   const [identityCallbackNotice, setIdentityCallbackNotice] = useState<IdentityCallbackNotice | null>(null);
   const identityCallbackPromiseRef = useRef<Promise<IdentityCallbackNotice | null> | null>(null);
+  const accountSessionChannelRef = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
     const handleNavigation = () => {
@@ -679,6 +685,10 @@ function App() {
       }
 
       setActivePage(nextPage);
+
+      if (nextPage === 'account' || nextPage === 'hxadmin' || nextPage === 'hxowner') {
+        requestAccountSessionRefresh();
+      }
     };
 
     window.addEventListener('popstate', handleNavigation);
@@ -740,63 +750,98 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const account = accountSession.account;
-
-    if (
-      !isSessionResolved
-      || !accountSession.isAuthenticated
-      || !account
-      || account.role === 'owner'
-    ) {
+    if (!isSessionResolved) {
       return;
     }
 
     let isActive = true;
     let isRefreshing = false;
+    let isRefreshQueued = false;
 
-    const refreshRole = async () => {
-      if (!isActive || isRefreshing) {
+    const refreshSessions = async () => {
+      if (!isActive) {
+        return;
+      }
+
+      if (isRefreshing) {
+        isRefreshQueued = true;
         return;
       }
 
       isRefreshing = true;
 
       try {
-        const nextAccountSession = await fetchCurrentAccountSession();
+        const [nextAccountSession, nextAdminSession] = await Promise.all([
+          fetchCurrentAccountSession(),
+          fetchAdminSession(),
+        ]);
 
         if (!isActive) {
           return;
         }
 
         setAccountSession(nextAccountSession);
-        setAdminSession(resolveClientAdminSession(nextAccountSession, { isAuthenticated: false }));
+        setAdminSession(resolveClientAdminSession(nextAccountSession, nextAdminSession));
       } catch {
         // Keep the last known session during a transient refresh failure.
       } finally {
         isRefreshing = false;
+
+        if (isActive && isRefreshQueued) {
+          isRefreshQueued = false;
+          void refreshSessions();
+        }
       }
     };
     const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') {
-        void refreshRole();
+      if (
+        document.visibilityState === 'visible'
+        && (accountSession.isAuthenticated || adminSession.isAuthenticated)
+      ) {
+        void refreshSessions();
       }
     };
-    const intervalId = window.setInterval(refreshWhenVisible, accountRoleRefreshMs);
+    const refreshFromEvent = () => {
+      void refreshSessions();
+    };
+    const refreshFromChannel = (event: MessageEvent<unknown>) => {
+      if (event.data === accountSessionRefreshMessage) {
+        void refreshSessions();
+      }
+    };
+    const accountSessionChannel = typeof BroadcastChannel === 'function'
+      ? new BroadcastChannel(accountSessionRefreshChannel)
+      : null;
+    const unsubscribeAuthChange = onAuthChange(refreshFromEvent);
+
+    accountSessionChannelRef.current = accountSessionChannel;
+    accountSessionChannel?.addEventListener('message', refreshFromChannel);
 
     window.addEventListener('focus', refreshWhenVisible);
+    window.addEventListener('online', refreshWhenVisible);
+    window.addEventListener('pageshow', refreshWhenVisible);
+    window.addEventListener(accountSessionRefreshEvent, refreshFromEvent);
     document.addEventListener('visibilitychange', refreshWhenVisible);
 
     return () => {
       isActive = false;
-      window.clearInterval(intervalId);
+      unsubscribeAuthChange();
+      accountSessionChannel?.removeEventListener('message', refreshFromChannel);
+      accountSessionChannel?.close();
+
+      if (accountSessionChannelRef.current === accountSessionChannel) {
+        accountSessionChannelRef.current = null;
+      }
+
       window.removeEventListener('focus', refreshWhenVisible);
+      window.removeEventListener('online', refreshWhenVisible);
+      window.removeEventListener('pageshow', refreshWhenVisible);
+      window.removeEventListener(accountSessionRefreshEvent, refreshFromEvent);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
   }, [
-    accountSession.account?.id,
-    accountSession.account?.role,
-    accountSession.account?.status,
     accountSession.isAuthenticated,
+    adminSession.isAuthenticated,
     isSessionResolved,
   ]);
 
@@ -825,6 +870,8 @@ function App() {
     } else {
       setAdminSession({ isAuthenticated: false });
     }
+
+    accountSessionChannelRef.current?.postMessage(accountSessionRefreshMessage);
   };
 
   const refreshAccountAndAdminSessions = async () => {
@@ -835,6 +882,7 @@ function App() {
 
     setAccountSession(nextAccountSession);
     setAdminSession(resolveClientAdminSession(nextAccountSession, nextAdminSession));
+    accountSessionChannelRef.current?.postMessage(accountSessionRefreshMessage);
     return nextAccountSession;
   };
 
@@ -845,6 +893,7 @@ function App() {
       legacyAuthEnabled: accountSession.legacyAuthEnabled,
     });
     setAdminSession({ isAuthenticated: false });
+    accountSessionChannelRef.current?.postMessage(accountSessionRefreshMessage);
   };
 
   return (
@@ -3792,6 +3841,7 @@ async function saveCoaEntry(entry: CoaResult) {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('COA entry could not be saved.');
   }
 
@@ -3817,6 +3867,7 @@ async function saveCoaEntriesBatch(entries: CoaResult[]): Promise<CoaBatchImport
   );
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     const details = payload.details === undefined ? '' : ` Details: ${JSON.stringify(payload.details)}`;
     throw new Error(`${payload.error || 'COA batch entries could not be saved.'}${details}`);
   }
@@ -3838,6 +3889,7 @@ async function deleteCoaEntry(entryId: string) {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('COA entry could not be deleted.');
   }
 
@@ -3863,6 +3915,7 @@ async function deleteCoaEntriesBatch(ids: string[]): Promise<CoaBatchDeleteResul
   );
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     const details = payload.details === undefined ? '' : ` Details: ${JSON.stringify(payload.details)}`;
     throw new Error(`${payload.error || 'COA entries could not be deleted.'}${details}`);
   }
@@ -3935,6 +3988,7 @@ async function uploadCoaPdf(file: File): Promise<CoaPdfAsset> {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     const text = await response.text();
 
     console.error('[coa-pdf] upload request failed', {
@@ -3987,6 +4041,7 @@ async function identifyCoaPdf(file: File) {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('COA PDF batch number could not be identified.');
   }
 
@@ -4011,6 +4066,7 @@ async function parseCoaBatchNumberFile(file: File): Promise<CoaBatchImportRow[]>
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('Batch number file could not be parsed.');
   }
 

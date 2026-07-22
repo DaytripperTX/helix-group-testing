@@ -130,6 +130,14 @@ export async function handleAccountRequest(request, identity = defaultIdentitySe
           String(body?.password ?? ''),
         );
       } catch (error) {
+        if (isIdentityEmailConfirmationRequired(error)) {
+          throw createAccountApiError(
+            401,
+            'Check your email for the confirmation link before signing in.',
+            error,
+          );
+        }
+
         throw createAccountApiError(401, 'Invalid email or password.', error);
       }
 
@@ -646,4 +654,11 @@ function createAccountApiError(statusCode, message, cause) {
   const error = new Error(message, cause ? { cause } : undefined);
   error.statusCode = statusCode;
   return error;
+}
+
+function isIdentityEmailConfirmationRequired(error) {
+  const statusCode = Number(error?.statusCode ?? error?.status);
+  const message = String(error?.message ?? '').trim();
+
+  return statusCode === 400 && /^email not confirmed\.?$/i.test(message);
 }

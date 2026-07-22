@@ -20,4 +20,5 @@ test('the account page retries its server session after a successful Identity ca
 
   assert.match(source, /if \(!resolvedSession\.isAuthenticated\) \{\s+resolvedSession = await onRefreshSession\(\);/);
   assert.match(source, /resolvedSession\.onboardingRequired/);
+  assert.match(source, /identityCallbackNotice\.type === 'confirmation'\s+\?\s+'Email confirmed\. Signed in\.'/);
 });

@@ -2,6 +2,7 @@ import { type ChangeEvent, type ClipboardEvent, type FormEvent, useEffect, useRe
 import { ChevronsDown, CircleQuestionMark, CircleX, ThumbsUp, TriangleAlert } from 'lucide-react';
 import printerCatalogData from './Assets/Printers.json';
 import PageHero from './Helpers/PageHero';
+import { notifyAccountAuthorizationFailure } from './account-session-events';
 
 type LabelFormData = {
   peptideName: string;
@@ -2765,6 +2766,7 @@ async function updateNativeLabelTemplate(template: NativeLabelTemplate) {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('Label could not be updated.');
   }
 
@@ -2778,6 +2780,7 @@ async function deleteNativeLabelTemplate(templateId: string) {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('Label could not be deleted.');
   }
 
@@ -2791,6 +2794,7 @@ async function recoverNativeLabelTemplate(templateId: string) {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('Label could not be recovered.');
   }
 
@@ -2804,6 +2808,7 @@ async function permanentlyDeleteNativeLabelTemplate(templateId: string) {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('Label could not be permanently deleted.');
   }
 

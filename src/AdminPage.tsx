@@ -8,6 +8,7 @@ import {
   type RoundPriceListSnapshot,
   type TestingTierId,
 } from './rounds';
+import { notifyAccountAuthorizationFailure } from './account-session-events';
 
 type AdminSession = {
   isAuthenticated: boolean;
@@ -2817,6 +2818,8 @@ async function readJsonResponse<T>(response: Response, fallbackMessage: string):
 }
 
 async function throwResponseError(response: Response, fallbackMessage: string): Promise<never> {
+  notifyAccountAuthorizationFailure(response);
+
   let payload: unknown = null;
   let bodyText = '';
 

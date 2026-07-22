@@ -68,6 +68,50 @@ test('email signup validates usernames and stores only Identity metadata until c
   assert.match((await reserved.json()).error, /reserved/i);
 });
 
+test('email login distinguishes an unconfirmed account from invalid credentials', async () => {
+  const unconfirmedIdentity = createFakeIdentity();
+  unconfirmedIdentity.login = async () => {
+    const error = new Error('Email not confirmed');
+    error.status = 400;
+    throw error;
+  };
+
+  const unconfirmedResponse = await accountRequest('/api/account/login', 'POST', {
+    email: 'pending@example.com',
+    password: 'correct-password',
+  }, unconfirmedIdentity);
+
+  assert.equal(unconfirmedResponse.status, 401);
+  assert.deepEqual(await unconfirmedResponse.json(), {
+    error: 'Check your email for the confirmation link before signing in.',
+  });
+
+  const invalidResponse = await accountRequest('/api/account/login', 'POST', {
+    email: 'member@example.com',
+    password: 'wrong-password',
+  }, createFakeIdentity());
+
+  assert.equal(invalidResponse.status, 401);
+  assert.deepEqual(await invalidResponse.json(), {
+    error: 'Invalid email or password.',
+  });
+
+  const outageIdentity = createFakeIdentity();
+  outageIdentity.login = async () => {
+    const error = new Error('Email not confirmed');
+    error.status = 502;
+    throw error;
+  };
+  const outageResponse = await accountRequest('/api/account/login', 'POST', {
+    email: 'pending@example.com',
+    password: 'correct-password',
+  }, outageIdentity);
+
+  assert.deepEqual(await outageResponse.json(), {
+    error: 'Invalid email or password.',
+  });
+});
+
 test('Google login requires username completion and bootstraps the configured owner', async () => {
   const identity = createFakeIdentity(createIdentityUser({
     id: 'google-owner',
