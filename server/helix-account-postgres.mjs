@@ -141,9 +141,12 @@ export async function syncAccountFromIdentity(identityUser, options = {}) {
   const email = String(identityUser?.email ?? '').trim();
   const emailNormalized = normalizeAccountEmail(email);
   const verifiedAt = toIsoString(identityUser?.confirmedAt);
+  const hasVerifiedIdentityProfile = Boolean(
+    emailNormalized.includes('@') && verifiedAt,
+  );
   const now = toIsoString(options.now) ?? new Date().toISOString();
 
-  if (!identityUserId || !emailNormalized || !emailNormalized.includes('@') || !verifiedAt) {
+  if (!identityUserId) {
     throw createAccountError(403, 'A verified Identity account is required.');
   }
 
@@ -165,20 +168,33 @@ export async function syncAccountFromIdentity(identityUser, options = {}) {
     const existing = existingResult.rows[0];
 
     if (existing) {
-      const updatedResult = await client.query(
-        `UPDATE accounts
-         SET email = $2,
-             email_normalized = $3,
-             email_verified_at = $4,
-             last_login_at = $5,
-             updated_at = $5
-         WHERE id = $1
-         RETURNING *`,
-        [existing.id, email, emailNormalized, verifiedAt, now],
-      );
+      const updatedResult = hasVerifiedIdentityProfile
+        ? await client.query(
+            `UPDATE accounts
+             SET email = $2,
+                 email_normalized = $3,
+                 email_verified_at = $4,
+                 last_login_at = $5,
+                 updated_at = $5
+             WHERE id = $1
+             RETURNING *`,
+            [existing.id, email, emailNormalized, verifiedAt, now],
+          )
+        : await client.query(
+            `UPDATE accounts
+             SET last_login_at = $2,
+                 updated_at = $2
+             WHERE id = $1
+             RETURNING *`,
+            [existing.id, now],
+          );
 
       await client.query('COMMIT');
       return { account: toAccount(updatedResult.rows[0]), onboardingRequired: false };
+    }
+
+    if (!hasVerifiedIdentityProfile) {
+      throw createAccountError(403, 'A verified Identity account is required.');
     }
 
     if (!usernameValidation.ok) {

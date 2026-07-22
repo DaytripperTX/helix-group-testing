@@ -91,6 +91,29 @@ test('Google login requires username completion and bootstraps the configured ow
   assert.equal(identity.adminUpdates[0].attributes.user_metadata.helix_username, 'HelixOwner');
 });
 
+test('account session reload keeps an existing account when Identity returns JWT claims only', async () => {
+  const fullIdentityUser = createIdentityUser({
+    id: 'reload-session-user',
+    email: 'reload-session@example.com',
+    username: 'ReloadSessionUser',
+  });
+  const account = (await repository.syncAccountFromIdentity(fullIdentityUser)).account;
+  const identity = createFakeIdentity({
+    id: fullIdentityUser.id,
+    email: fullIdentityUser.email,
+    provider: fullIdentityUser.provider,
+    userMetadata: {},
+  });
+
+  const response = await accountRequest('/api/account/session', 'GET', undefined, identity);
+  const session = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(session.isAuthenticated, true);
+  assert.equal(session.account.id, account.id);
+  assert.equal(session.account.username, 'ReloadSessionUser');
+});
+
 test('account writes reject cross-origin requests and Google reauthentication must be recent', async () => {
   const identity = createFakeIdentity(createIdentityUser({
     id: 'google-user',

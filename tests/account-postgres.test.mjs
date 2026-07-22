@@ -72,6 +72,36 @@ test('verified Identity profiles bootstrap one owner and enforce normalized user
   );
 });
 
+test('existing accounts reload from verified JWT claims without full Identity profile fields', async () => {
+  const created = await repository.syncAccountFromIdentity(createIdentityUser({
+    id: 'identity-reload-user',
+    email: 'reload@example.com',
+    username: 'ReloadUser',
+  }));
+
+  const reloaded = await repository.syncAccountFromIdentity({
+    id: 'identity-reload-user',
+    email: 'reload@example.com',
+    provider: 'email',
+    userMetadata: {},
+  });
+
+  assert.equal(reloaded.onboardingRequired, false);
+  assert.equal(reloaded.account.id, created.account.id);
+  assert.equal(reloaded.account.username, 'ReloadUser');
+  assert.equal(reloaded.account.email, 'reload@example.com');
+
+  await assert.rejects(
+    repository.syncAccountFromIdentity({
+      id: 'identity-unverified-new-user',
+      email: 'unverified@example.com',
+      provider: 'email',
+      userMetadata: { helix_username: 'UnverifiedUser' },
+    }),
+    (error) => error.statusCode === 403 && /verified Identity/i.test(error.message),
+  );
+});
+
 test('Netlify Dev loopback database URLs get an explicit Postgres user', async () => {
   const runtimeConnectionString = process.env.NETLIFY_DB_URL;
   const runtimeDriver = process.env.NETLIFY_DB_DRIVER;
