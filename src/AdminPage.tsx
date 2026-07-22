@@ -8,6 +8,7 @@ import {
   type RoundPriceListSnapshot,
   type TestingTierId,
 } from './rounds';
+import { notifyAccountAuthorizationFailure } from './account-session-events';
 
 type AdminSession = {
   isAuthenticated: boolean;
@@ -266,11 +267,15 @@ const testingTierSummaryOptions: { id: TestingTierId; label: string }[] = [
 function AdminPage({
   session,
   loginRole,
+  legacyAuthEnabled,
+  onLogout,
   onSessionChange,
   onNavigate,
 }: {
   session: AdminSession;
   loginRole: AdminRole;
+  legacyAuthEnabled: boolean;
+  onLogout: () => Promise<void>;
   onSessionChange: (session: AdminSession) => void;
   onNavigate: (path: string) => void;
 }) {
@@ -462,7 +467,7 @@ function AdminPage({
     setStatus('');
 
     try {
-      await logoutAdmin();
+      await onLogout();
       onSessionChange({ isAuthenticated: false });
       setStatus('Logged out');
     } catch {
@@ -1646,30 +1651,39 @@ function AdminPage({
         <div className="admin-page__panel">
           <p className="eyebrow">Admin</p>
           <h1 id="admin-title">{loginRole === 'owner' ? 'Helix owner' : 'Helix admin'}</h1>
-          <form className="admin-login" onSubmit={login}>
-            <label>
-              <span>{loginRole === 'owner' ? 'Owner password' : 'Admin password'}</span>
-              <span className="admin-password-field">
-                <input
-                  type={isPasswordVisible ? 'text' : 'password'}
-                  value={password}
-                  autoComplete="current-password"
-                  autoFocus
-                  onChange={(event) => setPassword(event.target.value)}
-                />
-                <button
-                  type="button"
-                  aria-label={isPasswordVisible ? 'Hide password' : 'Show password'}
-                  onClick={() => setIsPasswordVisible((currentValue) => !currentValue)}
-                >
-                  {isPasswordVisible ? 'Hide' : 'Show'}
+          <p>Sign in with an account that has {loginRole === 'owner' ? 'owner' : 'admin'} access.</p>
+          <button className="admin-primary-button" type="button" onClick={() => onNavigate('/account?mode=signin')}>
+            Sign in
+          </button>
+
+          {legacyAuthEnabled && (
+            <details className="admin-legacy-login">
+              <summary>Temporary legacy access</summary>
+              <form className="admin-login" onSubmit={login}>
+                <label>
+                  <span>{loginRole === 'owner' ? 'Owner password' : 'Admin password'}</span>
+                  <span className="admin-password-field">
+                    <input
+                      type={isPasswordVisible ? 'text' : 'password'}
+                      value={password}
+                      autoComplete="current-password"
+                      onChange={(event) => setPassword(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      aria-label={isPasswordVisible ? 'Hide password' : 'Show password'}
+                      onClick={() => setIsPasswordVisible((currentValue) => !currentValue)}
+                    >
+                      {isPasswordVisible ? 'Hide' : 'Show'}
+                    </button>
+                  </span>
+                </label>
+                <button type="submit" disabled={isSubmitting || password.trim().length === 0}>
+                  Legacy login
                 </button>
-              </span>
-            </label>
-            <button type="submit" disabled={isSubmitting || password.trim().length === 0}>
-              Log In
-            </button>
-          </form>
+              </form>
+            </details>
+          )}
           {status && <p className="admin-status">{status}</p>}
         </div>
       </section>
@@ -2804,6 +2818,8 @@ async function readJsonResponse<T>(response: Response, fallbackMessage: string):
 }
 
 async function throwResponseError(response: Response, fallbackMessage: string): Promise<never> {
+  notifyAccountAuthorizationFailure(response);
+
   let payload: unknown = null;
   let bodyText = '';
 
@@ -2860,17 +2876,6 @@ async function loginAdmin(password: string, role: AdminRole): Promise<AdminSessi
   }
 
   return normalizeAdminSession(await readJsonResponse<unknown>(response, 'Admin login failed.'));
-}
-
-async function logoutAdmin() {
-  const response = await fetch('/api/admin/logout', {
-    method: 'POST',
-    credentials: 'same-origin',
-  });
-
-  if (!response.ok) {
-    await throwResponseError(response, 'Admin logout failed.');
-  }
 }
 
 async function fetchCollection<T>(collectionName: string): Promise<T[]> {

@@ -62,6 +62,10 @@ npm run dev:db
 See [LABEL_DATABASE.md](LABEL_DATABASE.md) for storage modes, owner operations,
 verification, repair, and rollout safeguards.
 
+User accounts use Netlify Identity plus PostgreSQL profiles and roles. See
+[ACCOUNT_AUTH.md](ACCOUNT_AUTH.md) for local development, Netlify/Google setup,
+owner bootstrap, admin-access approval, and the staged shared-password cutover.
+
 Build the production bundle:
 
 ```bash
@@ -108,6 +112,9 @@ Set these environment variables in the Netlify site UI before sharing a deploy:
 - `HELIX_ADMIN_PASSWORD`
 - `HELIX_OWNER_PASSWORD`
 - `HELIX_ADMIN_SESSION_SECRET`
+- `HELIX_OWNER_EMAIL`
+- `HELIX_ACCOUNT_ACTION_SECRET`
+- `HELIX_LEGACY_ADMIN_AUTH=true` only during the staged account rollout, then `false`
 - `HELIX_DATA_MODE=legacy` during the additive database deployment
 - `HELIX_ENDOTOXIN_PASS_THRESHOLD_EU_ML` if the default `5 EU/mL` threshold should be overridden
 - `DISABLED_PAGES` if any public pages should be hidden

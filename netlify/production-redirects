@@ -1,0 +1,7 @@
+/api/data/*    /.netlify/functions/data/:splat          200
+/api/admin/*   /.netlify/functions/admin/:splat         200
+/api/account/* /.netlify/functions/account/:splat       200
+/api/labels    /.netlify/functions/data/labels          200
+/api/labels/*  /.netlify/functions/data/labels/:splat   200
+/api/coas/*    /.netlify/functions/data/coas/:splat     200
+/*             /index.html                              200

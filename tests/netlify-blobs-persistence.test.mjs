@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+process.env.HELIX_LEGACY_ADMIN_AUTH = 'true';
+
 const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzX7cgAAAABJRU5ErkJggg==';
 
 test('Netlify data function seeds missing Blob documents and persists writes', async () => {

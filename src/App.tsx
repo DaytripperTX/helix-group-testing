@@ -1,8 +1,11 @@
 import { type FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { handleAuthCallback, onAuthChange } from '@netlify/identity';
 import { CircleCheckBig } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import AccountPage from './AccountPage';
 import AdminPage from './AdminPage';
+import { getAuthenticatedAccountUrl } from './account-url.mjs';
 import FaqsPage from './FaqsPage';
 import LabelsPage from './LabelsPage';
 import OrderFormPage from './OrderFormPage';
@@ -17,6 +20,19 @@ import {
 } from './coa-filter-url.mjs';
 import { publicPageItems, type PublicPageId } from './page-disables';
 import { fetchRounds, getCurrentRounds, sortRoundsForDisplay, type Round, type RoundPeptide, type TestingTierId } from './rounds';
+import {
+  type AccountSession,
+  type IdentityCallbackNotice,
+  signedOutAccountSession,
+} from './account-types';
+import {
+  accountSessionRefreshChannel,
+  accountSessionRefreshEvent,
+  accountSessionRefreshMessage,
+  notifyAccountAuthorizationFailure,
+  requestAccountSessionRefresh,
+} from './account-session-events';
+import { hasIdentityCallbackHash } from './identity-callback.mjs';
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
@@ -617,7 +633,7 @@ const configuredDisabledPages =
   typeof __HELIX_DISABLED_PAGES__ === 'undefined' ? [] : __HELIX_DISABLED_PAGES__;
 const disabledPages = new Set<string>(configuredDisabledPages);
 
-type PageId = PublicPageId | 'hxadmin' | 'hxowner';
+type PageId = PublicPageId | 'account' | 'hxadmin' | 'hxowner';
 type TestingIconType = TestingTier['panel'][number]['icon'] | 'badge';
 type AdminSession = {
   isAuthenticated: boolean;
@@ -625,7 +641,15 @@ type AdminSession = {
 };
 
 function getPageFromPath(): PageId {
+  if (hasIdentityCallbackHash(window.location.hash)) {
+    return 'account';
+  }
+
   const currentPath = window.location.pathname.replace(/\/$/, '') || '/';
+
+  if (currentPath === '/account') {
+    return 'account';
+  }
 
   if (currentPath === '/hxadmin' || currentPath === '/hxowner') {
     return currentPath.slice(1) as PageId;
@@ -638,16 +662,33 @@ function getPageFromPath(): PageId {
 function App() {
   const [activePage, setActivePage] = useState<PageId>(getPageFromPath);
   const [adminSession, setAdminSession] = useState<AdminSession>({ isAuthenticated: false });
+  const [accountSession, setAccountSession] = useState<AccountSession>(signedOutAccountSession);
+  const [isSessionResolved, setIsSessionResolved] = useState(false);
+  const [identityCallbackNotice, setIdentityCallbackNotice] = useState<IdentityCallbackNotice | null>(null);
+  const identityCallbackPromiseRef = useRef<Promise<IdentityCallbackNotice | null> | null>(null);
+  const accountSessionChannelRef = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
     const handleNavigation = () => {
       const nextPage = getPageFromPath();
+
+      if (nextPage === 'account' && hasIdentityCallbackHash(window.location.hash)) {
+        const accountUrl = `/account${window.location.search}${window.location.hash}`;
+
+        if (window.location.pathname !== '/account') {
+          window.history.replaceState(window.history.state, '', accountUrl);
+        }
+      }
 
       if (nextPage === 'home' && isDisabledPublicPath(window.location.pathname)) {
         window.history.replaceState({}, '', '/');
       }
 
       setActivePage(nextPage);
+
+      if (nextPage === 'account' || nextPage === 'hxadmin' || nextPage === 'hxowner') {
+        requestAccountSessionRefresh();
+      }
     };
 
     window.addEventListener('popstate', handleNavigation);
@@ -657,17 +698,49 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!accountSession.isAuthenticated) {
+      return;
+    }
+
+    const authenticatedUrl = getAuthenticatedAccountUrl(window.location.href);
+
+    if (authenticatedUrl) {
+      window.history.replaceState(window.history.state, '', authenticatedUrl);
+    }
+  }, [accountSession.isAuthenticated]);
+
+  useEffect(() => {
     let isMounted = true;
 
-    fetchAdminSession()
-      .then((session) => {
+    const initializeSession = async () => {
+      identityCallbackPromiseRef.current ??= resolveIdentityCallbackNotice();
+      const callbackNotice = await identityCallbackPromiseRef.current;
+
+      const [nextAccountSession, nextAdminSession] = await Promise.all([
+        fetchAccountSession(),
+        fetchAdminSession(),
+      ]);
+
+      return { callbackNotice, nextAccountSession, nextAdminSession };
+    };
+
+    initializeSession()
+      .then(({ callbackNotice, nextAccountSession, nextAdminSession }) => {
         if (isMounted) {
-          setAdminSession(session);
+          setIdentityCallbackNotice(callbackNotice);
+          setAccountSession(nextAccountSession);
+          setAdminSession(resolveClientAdminSession(nextAccountSession, nextAdminSession));
         }
       })
       .catch(() => {
         if (isMounted) {
+          setAccountSession(signedOutAccountSession);
           setAdminSession({ isAuthenticated: false });
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsSessionResolved(true);
         }
       });
 
@@ -675,6 +748,102 @@ function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isSessionResolved) {
+      return;
+    }
+
+    let isActive = true;
+    let isRefreshing = false;
+    let isRefreshQueued = false;
+
+    const refreshSessions = async () => {
+      if (!isActive) {
+        return;
+      }
+
+      if (isRefreshing) {
+        isRefreshQueued = true;
+        return;
+      }
+
+      isRefreshing = true;
+
+      try {
+        const [nextAccountSession, nextAdminSession] = await Promise.all([
+          fetchCurrentAccountSession(),
+          fetchAdminSession(),
+        ]);
+
+        if (!isActive) {
+          return;
+        }
+
+        setAccountSession(nextAccountSession);
+        setAdminSession(resolveClientAdminSession(nextAccountSession, nextAdminSession));
+      } catch {
+        // Keep the last known session during a transient refresh failure.
+      } finally {
+        isRefreshing = false;
+
+        if (isActive && isRefreshQueued) {
+          isRefreshQueued = false;
+          void refreshSessions();
+        }
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (
+        document.visibilityState === 'visible'
+        && (accountSession.isAuthenticated || adminSession.isAuthenticated)
+      ) {
+        void refreshSessions();
+      }
+    };
+    const refreshFromEvent = () => {
+      void refreshSessions();
+    };
+    const refreshFromChannel = (event: MessageEvent<unknown>) => {
+      if (event.data === accountSessionRefreshMessage) {
+        void refreshSessions();
+      }
+    };
+    const accountSessionChannel = typeof BroadcastChannel === 'function'
+      ? new BroadcastChannel(accountSessionRefreshChannel)
+      : null;
+    const unsubscribeAuthChange = onAuthChange(refreshFromEvent);
+
+    accountSessionChannelRef.current = accountSessionChannel;
+    accountSessionChannel?.addEventListener('message', refreshFromChannel);
+
+    window.addEventListener('focus', refreshWhenVisible);
+    window.addEventListener('online', refreshWhenVisible);
+    window.addEventListener('pageshow', refreshWhenVisible);
+    window.addEventListener(accountSessionRefreshEvent, refreshFromEvent);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+
+    return () => {
+      isActive = false;
+      unsubscribeAuthChange();
+      accountSessionChannel?.removeEventListener('message', refreshFromChannel);
+      accountSessionChannel?.close();
+
+      if (accountSessionChannelRef.current === accountSessionChannel) {
+        accountSessionChannelRef.current = null;
+      }
+
+      window.removeEventListener('focus', refreshWhenVisible);
+      window.removeEventListener('online', refreshWhenVisible);
+      window.removeEventListener('pageshow', refreshWhenVisible);
+      window.removeEventListener(accountSessionRefreshEvent, refreshFromEvent);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [
+    accountSession.isAuthenticated,
+    adminSession.isAuthenticated,
+    isSessionResolved,
+  ]);
 
   const navigateTo = (path: string) => {
     const targetPath = isDisabledPublicPath(path) ? '/' : path;
@@ -685,9 +854,58 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const applyAccountSession = (nextSession: AccountSession) => {
+    const mergedSession = {
+      ...nextSession,
+      legacyAuthEnabled: nextSession.legacyAuthEnabled ?? accountSession.legacyAuthEnabled,
+    };
+
+    setAccountSession(mergedSession);
+
+    if (
+      mergedSession.account?.status === 'active'
+      && (mergedSession.account.role === 'admin' || mergedSession.account.role === 'owner')
+    ) {
+      setAdminSession({ isAuthenticated: true, role: mergedSession.account.role });
+    } else {
+      setAdminSession({ isAuthenticated: false });
+    }
+
+    accountSessionChannelRef.current?.postMessage(accountSessionRefreshMessage);
+  };
+
+  const refreshAccountAndAdminSessions = async () => {
+    const [nextAccountSession, nextAdminSession] = await Promise.all([
+      fetchAccountSession(),
+      fetchAdminSession(),
+    ]);
+
+    setAccountSession(nextAccountSession);
+    setAdminSession(resolveClientAdminSession(nextAccountSession, nextAdminSession));
+    accountSessionChannelRef.current?.postMessage(accountSessionRefreshMessage);
+    return nextAccountSession;
+  };
+
+  const logoutAccount = async () => {
+    await logoutAccountSession();
+    setAccountSession({
+      isAuthenticated: false,
+      legacyAuthEnabled: accountSession.legacyAuthEnabled,
+    });
+    setAdminSession({ isAuthenticated: false });
+    accountSessionChannelRef.current?.postMessage(accountSessionRefreshMessage);
+  };
+
   return (
     <>
-      <SiteHeader activePage={activePage} isAdmin={adminSession.isAuthenticated} onNavigate={navigateTo} />
+      <SiteHeader
+        accountSession={accountSession}
+        activePage={activePage}
+        isAdmin={adminSession.isAuthenticated}
+        isSessionLoading={!isSessionResolved}
+        onLogout={logoutAccount}
+        onNavigate={navigateTo}
+      />
       <main>
         {activePage === 'home' && <HomePage />}
         {activePage === 'order-form' && <OrderFormPage />}
@@ -695,10 +913,23 @@ function App() {
         {activePage === 'coas' && <CoasPage isAdmin={adminSession.isAuthenticated} />}
         {activePage === 'labels' && <LabelsPage isAdmin={adminSession.isAuthenticated} />}
         {activePage === 'faqs' && <FaqsPage />}
-        {(activePage === 'hxadmin' || activePage === 'hxowner') && (
+        {activePage === 'account' && !isSessionResolved && <AccountSessionLoading />}
+        {activePage === 'account' && isSessionResolved && (
+          <AccountPage
+            session={accountSession}
+            identityCallbackNotice={identityCallbackNotice}
+            onSessionChange={applyAccountSession}
+            onRefreshSession={refreshAccountAndAdminSessions}
+            onNavigate={navigateTo}
+          />
+        )}
+        {(activePage === 'hxadmin' || activePage === 'hxowner') && !isSessionResolved && <AccountSessionLoading />}
+        {(activePage === 'hxadmin' || activePage === 'hxowner') && isSessionResolved && (
           <AdminPage
             session={adminSession}
             loginRole={activePage === 'hxowner' ? 'owner' : 'admin'}
+            legacyAuthEnabled={accountSession.legacyAuthEnabled === true}
+            onLogout={logoutAccount}
             onSessionChange={setAdminSession}
             onNavigate={navigateTo}
           />
@@ -709,18 +940,34 @@ function App() {
 }
 
 function SiteHeader({
+  accountSession,
   activePage,
   isAdmin,
+  isSessionLoading,
+  onLogout,
   onNavigate,
 }: {
+  accountSession: AccountSession;
   activePage: PageId;
   isAdmin: boolean;
+  isSessionLoading: boolean;
+  onLogout: () => Promise<void>;
   onNavigate: (path: string) => void;
 }) {
   const enabledNavItems = navItems.filter((item) => !disabledPages.has(item.id));
-  const visibleNavItems = isAdmin
-    ? [...enabledNavItems, { id: 'hxadmin', label: 'Admin', path: '/hxadmin' } as const]
-    : enabledNavItems;
+  const accountAdminItem = accountSession.account?.status === 'active'
+    && (accountSession.account.role === 'admin' || accountSession.account.role === 'owner')
+    ? {
+        id: accountSession.account.role === 'owner' ? 'hxowner' : 'hxadmin',
+        label: 'Admin',
+        path: accountSession.account.role === 'owner' ? '/hxowner' : '/hxadmin',
+      } as const
+    : null;
+  const legacyAdminItem = isAdmin && !accountSession.account
+    ? { id: 'hxadmin', label: 'Admin', path: '/hxadmin' } as const
+    : null;
+  const adminItem = accountAdminItem ?? legacyAdminItem;
+  const visibleNavItems = adminItem ? [...enabledNavItems, adminItem] : enabledNavItems;
 
   return (
     <header className="brand-band">
@@ -745,7 +992,7 @@ function SiteHeader({
               className={[
                 'site-nav__link',
                 item.id === activePage ? 'is-active' : '',
-                item.id === 'hxadmin' ? 'site-nav__link--admin' : '',
+                item.id === 'hxadmin' || item.id === 'hxowner' ? 'site-nav__link--admin' : '',
               ]
                 .filter(Boolean)
                 .join(' ')}
@@ -760,8 +1007,88 @@ function SiteHeader({
             </a>
           ))}
         </nav>
+
+        <div className="site-account-actions">
+          {isSessionLoading ? (
+            <span className="site-account-loading" role="status">Loading account...</span>
+          ) : accountSession.account ? (
+            <details className="site-account-menu">
+              <summary>{accountSession.account.username}</summary>
+              <div className="site-account-menu__panel">
+                <a
+                  className={activePage === 'account' ? 'is-active' : ''}
+                  href="/account"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onNavigate('/account');
+                  }}
+                >
+                  Account
+                </a>
+                {accountSession.account.status === 'active'
+                  && (accountSession.account.role === 'admin' || accountSession.account.role === 'owner') && (
+                  <a
+                    href={accountSession.account.role === 'owner' ? '/hxowner' : '/hxadmin'}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      onNavigate(accountSession.account?.role === 'owner' ? '/hxowner' : '/hxadmin');
+                    }}
+                  >
+                    Admin
+                  </a>
+                )}
+                <button type="button" onClick={() => void onLogout()}>Sign out</button>
+              </div>
+            </details>
+          ) : accountSession.isAuthenticated ? (
+            <a
+              className="site-account-link site-account-link--primary"
+              href="/account"
+              onClick={(event) => {
+                event.preventDefault();
+                onNavigate('/account');
+              }}
+            >
+              Finish setup
+            </a>
+          ) : (
+            <>
+              <a
+                className="site-account-link"
+                href="/account?mode=signin"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onNavigate('/account?mode=signin');
+                }}
+              >
+                Sign in
+              </a>
+              <a
+                className="site-account-link site-account-link--primary"
+                href="/account?mode=signup"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onNavigate('/account?mode=signup');
+                }}
+              >
+                Sign up
+              </a>
+            </>
+          )}
+        </div>
       </div>
     </header>
+  );
+}
+
+function AccountSessionLoading() {
+  return (
+    <section className="account-page account-page--centered" aria-busy="true" aria-live="polite">
+      <div className="account-auth-card">
+        <p className="eyebrow">Helix account</p>
+        <h1>Loading account...</h1>
+      </div>
+    </section>
   );
 }
 
@@ -3514,6 +3841,7 @@ async function saveCoaEntry(entry: CoaResult) {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('COA entry could not be saved.');
   }
 
@@ -3539,6 +3867,7 @@ async function saveCoaEntriesBatch(entries: CoaResult[]): Promise<CoaBatchImport
   );
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     const details = payload.details === undefined ? '' : ` Details: ${JSON.stringify(payload.details)}`;
     throw new Error(`${payload.error || 'COA batch entries could not be saved.'}${details}`);
   }
@@ -3560,6 +3889,7 @@ async function deleteCoaEntry(entryId: string) {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('COA entry could not be deleted.');
   }
 
@@ -3585,6 +3915,7 @@ async function deleteCoaEntriesBatch(ids: string[]): Promise<CoaBatchDeleteResul
   );
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     const details = payload.details === undefined ? '' : ` Details: ${JSON.stringify(payload.details)}`;
     throw new Error(`${payload.error || 'COA entries could not be deleted.'}${details}`);
   }
@@ -3657,6 +3988,7 @@ async function uploadCoaPdf(file: File): Promise<CoaPdfAsset> {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     const text = await response.text();
 
     console.error('[coa-pdf] upload request failed', {
@@ -3709,6 +4041,7 @@ async function identifyCoaPdf(file: File) {
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('COA PDF batch number could not be identified.');
   }
 
@@ -3733,6 +4066,7 @@ async function parseCoaBatchNumberFile(file: File): Promise<CoaBatchImportRow[]>
   });
 
   if (!response.ok) {
+    notifyAccountAuthorizationFailure(response);
     throw new Error('Batch number file could not be parsed.');
   }
 
@@ -4080,15 +4414,71 @@ async function fetchAdminSession(): Promise<AdminSession> {
   return normalizeAdminSession(await response.json());
 }
 
-async function logoutAdmin() {
-  const response = await fetch('/api/admin/logout', {
+async function fetchAccountSession(): Promise<AccountSession> {
+  const response = await fetch('/api/account/session', {
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error('Account session could not be loaded.');
+  }
+
+  return normalizeAccountSession(await response.json());
+}
+
+async function fetchCurrentAccountSession(): Promise<AccountSession> {
+  const response = await fetch('/api/account/session/current', {
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error('Current account session could not be loaded.');
+  }
+
+  return normalizeAccountSession(await response.json());
+}
+
+async function resolveIdentityCallbackNotice(): Promise<IdentityCallbackNotice | null> {
+  if (!hasIdentityCallbackHash(window.location.hash)) {
+    return null;
+  }
+
+  try {
+    const callback = await handleAuthCallback();
+    return callback
+      ? { type: callback.type }
+      : { error: 'Authentication link could not be completed.' };
+  } catch (error) {
+    return { error: getClientErrorMessage(error, 'Authentication link could not be completed.') };
+  }
+}
+
+function getClientErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+async function logoutAccountSession() {
+  const response = await fetch('/api/account/logout', {
     method: 'POST',
     credentials: 'same-origin',
   });
 
   if (!response.ok) {
-    throw new Error('Admin logout failed.');
+    throw new Error('Account logout failed.');
   }
+}
+
+function normalizeAccountSession(value: unknown): AccountSession {
+  if (!value || typeof value !== 'object') {
+    return signedOutAccountSession;
+  }
+
+  const session = value as AccountSession;
+
+  return {
+    ...session,
+    isAuthenticated: session.isAuthenticated === true,
+  };
 }
 
 function normalizeAdminSession(value: unknown): AdminSession {
@@ -4102,6 +4492,22 @@ function normalizeAdminSession(value: unknown): AdminSession {
     isAuthenticated: session.isAuthenticated === true,
     role: session.role === 'admin' ? 'admin' : session.isAuthenticated ? 'owner' : undefined,
   };
+}
+
+function resolveClientAdminSession(
+  accountSession: AccountSession,
+  fallbackSession: AdminSession,
+): AdminSession {
+  const account = accountSession.account;
+
+  if (
+    account?.status === 'active'
+    && (account.role === 'admin' || account.role === 'owner')
+  ) {
+    return { isAuthenticated: true, role: account.role };
+  }
+
+  return fallbackSession;
 }
 
 export default App;

@@ -21,7 +21,11 @@ beforeEach(async () => {
   await database.reset();
   const applied = await database.applyMigrations(migrationsDirectory);
 
-  assert.deepEqual(applied, ['20260714000100_create-label-storage']);
+  assert.deepEqual(applied, [
+    '20260714000100_create-label-storage',
+    '20260717000100_create-user-accounts',
+    '20260719000100_add-admin-access-approval',
+  ]);
 });
 
 after(async () => {

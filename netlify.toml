@@ -5,32 +5,43 @@
 [functions]
   included_files = ["data/**"]
 
+[dev]
+  command = "npm run dev:netlify"
+  targetPort = 5173
+  publish = "public"
+
 [[redirects]]
   from = "/api/data/*"
   to = "/.netlify/functions/data/:splat"
   status = 200
+  force = true
 
 [[redirects]]
   from = "/api/admin/*"
   to = "/.netlify/functions/admin/:splat"
   status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/account/*"
+  to = "/.netlify/functions/account/:splat"
+  status = 200
+  force = true
 
 [[redirects]]
   from = "/api/labels"
   to = "/.netlify/functions/data/labels"
   status = 200
+  force = true
 
 [[redirects]]
   from = "/api/labels/*"
   to = "/.netlify/functions/data/labels/:splat"
   status = 200
+  force = true
 
 [[redirects]]
   from = "/api/coas/*"
   to = "/.netlify/functions/data/coas/:splat"
   status = 200
-
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+  force = true

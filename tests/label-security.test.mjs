@@ -7,6 +7,7 @@ const testDataDir = path.resolve('.tmp', 'label-security-test-data');
 process.env.HELIX_LOCAL_DATA_DIR = testDataDir;
 process.env.HELIX_ADMIN_PASSWORD = 'test-admin-password';
 process.env.HELIX_ADMIN_SESSION_SECRET = 'test-admin-session-secret';
+process.env.HELIX_LEGACY_ADMIN_AUTH = 'true';
 
 const { handleHelixApiRequest } = await import('../server/helix-api.mjs');
 const {

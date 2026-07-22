@@ -6,19 +6,52 @@ import { resolve } from 'node:path';
 import { handleHelixApiNodeRequest } from './server/helix-node-adapter.mjs';
 import { parseDisabledPages } from './src/page-disables';
 
+const defaultNetlifySiteName = 'helix-group-testing';
+
 export default defineConfig(({ mode }) => {
   const cwd = process.cwd();
   const env = loadEnv(mode, cwd, '');
   const disabledPagesValue = getDisabledPagesValue(mode, cwd, env.DISABLED_PAGES);
   const disabledPages = parseDisabledPages(disabledPagesValue);
+  const previewServerAllowedHosts = getPreviewServerAllowedHosts(env);
 
   return {
     define: {
       __HELIX_DISABLED_PAGES__: JSON.stringify(disabledPages),
     },
     plugins: [react(), helixApiPlugin()],
+    server: {
+      allowedHosts: previewServerAllowedHosts,
+    },
+    preview: {
+      allowedHosts: previewServerAllowedHosts,
+    },
   };
 });
+
+function getPreviewServerAllowedHosts(environment: Record<string, string>) {
+  const siteName = normalizeDnsLabel(environment.SITE_NAME) || defaultNetlifySiteName;
+  const branchSlug = normalizeNetlifyBranchSlug(environment.BRANCH);
+
+  if (!branchSlug) {
+    return [];
+  }
+
+  return [`devserver-${branchSlug}--${siteName}.netlify.app`];
+}
+
+function normalizeNetlifyBranchSlug(value: string | undefined) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function normalizeDnsLabel(value: string | undefined) {
+  const label = String(value ?? '').trim().toLowerCase();
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label) ? label : '';
+}
 
 function getDisabledPagesValue(mode: string, cwd: string, fallbackValue: string | undefined) {
   if (mode !== 'development') {

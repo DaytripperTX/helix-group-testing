@@ -4,6 +4,7 @@ import { test } from 'node:test';
 process.env.HELIX_ADMIN_PASSWORD = 'test-admin-password';
 process.env.HELIX_OWNER_PASSWORD = 'test-owner-password';
 process.env.HELIX_ADMIN_SESSION_SECRET = 'test-admin-session-secret';
+process.env.HELIX_LEGACY_ADMIN_AUTH = 'true';
 
 const { handleHelixApiRequest } = await import('../server/helix-api.mjs');
 
@@ -47,6 +48,21 @@ test('successful admin login clears failed attempts before lockout', async () =>
 
   assert.equal((await login('admin', process.env.HELIX_ADMIN_PASSWORD, client)).statusCode, 200);
   assert.equal((await login('admin', 'wrong-password', client)).statusCode, 401);
+});
+
+test('legacy shared-password login is unavailable when the migration flag is disabled', async () => {
+  process.env.HELIX_LEGACY_ADMIN_AUTH = 'false';
+
+  try {
+    const response = await login('admin', process.env.HELIX_ADMIN_PASSWORD, {
+      ip: '203.0.113.48',
+      userAgent: 'legacy-auth-disabled-test',
+    });
+
+    assert.equal(response.statusCode, 404);
+  } finally {
+    process.env.HELIX_LEGACY_ADMIN_AUTH = 'true';
+  }
 });
 
 function login(role, password, client) {
